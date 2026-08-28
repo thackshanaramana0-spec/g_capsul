@@ -460,10 +460,11 @@ int main(int argc,char** argv){
         uint32_t SEEDW=(argc>6)?(uint32_t)atoi(argv[6]):32;   // <= 32 (uint64 at 2 bits/base)
         if(SEEDW>32) SEEDW=32; if(SEEDW<8) SEEDW=8;
         const uint32_t SEEDSTRIDE=(argc>5)?(uint32_t)atoi(argv[5]):8;
+        const uint32_t K2=(argc>8)?(uint32_t)atoi(argv[8]):1;   // query-side stride
         const uint32_t NPARTS=(Lmax>=SEEDW)?((Lmax-SEEDW)/SEEDSTRIDE+1):1;
         if(SEEDW<8) SEEDW=8;                     // below this a seed is noise
         const uint64_t SW_MASK=(SEEDW>=32)?~0ULL:((1ULL<<(2*SEEDW))-1);
-        fprintf(stderr,"  sensitivity floor: %u bases (SEEDW %u + stride %u - 1)\n",SEEDW+SEEDSTRIDE-1,SEEDW,SEEDSTRIDE);
+        fprintf(stderr,"  sensitivity floor: %u bases (SEEDW %u + k1 %u * k2 %u - 1)\n",SEEDW+SEEDSTRIDE*K2-1,SEEDW,SEEDSTRIDE,K2);
         auto packW=[&](const char* p,uint64_t& out)->bool{
             uint64_t k=0;
             for(uint32_t i=0;i<SEEDW;++i){ int v=b2(p[i]); if(v<0) return false;
@@ -538,6 +539,16 @@ int main(int argc,char** argv){
                         if(good<SEEDW) continue;
                         const size_t seedStart=p-SEEDW+1;
                         if(seedStart<lo) continue;      // owned by the previous slice
+                        // STAGE 24: copMEM's lemma applies to the QUERY side too.
+                        // Stage 20 took it for sensitivity (sampling the reads)
+                        // but still probed every one of the pg's 21.6M positions,
+                        // i.e. k2 = 1. Their k1*k2 <= L-K+1 with BOTH sides
+                        // sampled is what makes their matching 0.41 s against our
+                        // 1.06 s. Sampling the query every K2 and the reads every
+                        // SEEDSTRIDE keeps the same floor as long as the product
+                        // is unchanged, so K2=2 with stride halved is free
+                        // sensitivity-wise and halves the probes.
+                        if(K2>1 && (seedStart%K2)) continue;
                         const uint32_t ix=mfind(k); if(ix==UINT32_MAX) continue;
                         for(uint32_t q=ix;q<mkey.size()&&mkey[q]==k;++q){
                             const uint32_t rid=mrid[q]; if(matched[rid]) continue;
