@@ -1,0 +1,244 @@
+// Greedy SCS + pigeonhole mapping, with the overlap search done in one pass.
+//
+// The earlier prototypes rebuilt a hash index once per candidate overlap length
+// and re-hashed every read's L bytes each time -- O(n*L^2), about 19 billion byte
+// reads on 851k reads, which is the entire reason they took 40 s while PgRC2's
+// sort-and-merge takes 1.5 s. Nothing about the ALGORITHM was slow; the indexing
+// was.
+//
+// Here each read is scanned once. A 32-base seed packs exactly into a uint64
+// (2 bits/base), so the seed comparison is integer equality with no false
+// positives from hashing, and sliding the seed one base is a shift-or. For a
+// read A we walk its suffix offsets outward from the longest overlap; the first
+// offset whose seed hits a read B and whose full suffix-prefix span verifies IS
+// A's longest overlap, so we stop there. That makes the search O(n * offsets
+// actually tried) instead of O(n * L^2).
+//
+// Stage C then maps whatever never chained into the finished pseudogenome using
+// the pigeonhole lemma (a read with <= m mismatches cut into m+1 parts must have
+// one part matching exactly), forward and then against the reverse-complemented
+// text -- one index, one text, rather than a two-strand index.
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <cstdint>
+#include <string>
+#include <vector>
+#include <chrono>
+#include <fstream>
+#include <unordered_map>
+#include <algorithm>
+
+static const uint32_t NONE    = UINT32_MAX;
+static const uint32_t SEED    = 32;               // exactly one uint64 at 2 bits/base
+static const uint64_t SEEDMSK = ~0ULL;            // 32 bases * 2 bits = 64
+
+static inline int b2(char c){
+    switch(c){ case 'A':return 0; case 'C':return 1; case 'G':return 2; case 'T':return 3; }
+    return -1; }
+static inline uint64_t fnv(const char* p,uint32_t n){
+    uint64_t h=1469598103934665603ULL;
+    for(uint32_t i=0;i<n;++i){ h^=(uint8_t)p[i]; h*=1099511628211ULL; } return h; }
+static void rc_inplace(std::string& s){
+    auto comp=[](char c){ switch(c){case 'A':return 'T';case 'C':return 'G';
+                                    case 'G':return 'C';case 'T':return 'A';} return c; };
+    if(s.empty()) return;
+    size_t i=0,j=s.size()-1;
+    while(i<j){ char a=comp(s[i]),b=comp(s[j]); s[i]=b; s[j]=a; ++i; --j; }
+    if(i==j) s[i]=comp(s[i]);
+}
+// pack the 32 bases at p; false if any non-ACGT
+static inline bool pack(const char* p,uint64_t& out){
+    uint64_t k=0;
+    for(uint32_t i=0;i<SEED;++i){ int v=b2(p[i]); if(v<0) return false; k=(k<<2)|(uint64_t)v; }
+    out=k; return true;
+}
+
+int main(int argc,char** argv){
+    if(argc<2){ fprintf(stderr,"usage: scs5 <in.fq> [maxmm] [minov]\n"); return 1; }
+    const int      MAXMM = argc>2?atoi(argv[2]):3;
+    const uint32_t MINOV = argc>3?(uint32_t)atoi(argv[3]):40;   // >= SEED
+    auto T0=std::chrono::steady_clock::now();
+    auto lap=[&](const char* w){ auto t=std::chrono::steady_clock::now();
+        fprintf(stderr,"  %-26s %6.2f s\n",w,std::chrono::duration<double>(t-T0).count()); T0=t; };
+
+    // ── load, drop N-reads, collapse exact duplicates ────────────────────────
+    std::vector<std::string> reads;
+    size_t n_in=0,n_filt=0;
+    {
+        std::ifstream f(argv[1]); std::string a,b,c,d;
+        std::unordered_map<uint64_t,std::vector<uint32_t>> seen; seen.reserve(1u<<21);
+        while(std::getline(f,a)&&std::getline(f,b)&&std::getline(f,c)&&std::getline(f,d)){
+            ++n_in;
+            if(b.find('N')!=std::string::npos){ ++n_filt; continue; }
+            auto& bk=seen[fnv(b.data(),(uint32_t)b.size())]; bool dup=false;
+            for(uint32_t id:bk) if(reads[id]==b){ dup=true; break; }
+            if(!dup){ bk.push_back((uint32_t)reads.size()); reads.push_back(b); }
+        }
+    }
+    const uint32_t n=(uint32_t)reads.size();
+    uint32_t Lmax=0; for(auto& r:reads) Lmax=std::max(Lmax,(uint32_t)r.size());
+    fprintf(stderr,"reads in=%zu N-filtered=%zu unique=%u maxlen=%u\n",n_in,n_filt,n,Lmax);
+    lap("load+filter+dedup");
+
+    // ── index every read by the 32 bases at its start ────────────────────────
+    std::unordered_map<uint64_t,std::vector<uint32_t>> pref;
+    pref.reserve(n*2);
+    for(uint32_t i=0;i<n;++i){
+        if(reads[i].size()<SEED) continue;
+        uint64_t k; if(pack(reads[i].data(),k)) pref[k].push_back(i);
+    }
+    lap("prefix seed index");
+
+    // ── longest verified suffix-prefix partner for each read, one pass ───────
+    // ── TRUE descending-length sweep ────────────────────────────────────────
+    // Storing one best partner per read is what broke this: sorted by overlap
+    // and committed, a read whose single candidate was already consumed links
+    // to nothing, and every unlinked read starts a chain that costs a full read
+    // length. Measured, that was 78,327 chains x 150 b = 11.7 MB of pure chain
+    // heads, against PgRC2's ~5,100 chains on the same read count -- the whole
+    // gap, and nothing to do with tolerance or strandedness.
+    //
+    // The sweep instead revisits EVERY still-open end at every overlap length,
+    // longest first, so a read whose best partner is taken still gets its
+    // next-best one length down. Naively that re-reads L bytes per read per
+    // length (O(n*L^2), the 40 s version). Here each open tail carries a rolling
+    // 32-base seed: its suffix offset grows by exactly one as L drops by one, so
+    // the seed advances with a single shift-or, and the L-byte memcmp runs only
+    // after an exact 64-bit seed hit.
+    std::vector<uint32_t> nxt(n,NONE),prv(n,NONE),ovl(n,0),ch_h(n),ch_t(n);
+    std::vector<uint64_t> seed(n,0);
+    std::vector<uint8_t>  ok(n,0);
+    std::vector<uint32_t> tails;
+    size_t links=0, probes=0;
+    // `admit` selects which reads take part; everything else is reset per round.
+    std::vector<uint8_t> admit(n,1);
+    auto sweep=[&](){
+        links=0; probes=0;
+        std::fill(nxt.begin(),nxt.end(),NONE); std::fill(prv.begin(),prv.end(),NONE);
+        std::fill(ovl.begin(),ovl.end(),0);    std::fill(ok.begin(),ok.end(),0);
+        for(uint32_t i=0;i<n;++i){ ch_h[i]=i; ch_t[i]=i; }
+        tails.clear(); tails.reserve(n);
+        for(uint32_t i=0;i<n;++i) if(admit[i]&&reads[i].size()>=MINOV) tails.push_back(i);
+    for(uint32_t L=Lmax-1; L>=MINOV && L>=SEED; --L){
+        size_t w=0;
+        for(uint32_t a:tails){
+            if(nxt[a]!=NONE) continue;                       // already extended
+            const std::string& A=reads[a];
+            if(A.size()<L) continue;
+            const uint32_t off=(uint32_t)A.size()-L;         // grows by 1 per length
+            if(off+SEED>A.size()) continue;
+            tails[w++]=a;                                    // still open: keep
+            if(!ok[a]){ ok[a]=pack(A.data()+off,seed[a])?1:0; if(!ok[a]) continue; }
+            else{
+                const int v=b2(A[off+SEED-1]);
+                if(v<0){ ok[a]=0; continue; }
+                seed[a]=((seed[a]<<2)|(uint64_t)v)&SEEDMSK;  // roll one base
+            }
+            ++probes;
+            auto it=pref.find(seed[a]); if(it==pref.end()) continue;
+            for(uint32_t b:it->second){
+                if(b==a||prv[b]!=NONE||ch_h[a]==b) continue; // taken, or would cycle
+                if(reads[b].size()<L) continue;
+                if(memcmp(A.data()+off,reads[b].data(),L)!=0) continue;
+                nxt[a]=b; prv[b]=a; ovl[a]=L;
+                uint32_t h=ch_h[a],t=ch_t[b]; ch_t[h]=t; ch_h[t]=h; ++links;
+                break;
+            }
+        }
+        tails.resize(w);
+        if(tails.empty()) break;
+    }
+    };
+
+    // ── round 1: label, do not build ────────────────────────────────────────
+    // The first sweep exists only to find which reads sit INTERIOR to a chain --
+    // overlapped on both sides. Those are the reads that tile the genome well.
+    // Reads that end up at a chain end, or unlinked, overlap poorly; keeping
+    // them in the pseudogenome is what drags the mean overlap down (measured
+    // 119.9 against PgRC2's 133.7, where ideal tiling at this coverage is ~136).
+    // They cost far less mapped into the finished sequence than assembled into
+    // it, so round 2 rebuilds without them.
+    sweep();
+    size_t both_sides=0;
+    {
+        std::vector<uint8_t> keep(n,0);
+        for(uint32_t i=0;i<n;++i)
+            if(nxt[i]!=NONE && prv[i]!=NONE){ keep[i]=1; ++both_sides; }
+        admit.swap(keep);
+    }
+    fprintf(stderr,"round1: links=%zu both-sides-overlapped=%zu (%.1f%%)\n",
+            links,both_sides,100.0*(double)both_sides/(double)n);
+    lap("round 1 (division)");
+
+    // ── round 2: build over the well-overlapped reads only ──────────────────
+    sweep();
+    fprintf(stderr,"round2: probes=%zu links=%zu\n",probes,links);
+    lap("round 2 (assembly)");
+
+    // ── emit chains; singletons held back for mapping ────────────────────────
+    std::string pg; pg.reserve((size_t)n*40);
+    std::vector<uint32_t> leftovers;
+    uint32_t multi=0;
+    for(uint32_t i=0;i<n;++i){
+        if(!admit[i]){ leftovers.push_back(i); continue; }   // excluded in round 1
+        if(prv[i]!=NONE) continue;
+        if(nxt[i]==NONE){ leftovers.push_back(i); continue; }
+        ++multi;
+        uint32_t cur=i; pg+=reads[cur];
+        while(nxt[cur]!=NONE){ uint32_t o=ovl[cur]; cur=nxt[cur];
+                               pg.append(reads[cur].data()+o,reads[cur].size()-o); }
+    }
+    fprintf(stderr,"links=%zu chains(multi)=%u leftovers=%zu pg after chains=%zu\n",
+            links,multi,leftovers.size(),pg.size());
+    lap("emit chains");
+
+    // ── Stage C: pigeonhole mapping into the pg, forward then RC ─────────────
+    std::vector<uint8_t> matched(n,0);
+    size_t n_matched=0;
+    {
+        const uint32_t NPARTS=(uint32_t)MAXMM+1;
+        std::unordered_map<uint64_t,std::vector<std::pair<uint32_t,uint8_t>>> seeds;
+        seeds.reserve(leftovers.size()*NPARTS*2);
+        for(uint32_t rid:leftovers){
+            const std::string& R=reads[rid];
+            if(R.size()<NPARTS*SEED) continue;
+            for(uint32_t p=0;p<NPARTS;++p){
+                uint64_t k; if(pack(R.data()+p*SEED,k)) seeds[k].push_back({rid,(uint8_t)p});
+            }
+        }
+        auto scan=[&](const std::string& text){
+            if(text.size()<SEED) return;
+            uint64_t k=0; uint32_t good=0;
+            for(size_t p=0;p<text.size();++p){
+                int v=b2(text[p]);
+                if(v<0){ good=0; k=0; continue; }
+                k=((k<<2)|(uint64_t)v)&SEEDMSK; ++good;
+                if(good<SEED) continue;
+                auto it=seeds.find(k); if(it==seeds.end()) continue;
+                const size_t seedStart=p-SEED+1;
+                for(auto& pr:it->second){
+                    const uint32_t rid=pr.first; if(matched[rid]) continue;
+                    const size_t off=(size_t)pr.second*SEED;
+                    if(seedStart<off) continue;
+                    const size_t st=seedStart-off;
+                    const std::string& R=reads[rid];
+                    if(st+R.size()>text.size()) continue;
+                    int mm=0; const char* t=text.data()+st;
+                    for(size_t j=0;j<R.size();++j) if(t[j]!=R[j]){ if(++mm>MAXMM) break; }
+                    if(mm<=MAXMM){ matched[rid]=1; ++n_matched; }
+                }
+            }
+        };
+        scan(pg);
+        rc_inplace(pg); scan(pg); rc_inplace(pg);
+    }
+    lap("pigeonhole mapping");
+
+    size_t appended=0;
+    for(uint32_t rid:leftovers) if(!matched[rid]){ pg+=reads[rid]; ++appended; }
+    fprintf(stderr,"leftovers=%zu mapped=%zu appended=%zu\n",
+            leftovers.size(),n_matched,appended);
+    printf("PG_LEN %zu\n",pg.size());
+    return 0;
+}
