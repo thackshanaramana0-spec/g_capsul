@@ -54,6 +54,8 @@ it.
 | 19 | parallel_sweep | threaded sweep search, serial commit | **13.36M literal** | same bytes, 7.3 s / 389 MB; see below |
 | 20 | dense_seed_map | sliding seeds at any offset, threaded scan, CSR index | **13.11M literal** | **+3.3% of PgRC2**, 5.8 s / 422 MB; see below |
 | 21 | packed_reads | reads 2 bits/base; seed retuned on copMEM's lemma | **12.93M literal** | **+1.8% of PgRC2**, 5.3 s / **214 MB (ahead)**; see below |
+| 22 | order_info | track pg position of every original read | (permutation) | their stage 6, never previously attempted |
+| 23 | perm_coder | Lehmer + Fenwick + range coder | **2,309,967 B** | **-19.0% vs PgRC2's 2,852,758**; 0.022% off the floor |
 
 ## Stage 16 — the missing MEM-removal stage
 
@@ -455,6 +457,67 @@ Note the last three rows share a floor of 37 yet keep improving. The floor is a
 worst-case guarantee, not a description of typical behaviour: a shorter seed is
 also more likely to land inside a clean stretch of a read that carries
 mismatches, so it wins beyond what the guarantee alone predicts.
+
+## Stages 22-23 — OrderInfo, their stage 6, and the biggest win yet
+
+Stage 6 was the one PgRC2 stage this progression had never attempted, and it is
+the gate for losslessness: without it an archive cannot restore the original
+file order. Stage 22 tracks the pg position of every original read (chained,
+mapped, and survivor, with the original->unique map kept across dedup) and emits
+the inverse permutation. Stage 23 codes it.
+
+**What they do.** `SeparatedPseudoGenomePersistence.cpp:226-233`, single-end
+with complete order info:
+
+    for (i...) rev[orgIdxs[i]] = i;
+    writeCompressed(pgrcOut, (char*)rev.data(), rev.size()*sizeof(uint32), LZMA);
+
+A raw uint32 array handed to LZMA. No permutation-specific coding at all. From
+their own log on yeast_sub.fq:
+
+    lzma ... compressed 4000000 bytes to 2852758 bytes (ratio 0.713)
+
+**A false start worth recording.** The first estimate of their order cost came
+from subtracting archives, 7,063,459 - 4,898,620 = 2,164,839 B. That is *below*
+log2(999340!) = 2,309,466 B, which is impossible for a permutation, and the
+impossibility is what exposed the error: `-o` is `PGRC_ORD_SE_MODE` and default
+is `PGRC_SE_MODE`, two pipelines differing in more than order, so the delta
+attributes other changes to order. Their real cost is the 2,852,758 B their log
+prints. Had the subtraction not produced an impossible number it would have
+been believed, and the conclusion drawn from it -- that their permutation is
+structured and a uniform coder would lose -- was exactly backwards.
+
+**Why a general compressor cannot win here.** LZMA does not know the array is a
+permutation. Once you do know every value occurs exactly once, element i only
+has to be identified among the n-i values still unused, so the content is
+sum log2(i) = log2(n!) = 18.49 bits/read, against the 22.82 they spend. Our own
+permutation is random-like (47.4% descents), and xz on it gives 2,605,236 B --
+better than their LZMA but still 13% above the floor, which is the point: no
+general-purpose coder reaches it.
+
+**Stage 23** maps the permutation to its Lehmer code (each element replaced by
+its rank among values not yet used) and codes digit i as a uniform symbol in
+[0, n-i), ranks coming from a Fenwick tree over still-available values. Textbook
+throughout -- factorial number system, Fenwick tree, LZMA-style carry-cached
+range coder. Their single-end path has no permutation coder to copy.
+
+| | bytes | bits/read | |
+|---|-------|-----------|---|
+| raw uint32 | 3,997,360 | 32.00 | |
+| PgRC2 (LZMA) | 2,852,758 | 22.82 | |
+| xz on the same array | 2,605,236 | 20.85 | |
+| **stage 23** | **2,309,967** | **18.49** | **-19.0% vs PgRC2** |
+| log2(n!) floor | 2,309,466 | 18.49 | overhead **0.022%** |
+
+**501 bytes off the floor, and the decoder was run**: it rebuilds the
+permutation from the coded stream and every element is compared before any size
+is reported. The input is also checked to be a genuine permutation first, since
+the Lehmer mapping is meaningless otherwise.
+
+For scale: this saves 542,791 B, which is more than twice the entire remaining
+sequence-coding gap (231,750 B) that stages 16-21 were fighting over. Order
+information was the largest single lever on the board and it sat untouched
+because it was the one stage nobody had built.
 
 ## Correction: the division was never behind
 
