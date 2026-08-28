@@ -1,0 +1,451 @@
+// Greedy SCS + pigeonhole mapping, with the overlap search done in one pass.
+//
+// The earlier prototypes rebuilt a hash index once per candidate overlap length
+// and re-hashed every read's L bytes each time -- O(n*L^2), about 19 billion byte
+// reads on 851k reads, which is the entire reason they took 40 s while PgRC2's
+// sort-and-merge takes 1.5 s. Nothing about the ALGORITHM was slow; the indexing
+// was.
+//
+// Here each read is scanned once. A 32-base seed packs exactly into a uint64
+// (2 bits/base), so the seed comparison is integer equality with no false
+// positives from hashing, and sliding the seed one base is a shift-or. For a
+// read A we walk its suffix offsets outward from the longest overlap; the first
+// offset whose seed hits a read B and whose full suffix-prefix span verifies IS
+// A's longest overlap, so we stop there. That makes the search O(n * offsets
+// actually tried) instead of O(n * L^2).
+//
+// Stage C then maps whatever never chained into the finished pseudogenome using
+// the pigeonhole lemma (a read with <= m mismatches cut into m+1 parts must have
+// one part matching exactly), forward and then against the reverse-complemented
+// text -- one index, one text, rather than a two-strand index.
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <cstdint>
+#include <string>
+#include <vector>
+#include <chrono>
+#include <fstream>
+#include <unordered_map>
+#include <algorithm>
+
+static const uint32_t NONE    = UINT32_MAX;
+static const uint32_t SEED    = 32;               // exactly one uint64 at 2 bits/base
+static const uint64_t SEEDMSK = ~0ULL;            // 32 bases * 2 bits = 64
+
+static inline int b2(char c){
+    switch(c){ case 'A':return 0; case 'C':return 1; case 'G':return 2; case 'T':return 3; }
+    return -1; }
+static inline uint64_t fnv(const char* p,uint32_t n){
+    uint64_t h=1469598103934665603ULL;
+    for(uint32_t i=0;i<n;++i){ h^=(uint8_t)p[i]; h*=1099511628211ULL; } return h; }
+static void rc_inplace(std::string& s){
+    auto comp=[](char c){ switch(c){case 'A':return 'T';case 'C':return 'G';
+                                    case 'G':return 'C';case 'T':return 'A';} return c; };
+    if(s.empty()) return;
+    size_t i=0,j=s.size()-1;
+    while(i<j){ char a=comp(s[i]),b=comp(s[j]); s[i]=b; s[j]=a; ++i; --j; }
+    if(i==j) s[i]=comp(s[i]);
+}
+// pack the 32 bases at p; false if any non-ACGT
+static inline bool pack(const char* p,uint64_t& out){
+    uint64_t k=0;
+    for(uint32_t i=0;i<SEED;++i){ int v=b2(p[i]); if(v<0) return false; k=(k<<2)|(uint64_t)v; }
+    out=k; return true;
+}
+
+int main(int argc,char** argv){
+    if(argc<2){ fprintf(stderr,"usage: scs5 <in.fq> [maxmm] [minov]\n"); return 1; }
+    const int      MAXMM = argc>2?atoi(argv[2]):3;
+    const uint32_t MINOV = argc>3?(uint32_t)atoi(argv[3]):40;
+    // Sweep seed width. 32 bases fills a uint64 exactly, which is why it was
+    // fixed there -- but it also silently floors the shortest overlap the sweep
+    // can ever see, and the measured trend (MINOV 50 -> 40 -> 32 giving 29.88M
+    // -> 28.91M -> 28.28M) runs straight into that floor. A narrower seed costs
+    // specificity (more candidates to verify) but lets round 2 pair reads that
+    // overlap by less than 32, which after the division are still reads known
+    // to tile well.
+    const uint32_t SW = argc>4?(uint32_t)atoi(argv[4]):32;
+    const uint64_t SWMASK = (SW>=32)?~0ULL:((1ULL<<(2*SW))-1);
+    auto packSW=[&](const char* p,uint64_t& out)->bool{
+        uint64_t k=0;
+        for(uint32_t i=0;i<SW;++i){ int v=b2(p[i]); if(v<0) return false; k=(k<<2)|(uint64_t)v; }
+        out=k; return true; };   // >= SEED
+    auto T0=std::chrono::steady_clock::now();
+    auto lap=[&](const char* w){ auto t=std::chrono::steady_clock::now();
+        fprintf(stderr,"  %-26s %6.2f s\n",w,std::chrono::duration<double>(t-T0).count()); T0=t; };
+
+    // ── load, drop N-reads, collapse exact duplicates ────────────────────────
+    std::vector<std::string> reads;
+    size_t n_in=0,n_filt=0;
+    {
+        std::ifstream f(argv[1]); std::string a,b,c,d;
+        std::unordered_map<uint64_t,std::vector<uint32_t>> seen; seen.reserve(1u<<21);
+        while(std::getline(f,a)&&std::getline(f,b)&&std::getline(f,c)&&std::getline(f,d)){
+            ++n_in;
+            if(b.find('N')!=std::string::npos){ ++n_filt; continue; }
+            auto& bk=seen[fnv(b.data(),(uint32_t)b.size())]; bool dup=false;
+            for(uint32_t id:bk) if(reads[id]==b){ dup=true; break; }
+            if(!dup){ bk.push_back((uint32_t)reads.size()); reads.push_back(b); }
+        }
+    }
+    const uint32_t n=(uint32_t)reads.size();
+    uint32_t Lmax=0; for(auto& r:reads) Lmax=std::max(Lmax,(uint32_t)r.size());
+    fprintf(stderr,"reads in=%zu N-filtered=%zu unique=%u maxlen=%u\n",n_in,n_filt,n,Lmax);
+    lap("load+filter+dedup");
+
+    // ── index every read by the 32 bases at its start ────────────────────────
+    std::unordered_map<uint64_t,std::vector<uint32_t>> pref;
+    pref.reserve(n*2);
+    for(uint32_t i=0;i<n;++i){
+        if(reads[i].size()<SW) continue;
+        uint64_t k; if(packSW(reads[i].data(),k)) pref[k].push_back(i);
+    }
+    lap("prefix seed index");
+
+    // ── longest verified suffix-prefix partner for each read, one pass ───────
+    // ── TRUE descending-length sweep ────────────────────────────────────────
+    // Storing one best partner per read is what broke this: sorted by overlap
+    // and committed, a read whose single candidate was already consumed links
+    // to nothing, and every unlinked read starts a chain that costs a full read
+    // length. Measured, that was 78,327 chains x 150 b = 11.7 MB of pure chain
+    // heads, against PgRC2's ~5,100 chains on the same read count -- the whole
+    // gap, and nothing to do with tolerance or strandedness.
+    //
+    // The sweep instead revisits EVERY still-open end at every overlap length,
+    // longest first, so a read whose best partner is taken still gets its
+    // next-best one length down. Naively that re-reads L bytes per read per
+    // length (O(n*L^2), the 40 s version). Here each open tail carries a rolling
+    // 32-base seed: its suffix offset grows by exactly one as L drops by one, so
+    // the seed advances with a single shift-or, and the L-byte memcmp runs only
+    // after an exact 64-bit seed hit.
+    std::vector<uint32_t> nxt(n,NONE),prv(n,NONE),ovl(n,0),ch_h(n),ch_t(n);
+    std::vector<uint64_t> seed(n,0);
+    std::vector<uint8_t>  ok(n,0);
+    std::vector<uint32_t> tails;
+    size_t links=0, probes=0;
+    // `admit` selects which reads take part; everything else is reset per round.
+    std::vector<uint8_t> admit(n,1);
+    // Round 1 only LABELS reads (which ones sit interior to a chain), so its
+    // links cost nothing -- a link there buys classification, not bytes. It
+    // therefore runs at the widest overlap the seed allows, while round 2, which
+    // actually emits sequence, keeps the caller's floor. Running both at the
+    // same conservative floor was leaving reads unlabelled that would have
+    // classified fine: interior fraction 66% against PgRC2's 83%, which starves
+    // the main pseudogenome and leaves the mapping stage with less to hit.
+    uint32_t sweep_minov=MINOV;
+    auto sweep=[&](){
+        links=0; probes=0;
+        std::fill(nxt.begin(),nxt.end(),NONE); std::fill(prv.begin(),prv.end(),NONE);
+        std::fill(ovl.begin(),ovl.end(),0);    std::fill(ok.begin(),ok.end(),0);
+        for(uint32_t i=0;i<n;++i){ ch_h[i]=i; ch_t[i]=i; }
+        tails.clear(); tails.reserve(n);
+        for(uint32_t i=0;i<n;++i) if(admit[i]&&reads[i].size()>=sweep_minov) tails.push_back(i);
+    for(uint32_t L=Lmax-1; L>=sweep_minov && L>=SW; --L){
+        size_t w=0;
+        for(uint32_t a:tails){
+            if(nxt[a]!=NONE) continue;                       // already extended
+            const std::string& A=reads[a];
+            if(A.size()<L) continue;
+            const uint32_t off=(uint32_t)A.size()-L;         // grows by 1 per length
+            if(off+SW>A.size()) continue;
+            tails[w++]=a;                                    // still open: keep
+            if(!ok[a]){ ok[a]=packSW(A.data()+off,seed[a])?1:0; if(!ok[a]) continue; }
+            else{
+                const int v=b2(A[off+SW-1]);
+                if(v<0){ ok[a]=0; continue; }
+                seed[a]=((seed[a]<<2)|(uint64_t)v)&SWMASK;   // roll one base
+            }
+            ++probes;
+            auto it=pref.find(seed[a]); if(it==pref.end()) continue;
+            for(uint32_t b:it->second){
+                if(b==a||prv[b]!=NONE||ch_h[a]==b) continue; // taken, or would cycle
+                if(!admit[b]) continue;                      // excluded reads are leftovers,
+                                                             // never chain members -- without
+                                                             // this they get emitted twice
+                if(reads[b].size()<L) continue;
+                if(memcmp(A.data()+off,reads[b].data(),L)!=0) continue;
+                nxt[a]=b; prv[b]=a; ovl[a]=L;
+                uint32_t h=ch_h[a],t=ch_t[b]; ch_t[h]=t; ch_h[t]=h; ++links;
+                break;
+            }
+        }
+        tails.resize(w);
+        if(tails.empty()) break;
+    }
+    };
+
+    // ── round 1: label, do not build ────────────────────────────────────────
+    // The first sweep exists only to find which reads sit INTERIOR to a chain --
+    // overlapped on both sides. Those are the reads that tile the genome well.
+    // Reads that end up at a chain end, or unlinked, overlap poorly; keeping
+    // them in the pseudogenome is what drags the mean overlap down (measured
+    // 119.9 against PgRC2's 133.7, where ideal tiling at this coverage is ~136).
+    // They cost far less mapped into the finished sequence than assembled into
+    // it, so round 2 rebuilds without them.
+    sweep_minov=SW;                   // classifier: widest range the seed supports
+    sweep();
+    size_t both_sides=0;
+    {
+        std::vector<uint8_t> keep(n,0);
+        for(uint32_t i=0;i<n;++i)
+            if(nxt[i]!=NONE && prv[i]!=NONE){ keep[i]=1; ++both_sides; }
+        admit.swap(keep);
+    }
+    fprintf(stderr,"round1: links=%zu both-sides-overlapped=%zu (%.1f%%)\n",
+            links,both_sides,100.0*(double)both_sides/(double)n);
+    lap("round 1 (division)");
+
+    // ── round 2: build over the well-overlapped reads only ──────────────────
+    sweep_minov=MINOV;                // builder: caller's floor
+    sweep();
+    fprintf(stderr,"round2: probes=%zu links=%zu\n",probes,links);
+    lap("round 2 (assembly)");
+
+    // ── emit chains; singletons held back for mapping ────────────────────────
+    std::string pg; pg.reserve((size_t)n*40);
+    std::vector<uint32_t> leftovers;
+    uint32_t multi=0;
+    for(uint32_t i=0;i<n;++i){
+        if(!admit[i]){ leftovers.push_back(i); continue; }   // excluded in round 1
+        if(prv[i]!=NONE) continue;
+        if(nxt[i]==NONE){ leftovers.push_back(i); continue; }
+        ++multi;
+        uint32_t cur=i; pg+=reads[cur];
+        while(nxt[cur]!=NONE){ uint32_t o=ovl[cur]; cur=nxt[cur];
+                               pg.append(reads[cur].data()+o,reads[cur].size()-o); }
+    }
+    fprintf(stderr,"links=%zu chains(multi)=%u leftovers=%zu pg after chains=%zu\n",
+            links,multi,leftovers.size(),pg.size());
+    lap("emit chains");
+
+    // ── Stage C: pigeonhole mapping into the pg, forward then RC ─────────────
+    std::vector<uint8_t> matched(n,0);
+    size_t n_matched=0;
+    {
+        // Part width must SCALE with the tolerance, not stay pinned at 32.
+        // Pigeonhole needs MAXMM+1 parts to fit inside one read, so a fixed
+        // 32-base part caps tolerance at 150/32-1 = 3 mismatches -- ask for more
+        // and the parts no longer fit, no seed is indexed, and mapping silently
+        // does nothing. PgRC2 makes the part length the parameter and derives
+        // the tolerance from it (targetMismatches = readLength/partLength - 1).
+        // Same here: parts are as wide as they can be, capped at 32 because that
+        // is what a uint64 holds exactly at 2 bits per base.
+        // STAGE 17. The above ties acceptance to the seed geometry: NPARTS =
+        // MAXMM+1 parts means a read is rejected past 3 mismatches, because that
+        // is all the pigeonhole lemma can certify with parts this wide.
+        //
+        // PgRC2 does not tie them together. ReadsMatchers.cpp:700 reads
+        //     uint8_t maxMismatches = readLength / minCharsPerMismatch;
+        // with minCharsPerMismatch = 3 at CODER_LEVEL_NORMAL, so a 150-base read
+        // is accepted at up to FIFTY mismatches. The seed (their
+        // readsExactMatchingChars = 38) only proposes candidates; acceptance is a
+        // separate, far looser test. Their log shows what that buys:
+        //     290,521 LQ reads -> 11,298 survivors   (96.1% placed)
+        // against ours at 74.8%. The survivor pseudogenome that holds 94% of the
+        // remaining gap is made almost entirely of reads this limit rejected.
+        //
+        // Their seed is 38 bases; ours stays 32 because that is what a uint64
+        // holds exactly at 2 bits per base. A shorter seed is more sensitive, not
+        // less, so this is not a handicap -- it proposes more candidates, and
+        // acceptance is what decides.
+        //
+        // Not copied: they re-scan and keep the BEST match per read (the
+        // "better-matches" column in their log, ReadsMatchers.cpp:315-328). That
+        // only shrinks their mismatch stream, which this progression does not
+        // measure, so first-acceptable wins here. Noted rather than silently
+        // skipped.
+        const uint32_t MAXMAP=(uint32_t)(Lmax/3);        // ReadsMatchers.cpp:700
+        uint32_t SEEDW=32;                                // uint64 at 2 bits/base
+        const uint32_t NPARTS=(uint32_t)(Lmax/SEEDW);     // as many seeds as fit
+        if(SEEDW<8) SEEDW=8;                     // below this a seed is noise
+        const uint64_t SW_MASK=(SEEDW>=32)?~0ULL:((1ULL<<(2*SEEDW))-1);
+        auto packW=[&](const char* p,uint64_t& out)->bool{
+            uint64_t k=0;
+            for(uint32_t i=0;i<SEEDW;++i){ int v=b2(p[i]); if(v<0) return false;
+                                          k=(k<<2)|(uint64_t)v; }
+            out=k; return true; };
+        fprintf(stderr,"  mapping: %u seeds x %u bases, accepting up to %u mismatches\n",
+                NPARTS,SEEDW,MAXMAP);
+        std::unordered_map<uint64_t,std::vector<std::pair<uint32_t,uint8_t>>> seeds;
+        seeds.reserve(leftovers.size()*NPARTS*2);
+        for(uint32_t rid:leftovers){
+            const std::string& R=reads[rid];
+            if(R.size()<NPARTS*SEEDW) continue;
+            for(uint32_t p=0;p<NPARTS;++p){
+                uint64_t k; if(packW(R.data()+p*SEEDW,k)) seeds[k].push_back({rid,(uint8_t)p});
+            }
+        }
+        auto scan=[&](const std::string& text){
+            if(text.size()<SEEDW) return;
+            uint64_t k=0; uint32_t good=0;
+            for(size_t p=0;p<text.size();++p){
+                int v=b2(text[p]);
+                if(v<0){ good=0; k=0; continue; }
+                k=((k<<2)|(uint64_t)v)&SW_MASK; ++good;
+                if(good<SEEDW) continue;
+                auto it=seeds.find(k); if(it==seeds.end()) continue;
+                const size_t seedStart=p-SEEDW+1;
+                for(auto& pr:it->second){
+                    const uint32_t rid=pr.first; if(matched[rid]) continue;
+                    const size_t off=(size_t)pr.second*SEEDW;
+                    if(seedStart<off) continue;
+                    const size_t st=seedStart-off;
+                    const std::string& R=reads[rid];
+                    if(st+R.size()>text.size()) continue;
+                    uint32_t mm=0; const char* t=text.data()+st;
+                    for(size_t j=0;j<R.size();++j) if(t[j]!=R[j]){ if(++mm>MAXMAP) break; }
+                    if(mm<=MAXMAP){ matched[rid]=1; ++n_matched; }
+                }
+            }
+        };
+        scan(pg);
+        rc_inplace(pg); scan(pg); rc_inplace(pg);
+    }
+    lap("pigeonhole mapping");
+
+    // Survivors get their own pseudogenome rather than being appended whole.
+    // They are the reads that neither tiled well enough to assemble in round 2
+    // nor matched anything already built -- but they still overlap EACH OTHER,
+    // so a second sweep over just this set recovers most of their length.
+    // Appending them raw costs a full read apiece (measured: 43,075 x 150 =
+    // 6.46 MB); PgRC2 assembles its 11,298 survivors into 1,504,035 bytes.
+    size_t appended=0, second_pg=0;
+    const size_t main_pg_end = pg.size();
+    {
+        std::vector<uint8_t> keep(n,0);
+        for(uint32_t rid:leftovers) if(!matched[rid]){ keep[rid]=1; ++appended; }
+        admit.swap(keep);
+        sweep();
+        const size_t before=pg.size();
+        for(uint32_t i=0;i<n;++i){
+            if(!admit[i]||prv[i]!=NONE) continue;            // not a chain head here
+            uint32_t cur=i; pg+=reads[cur];
+            while(nxt[cur]!=NONE){ uint32_t o=ovl[cur]; cur=nxt[cur];
+                                   pg.append(reads[cur].data()+o,reads[cur].size()-o); }
+        }
+        second_pg=pg.size()-before;
+        fprintf(stderr,"second pg: %zu reads -> %zu B (raw would be %zu B)\n",
+                appended,second_pg,appended*(size_t)Lmax);
+    }
+    fprintf(stderr,"leftovers=%zu mapped=%zu appended=%zu\n",
+            leftovers.size(),n_matched,appended);
+
+    // ── MEM matching between and within pseudogenomes ────────────────────────
+    // PgRC2's stage 7 (SimplePgMatcher::matchPgsInPg) and the single largest
+    // thing this progression was missing. They build ONE matcher over the HQ pg
+    // and then, reverse-complement matching enabled throughout:
+    //   - match the LQ pg into it        (SimplePgMatcher.cpp:187)
+    //   - match the N pg into it         (:194)
+    //   - match the HQ pg into ITSELF    (:202)
+    // replacing each maximal exact match with a mark plus (offset,length).
+    //
+    // Measured from their own stdout on yeast_sub.fq:
+    //     HQ 21,104,500 -> 11,463,320   (45.8% removed)
+    //     LQ  1,504,035 ->  1,230,006   (18.5%)
+    //     N       2,100 ->      1,849   (12.1%)
+    // Their real final literal is 12,695,175. The 22,610,635 this progression
+    // has been calling "their 22.60M" is their pg BEFORE this stage runs.
+    //
+    // Their parameters at CODER_LEVEL_NORMAL (pgrc-params.h:138-145): minimum
+    // match length 45, reverse complement on.
+    //
+    // NOT copied: they use CopMEM with sparse sampling, which their own paper
+    // concedes can miss matches. This reuses the packed-32-base seed already in
+    // this file and samples the SOURCE every STEP = 45-32+1 = 14. That is exact,
+    // not heuristic: a match of length >= 45 spans >= 14 consecutive candidate
+    // seed starts, which must contain a multiple of 14, so no qualifying match
+    // can be missed.
+    size_t rem_main=0, rem_second=0, nm_main=0, nm_second=0;
+    {
+        const size_t MINMEM = 45;
+        const size_t STEP   = MINMEM - SEED + 1;   // 14
+        const size_t MAXCAND = 64;                 // bound work in repetitive regions
+
+        std::unordered_map<uint64_t,std::vector<uint32_t>> sidx;
+        sidx.reserve(main_pg_end/STEP*2+16);
+        for(size_t p=0;p+SEED<=main_pg_end;p+=STEP){
+            uint64_t k; if(pack(pg.data()+p,k)) sidx[k].push_back((uint32_t)p);
+        }
+
+        enum Mode { CROSS, SELF_FWD, SELF_RC };
+        // Greedy left-to-right parse of Q against the main pg. Marks consumed
+        // destination positions; a match is only taken when it reaches MINMEM.
+        auto parse=[&](const char* Q,size_t qlen,Mode mode,
+                       std::vector<uint8_t>& consumed)->size_t{
+            size_t nmatch=0, qp=0;
+            while(qp+MINMEM<=qlen){
+                uint64_t k;
+                if(!pack(Q+qp,k)){ ++qp; continue; }
+                auto it=sidx.find(k);
+                if(it==sidx.end()){ ++qp; continue; }
+                size_t best=0, tried=0;
+                for(uint32_t s:it->second){
+                    if(++tried>MAXCAND) break;
+                    // Cap the usable length BEFORE extending, never after. In a
+                    // self-match the seed at qp also occurs at qp itself, and an
+                    // uncapped extension there runs to the end of the text --
+                    // O(n) work at every sampled position. This is the cap PgRC2
+                    // applies as "usable length = i - src".
+                    size_t capL=SIZE_MAX;
+                    if(mode==SELF_FWD){
+                        if((size_t)s>=qp) continue;          // source must precede dest
+                        capL=qp-(size_t)s;                   // and not overlap it
+                    } else if(mode==SELF_RC){
+                        // dest occupies [qlen-qp-L, qlen-qp) in original
+                        // coordinates, so s+L <= qlen-qp-L, i.e. L <= (qlen-qp-s)/2.
+                        if((size_t)s>=qlen-qp) continue;
+                        capL=(qlen-qp-(size_t)s)/2;
+                    }
+                    if(capL<MINMEM) continue;
+                    size_t L=0;
+                    while(L<capL && qp+L<qlen && s+L<main_pg_end && Q[qp+L]==pg[s+L]) ++L;
+                    if(L>best) best=L;
+                }
+                if(best>=MINMEM){
+                    for(size_t t=0;t<best;++t) consumed[qp+t]=1;
+                    ++nmatch; qp+=best;
+                } else ++qp;
+            }
+            return nmatch;
+        };
+
+        // Second pg (their LQ+N) against the main pg, forward then reverse complement.
+        {
+            const size_t qlen=pg.size()-main_pg_end;
+            if(qlen>=MINMEM){
+                std::string Q(pg,main_pg_end,qlen);
+                std::vector<uint8_t> c(qlen,0), cr(qlen,0);
+                nm_second =parse(Q.data(),qlen,CROSS,c);
+                std::string R=Q; rc_inplace(R);
+                nm_second+=parse(R.data(),qlen,CROSS,cr);
+                for(size_t i=0;i<qlen;++i) if(cr[i]) c[qlen-1-i]=1;
+                for(size_t i=0;i<qlen;++i) if(c[i]) ++rem_second;
+            }
+        }
+        // Main pg against itself, forward then reverse complement.
+        {
+            const size_t qlen=main_pg_end;
+            std::vector<uint8_t> c(qlen,0), cr(qlen,0);
+            nm_main =parse(pg.data(),qlen,SELF_FWD,c);
+            std::string R(pg,0,qlen); rc_inplace(R);
+            nm_main+=parse(R.data(),qlen,SELF_RC,cr);
+            for(size_t i=0;i<qlen;++i) if(cr[i]) c[qlen-1-i]=1;
+            for(size_t i=0;i<qlen;++i) if(c[i]) ++rem_main;
+        }
+    }
+    lap("pg MEM matching");
+
+    const size_t lit_main   = main_pg_end-rem_main;
+    const size_t lit_second = (pg.size()-main_pg_end)-rem_second;
+    fprintf(stderr,"MEM main   : %zu -> %zu (removed %zu, %.1f%%, %zu matches)\n",
+            main_pg_end,lit_main,rem_main,rem_main*100.0/(main_pg_end?main_pg_end:1),nm_main);
+    fprintf(stderr,"MEM second : %zu -> %zu (removed %zu, %.1f%%, %zu matches)\n",
+            pg.size()-main_pg_end,lit_second,rem_second,
+            rem_second*100.0/((pg.size()-main_pg_end)?(pg.size()-main_pg_end):1),nm_second);
+    fprintf(stderr,"PgRC2 for reference: main 21104500 -> 11463320 (45.8%%), "
+                   "lq+n 1506135 -> 1231855, final literal 12695175\n");
+    printf("PG_LEN %zu\n",pg.size());
+    printf("PG_LITERAL %zu\n",lit_main+lit_second);
+    return 0;
+}
