@@ -785,6 +785,12 @@ int main(int argc,char** argv){
             return nm;
         };
 
+        // DUMP_LIT: write the surviving literal (everything no MEM reference
+        // covers) so it can be entropy-coded and compared against PgRC2's
+        // 12,694,903 -> 3,056,474. Literal byte counts are NOT comparable to
+        // compressed archive numbers, and the order stream is compressed, so
+        // mixing the two without this step would be meaningless.
+        FILE* litf = getenv("DUMP_LIT") ? fopen("literal.txt","wb") : nullptr;
         // Second pg (their LQ+N) against the main pg, forward then reverse complement.
         {
             const size_t qlen=pg.size()-main_pg_end;
@@ -796,6 +802,7 @@ int main(int argc,char** argv){
                 nm_second+=run(R.data(),qlen,CROSS,cr);
                 for(size_t i=0;i<qlen;++i) if(cr[i]) c[qlen-1-i]=1;
                 for(size_t i=0;i<qlen;++i) if(c[i]) ++rem_second;
+                if(litf) for(size_t i=0;i<qlen;++i) if(!c[i]) fputc(Q[i],litf);
             }
         }
         // Main pg against itself, forward then reverse complement.
@@ -807,7 +814,9 @@ int main(int argc,char** argv){
             nm_main+=run(R.data(),qlen,SELF_RC,cr);
             for(size_t i=0;i<qlen;++i) if(cr[i]) c[qlen-1-i]=1;
             for(size_t i=0;i<qlen;++i) if(c[i]) ++rem_main;
+            if(litf) for(size_t i=0;i<qlen;++i) if(!c[i]) fputc(pg[i],litf);
         }
+        if(litf){ fclose(litf); fprintf(stderr,"[LIT] literal.txt written\n"); }
     }
     lap("pg MEM matching");
 

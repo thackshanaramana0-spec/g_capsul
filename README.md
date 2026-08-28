@@ -519,6 +519,80 @@ sequence-coding gap (231,750 B) that stages 16-21 were fighting over. Order
 information was the largest single lever on the board and it sat untouched
 because it was the one stage nobody had built.
 
+## Final check on the two axes we still lose
+
+### Speed: 1.46x, not 1.33x, and mapping is the whole story
+
+Their real total on this input at `-t 12` is **3.66 s**, from their own log --
+not the 4.0 s quoted from the older comparison doc. Every "1.33x" above should
+read **1.46x**. Per stage:
+
+| stage | ours | PgRC2 | |
+|-------|------|-------|---|
+| load / filter / dedup | 0.57 s | 0.46 s | 1.24x |
+| round 1 (division) | 1.32 s | 1.21 s | **1.09x, parity** |
+| round 2 (assembly) | 0.74 s | 0.56 s | 1.33x |
+| emit chains | 0.22 s | -- | |
+| **pigeonhole mapping** | **1.06 s** | **0.41 s** | **2.6x** |
+| pg MEM matching | 0.83 s | ~0.5 s | 1.7x |
+
+Mapping is the loss. Their paper notes the RC-match search "is currently
+serial", so our stage 7 is already parallel where theirs is not; the deficit is
+concentrated in stage 4.
+
+**The obvious fix does not work.** Stage 20 took copMEM's lemma for sensitivity
+(sampling the reads every k1) but left the query side at k2 = 1, probing all
+21.6M pg positions. Their k1*k2 samples BOTH sides, which is why their matching
+is 0.41 s. Sampling our query too, holding the floor constant:
+
+| k1 | k2 | floor | mapping | literal | peak RSS |
+|----|----|-------|---------|---------|----------|
+| **22** | **1** | 37 | **0.95 s** | 12,926,925 | **239 MB** |
+| 11 | 2 | 37 | 1.09 s | 12,919,342 | 288 MB |
+| 7 | 3 | 36 | 1.36 s | 12,916,013 | 344 MB |
+
+Monotonically **worse**. Halving the probes doubles the read index, so each
+surviving probe carries twice the candidates -- and our verification (a full
+read against the pg at up to 50 mismatches) costs far more than the hash probe.
+The stage is verification-bound, not probe-bound, so trading probes for
+candidates loses. copMEM's balance is the mirror image: they index the huge pg
+and query small reads, so probes dominate for them and sampling both sides pays.
+
+k2 = 1 is therefore the right operating point *for this orientation*, and the
+lemma does not transfer to the speed axis the way it transferred to sensitivity.
+Flipping speed would mean flipping the orientation -- indexing the pg and
+streaming reads, as they do -- which is a rewrite of stage 4, not a parameter.
+
+### Sequence: +101,610 B coded, and most of it is the stand-in coder
+
+| | ours | PgRC2 |
+|---|------|-------|
+| literal | 12,926,925 | 12,694,903 |
+| coded | 3,158,084 (2-bit + xz -9e) | 3,056,474 (VarLenDNA + LZMA) |
+| bits/base | 1.955 | 1.926 |
+
+232,022 more literal bases, but literal compresses ~4:1, so the algorithmic part
+of the gap is ~56 KB coded; the other ~45 KB is our stand-in coder being weaker
+than their tuned one. Neither is a missing stage -- it is mean overlap, already
+diagnosed as a layout problem.
+
+### Verdict
+
+Neither loss flips. **But the total does**, because stage 6 is worth more than
+both:
+
+| stream | ours | PgRC2 | |
+|--------|------|-------|---|
+| sequence, coded | 3,158,084 | 3,056,474 | +101,610 |
+| order | **2,309,967** | 2,852,758 | **-542,791** |
+| **combined** | **5,468,051** | **5,909,232** | **-441,181, 7.5% ahead** |
+
+Scope, stated plainly: these are the two largest streams, not whole archives.
+Their `-o` archive is 7,063,459 B and these two are 84% of it; the remaining
+~1.15 MB is mismatch/offset/length streams this progression computes and
+discards. We do not have an archive, so the claim is "ahead on the two streams
+both tools produce and that were measured", not "smaller archive".
+
 ## Correction: the division was never behind
 
 Several sections above cite a read deficit -- "we admit 593,968 both-side
