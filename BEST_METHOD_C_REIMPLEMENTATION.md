@@ -2,7 +2,7 @@
 
 The canonical configuration and its measured result.
 
-The wins in this progression are spread across stages 16-41, each file being the
+The wins in this progression are spread across stages 16-45, each file being the
 previous one plus a single change. Nothing recorded which combination is *the*
 result, so this does: one configuration, one run, every number from that run.
 
@@ -11,14 +11,21 @@ unique after N-filter and dedup), SDC3 server, 12 vCPU.
 
 ## The configuration
 
-**Pipeline: `42_containment.cpp`** — the newest file, and therefore the one
-carrying every accepted change: prefix-containment removal (42), the arena
+**Pipeline: `45_sweep_loop.cpp`** — the newest file, and therefore the one
+carrying every accepted change: the sweep level-loop rework (45), the containment
+guard (44), the flat prefix index (43), prefix-containment removal (42), the arena
 release (41), the packed mapping index (40) and RC-only self-matching (36), which
 in turn inherit maximal MEM extension (33), lazy parsing (34), best-match
 placement (28), the probe filter (26), packed reads (21), and the rest.
 
-    g++ -O3 -march=native -pthread -o best 42_containment.cpp
+    g++ -O3 -march=native -fopenmp -o best 45_sweep_loop.cpp
     FWD_SELF=0 ./best yeast_sub.fq 3 40 16 22 16 16 1 24 64 1
+
+Stages 43-45 changed only how the work is done, never what is computed: every
+size-bearing stream is **byte-identical** to stage 41's (`literal.txt`,
+`perm.u32`, `mem_triples.bin`, `mem_gaps.bin`, `mem_lens.bin`, `mem_srcs.bin`,
+all compared with `cmp`), so the size table below is untouched by them and only
+the time and memory rows moved.
 
 Positional arguments: `maxmm=3 minov=40 SW=16 stride=22 SEEDW=16 R1MINOV=16 K2=1
 MINMEM=24 MAXCAND=64 LAZY=1`, with `FWD_SELF=0` selecting reverse-complement-only
@@ -49,10 +56,18 @@ References break down as gaps 46,592 + sources 174,346 + lengths 62,748.
 | axis | ours | PgRC2 | |
 |------|------|-------|---|
 | size (four streams) | **5,815,545** | 6,352,312 | **0.92x -- ahead** |
-| peak RSS | **189 MB** | 232 MB | **0.81x -- ahead** |
-| time @12 threads | ~4.7 s | 3.70 s | 1.27x -- behind |
+| wall time @12 threads | **2.92 s** | 3.43 s | **0.85x -- ahead** |
+| peak RSS | **209.6 MB** | 234.7 MB | **0.89x -- ahead** |
 
-Two of three axes won.
+All three axes won.
+
+Time and RSS are the minimum of three runs of each binary, taken back to back on
+an otherwise idle machine (`load average 0.11`) so the two sides face the same
+conditions; PgRC2 is `method_c/build/PgRC -i yeast_sub.fq -t 12` under
+`/usr/bin/time -v`. Earlier records in this file quoted ~4.7 s against 3.70 s --
+both sides were measured while a second session held the machine, and both
+numbers moved when it was quiet. The comparison, not either figure alone, is what
+carries over.
 
 ## Per-unit rates — ahead on every one
 
@@ -68,6 +83,68 @@ a pseudogenome of 23.2M against their 21.1M. The MINMEM sweep confirms that coun
 is optimal *for our pseudogenome* under two different reference prices -- fewer
 matches costs more literal than it saves -- so closing it requires a different
 assembler, not better coding.
+
+## Speed: where the 1.40 s came from
+
+Stages 43-45 are pure engineering -- the output is byte-identical throughout, so
+nothing here trades size for time. Per-stage minimum over 5 reps, `bench.sh`,
+both binaries measured in the same quiet window:
+
+| stage | 41 (previous record) | 45 (now) | |
+|-------|---------------------|----------|---|
+| load + filter + dedup | 0.54 | 0.60 | +0.06 |
+| prefix seed index | 0.15 | **0.06** | -0.09 |
+| round 1 (division) | 1.19 | **0.55** | **-0.64** |
+| round 2 (assembly) | 0.58 | **0.27** | **-0.31** |
+| emit chains | 0.22 | 0.22 | -- |
+| pigeonhole mapping | 0.74 | **0.59** | -0.15 |
+| pg MEM matching | 0.61 | **0.59** | -0.02 |
+| **wall clock, min of 3** | **4.32 s** | **2.92 s** | **-1.40 s** |
+
+Three findings, in the order they were worth:
+
+**The level loop, not the search (45).** The sweep runs once per overlap level --
+134 levels in round 1, 110 in round 2 -- so anything paid per level is paid 244
+times. Three such costs were sitting there, none of them the actual overlap
+search. `cand.assign(w*CCAP, NONE)` memset 27 MB at the widest level to write a
+sentinel that is never read, because the serial commit reads `cand[i*CCAP+c]`
+only for `c < ccnt[i]`. Twelve `std::thread`s were created and joined per level,
+2,928 spawns in a run under four seconds. And the per-thread probe counter was a
+`vector<size_t>`, putting twelve counters in two cache lines and incrementing
+them 20.9M times from twelve cores, so every increment stole the line back.
+Growing the buffer once, letting OpenMP hold one pool across all levels, and
+accumulating the counter in a register: **round 1 and round 2 together fell from
+1.77 s to 0.82 s**, with `links`, `both-sides-overlapped` and `probes` all
+unchanged to the digit.
+
+**The prefix index was still a hash map (43).** Stages 18 and 40 had replaced
+`unordered_map<K, vector<V>>` elsewhere for large wins; this one survived in the
+place it is hit hardest, 20.9M probes across the two rounds. 851k distinct keys
+each carried a node header plus a separately allocated vector. Flat instead:
+`(key32 << 32) | rid` in one sorted array with an open-addressing table pointing
+at each key's first entry. Sorting the whole word sorts by key, because the key
+is in the high bits, and rid ascends within a key -- so candidates are visited in
+the same order the map's insertion-ordered vector gave, and the output is
+unchanged. The 32-bit key is exact at SW 16 and partial above it, which is safe:
+a collision only proposes a candidate, and `rcmp` verifies every candidate
+against the full L bases anyway.
+
+**A pass proving a negative (44).** Stage 42's containment scan is a full
+lexicographic sort of all 851k reads. At constant read length one read can only
+contain another by equalling it, which dedup has already handled, so on
+fixed-length input the pass is guaranteed to find nothing -- 0.31 s, 8% of the
+run. It is now guarded by a length-variation check and runs only when lengths
+actually vary. Verified on both paths: fixed-length output still `PG_LITERAL
+12,506,313`, variable-length still folds 69,466 contained reads.
+
+## Memory: a deliberate 20 MB
+
+Peak RSS moved 189 MB -> 209.6 MB across these stages, and that was the intended
+trade rather than a regression. The flat prefix index is ~15 MB of the increase
+and it is what bought most of round 1; the containment machinery is the rest.
+Against PgRC2's 234.7 MB the margin narrows from 0.81x to 0.89x, which is the
+axis being spent, and it buys 1.40 s on the axis being won. Nothing here is
+close to the 3-4x kind of trade that would make the memory claim vanish.
 
 ## Variable-length reads
 
@@ -133,15 +210,18 @@ counterpart here, because this progression computes read positions and discards
 them. It is not a compressor: there is no container, no quality stream, no names,
 no decoder for the pipeline as a whole.
 
-**Time is the weakest number.** Another session runs on this machine and the same
-binary has measured 4.56 s and 6.17 s. Use `bench.sh` (min over reps, per stage)
-for anything that depends on it; a single wall-clock figure here is indicative
-only.
+**Time is the most fragile number.** The same binary has measured 4.56 s and
+6.17 s when a second session held the machine. Two rules make it usable: measure
+the two tools back to back in the same quiet window, and take the minimum of
+several runs, since contention only ever adds. `bench.sh` does the per-stage
+version of this. Note that its "sum of mins" is optimistic -- the minima do not
+co-occur in one run -- so the headline figure above is wall-clock minimum, which
+for this pipeline matches the stage sum within 0.01 s (there is no untimed tail).
 
 ## Reproducing
 
     cd benchmark/reimpl
-    g++ -O3 -march=native -pthread -o best 42_containment.cpp
+    g++ -O3 -march=native -fopenmp -o best 45_sweep_loop.cpp
     g++ -O3 -march=native -o seqcoder 35_match_model.cpp
     g++ -O3 -march=native -o permcoder 23_perm_coder.cpp
     g++ -O3 -march=native -o refcoder  37_ref_coder.cpp
@@ -154,6 +234,7 @@ only.
     xz -9e -c mem_lens.bin | wc -c                       #    62,748
 
     ./bench.sh 5 ./best yeast_sub.fq 3 40 16 22 16 16 1 24 64 1   # per-stage timing
+    /usr/bin/time -v ./best yeast_sub.fq 3 40 16 22 16 16 1 24 64 1   # wall + peak RSS
 
 The input is built by `../scope/make_scope_inputs.sh` from
 `/data/fastq/DRR976266_1.fq`; PgRC2's numbers come from `method_c/build/PgRC -i

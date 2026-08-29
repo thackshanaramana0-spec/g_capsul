@@ -1314,6 +1314,84 @@ bind, consecutive-source delta is worse, repeat distance gives 1.1%, lazy parsin
 components sit at their floors. What remains is that our pseudogenome contains
 more short repeats than theirs, which is the assembler.
 
+## Stages 43-45 — the speed axis, flipped
+
+Speed was the one axis still lost: ~4.3 s against PgRC2's ~3.4 s. Three changes
+took it to 2.92 s against their 3.43 s, and none of them changes what is
+computed -- `literal.txt`, `perm.u32`, `mem_triples.bin`, `mem_gaps.bin`,
+`mem_lens.bin` and `mem_srcs.bin` are all byte-identical to stage 41's, checked
+with `cmp`, so the 8.45% size lead is untouched.
+
+| stage | min over 5 reps | 41 | 45 |
+|-------|-----------------|----|----|
+| load + filter + dedup | | 0.54 | 0.60 |
+| prefix seed index | | 0.15 | **0.06** |
+| round 1 (division) | | 1.19 | **0.55** |
+| round 2 (assembly) | | 0.58 | **0.27** |
+| emit chains | | 0.22 | 0.22 |
+| pigeonhole mapping | | 0.74 | **0.59** |
+| pg MEM matching | | 0.61 | **0.59** |
+| **wall clock, min of 3** | | **4.32 s** | **2.92 s** |
+
+**Stage 43 — the prefix index was still an `unordered_map`.** Stages 18 and 40
+replaced that structure elsewhere for large wins and this one survived, in the
+single place it is hit hardest: rounds 1 and 2 probe it 20.9M times. 851k
+distinct keys each carried a node header plus a separately allocated vector, and
+every probe was a pointer chase. Flat instead -- `(key32 << 32) | rid` in one
+sorted array with an open-addressing table pointing at each key's first entry.
+Sorting the whole word sorts by key because the key is in the high bits, and rid
+ascends within a key, so candidates are visited in the same order the map's
+insertion-ordered vector gave and the output does not move. Same 32-bit-key
+argument as stage 40: exact at SW 16, partial above it, and partial is safe
+because a collision only proposes a candidate that `rcmp` then verifies against
+the full L bases. Cost ~15 MB of peak RSS, which is the trade that was
+authorised.
+
+**Stage 44 — a pass that could only ever prove a negative.** Stage 42's
+containment scan lexicographically sorts all 851k reads. At constant read length
+one read contains another only by equalling it, and dedup has already removed
+those, so on fixed-length input the pass is guaranteed to find nothing. Measured
+inside the load stage it was 0.31 s, 8% of the whole run. Guarded by a
+length-variation test it now runs only when lengths vary. Both paths verified:
+fixed-length still `PG_LITERAL 12,506,313`, variable-length still folds 69,466
+contained reads and lands on the same 15,309,682.
+
+**Stage 45 — the level loop, not the search.** This was the large one, and it was
+not in the overlap search at all. The sweep runs once per overlap level -- 134
+levels in round 1, 110 in round 2 -- so anything paid per level is paid 244
+times, and three things were:
+
+  - `cand.assign(w*CCAP, NONE)` memset 27 MB at the widest level, and several MB
+    at most others, to write a sentinel that is never read. The serial commit
+    reads `cand[i*CCAP+c]` only for `c < ccnt[i]`, and a tail whose seed misses
+    the index `continue`s before assigning `ccnt[i]`, so only `ccnt` has to be
+    cleared. The buffer is now grown once to its high-water mark.
+  - twelve `std::thread`s created and joined per level, 2,928 spawns across a run
+    whose entire budget is under four seconds. OpenMP holds one pool across all
+    of them, and `schedule(static)` over `[0,w)` hands each thread the same
+    contiguous span the manual split did.
+  - `++pr[t]` on a `vector<size_t>`, which puts twelve counters in two cache
+    lines and increments them 20.9M times from twelve cores, so every increment
+    steals the line back. A register-local counter added once at the end is the
+    same number with none of the traffic.
+
+Rounds 1 and 2 together: **1.77 s -> 0.82 s**, with `links=673334`,
+`both-sides-overlapped=593968` and `probes=20879865` unchanged to the digit.
+
+The lesson is the one this file keeps recording: the expensive thing was never
+where the algorithm is. Two of the three costs were bookkeeping around the work
+and the third was cache traffic on a statistics counter.
+
+**Measurement protocol.** Both tools were re-measured back to back on an idle
+machine (`load average 0.11`), minimum of three runs each, PgRC2 as
+`method_c/build/PgRC -i yeast_sub.fq -t 12` under `/usr/bin/time -v`. Earlier
+figures in this file (~4.7 s against 3.70 s) were taken while a second session
+held the machine; both sides moved when it was quiet, which is why the pair, not
+either number alone, is what is recorded. `bench.sh`'s "sum of mins" is
+optimistic because the minima do not co-occur in one run -- for this pipeline the
+wall-clock minimum matches the stage sum within 0.01 s, so there is no untimed
+tail hiding in it.
+
 ## Stage 42 — variable length, and containment as a generalisation of dedup
 
 PgRC2 refuses variable-length input outright (`Unsupported variable length
