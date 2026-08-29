@@ -42,6 +42,7 @@
 #include <vector>
 #include <string>
 #include <array>
+#include <chrono>
 
 struct RangeEnc {
     std::vector<uint8_t> out; uint64_t low=0; uint32_t range=0xFFFFFFFFu;
@@ -134,6 +135,7 @@ int main(int argc,char**argv){
         return b>=(size_t)DBUCK ? (size_t)DBUCK-1 : b;
     };
 
+    auto t0=std::chrono::steady_clock::now();
     RangeEnc enc; enc.out.reserve(totalq);
     for(size_t r=0;r<n;++r){
         size_t hist=0;
@@ -149,6 +151,8 @@ int main(int argc,char**argv){
     }
     enc.flush();
     const size_t bytes=enc.out.size();
+    auto t1=std::chrono::steady_clock::now();
+    fprintf(stderr,"ENCODE ONLY: %.3f s\n", std::chrono::duration<double>(t1-t0).count());
 
     for(auto& m:models) m=Model(A.n);
     RangeDec dec; dec.init(enc.out.data(),enc.out.size());

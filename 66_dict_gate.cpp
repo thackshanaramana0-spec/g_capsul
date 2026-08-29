@@ -33,6 +33,7 @@
 #include <array>
 #include <cmath>
 #include <unordered_map>
+#include <chrono>
 
 struct RangeEnc {
     std::vector<uint8_t> out; uint64_t low=0; uint32_t range=0xFFFFFFFFu;
@@ -445,12 +446,15 @@ int main(int argc,char**argv){
     const size_t n=names.size();
     fprintf(stderr,"names=%zu\n",n);
 
+    auto t0=std::chrono::steady_clock::now();
     IdModels enc_models;
     RangeEnc enc; enc.out.reserve(n*4);
     std::string prev_id; std::array<uint32_t,MAXTOK> prev_ptr{}; prev_ptr.fill(0);
     for(size_t r=0;r<n;++r) compress_id(enc, enc_models, names[r].c_str(), prev_id, prev_ptr);
     enc.flush();
     const size_t bytes=enc.out.size();
+    auto t1=std::chrono::steady_clock::now();
+    fprintf(stderr,"ENCODE ONLY: %.3f s\n", std::chrono::duration<double>(t1-t0).count());
 
     IdModels dec_models;
     RangeDec dec; dec.init(enc.out.data(),enc.out.size());
