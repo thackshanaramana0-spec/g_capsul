@@ -66,6 +66,7 @@ it.
 | 31 | rc_probe | measure RC-overlap headroom before building it | -- | 9,188 links available; >=367 KB, exceeds the deficit |
 | 32 | ref_cost | price the MEM reference streams; sweep MINMEM | -- | **+122,700 B uncounted**; MINMEM tuning worth ~5 KB |
 | 33 | maximal_mem | extend matches BACKWARD; MINMEM/MAXCAND swept | -- | **-77 KB**; literal now within 1,774 bases of theirs |
+| 34 | lazy_parse | one-position lookahead in the MEM parse | -- | -3,634 B; greedy parsing was not the cause |
 
 ## Stage 16 — the missing MEM-removal stage
 
@@ -1002,6 +1003,63 @@ fewer matches, which is what the MINMEM sweep optimises.
 Sequence itself is now **ahead by 56,229 B**. The single remaining loss is the
 reference stream, and it is a match-count difference (66,831 against their
 ~43,190) whose coding is already at the entropy floor.
+
+### copMEM2 is not the lever, and here is why
+
+PgRC2 ships copMEM (`matching/copmem/`), and copMEM2 has since been published
+(Bioinformatics 39(5), btad313). Its abstract is explicit about what it improves:
+multithreading, a carefully built predecessor query structure, sort-procedure
+selection, and a memory-frugal mode -- **execution speed and RAM**. Both tools
+find the *same* MEMs; a MEM is defined by the strings, not the finder. Upgrading
+versions cannot change their match count or their reference stream, so it cannot
+be the reason we spend 332 KB where they spend 177 KB.
+
+That left match SELECTION, which is a real algorithmic difference: we take the
+longest match at each position, left to right, which is greedy parsing, and the
+classic LZ result is that greedy is not optimal -- a shorter match now can enable
+a much longer one a base later, and each fragment costs a reference.
+
+Stage 34 adds lazy matching, the cheap form of lookahead used in DEFLATE: having
+found a match at `qp`, look at `qp+1`, and if that is strictly longer leave `qp`
+as a literal.
+
+| | matches | literal | refs | total |
+|---|---------|---------|------|-------|
+| greedy | 66,831 | 12,517,972 | 332,012 | 3,332,257 |
+| **lazy** | **65,994** | 12,517,415 | **328,512** | **3,328,623** |
+
+**Worth 3,634 B.** Real but small, so greedy parsing was not the cause either.
+
+### What the match-count difference actually is
+
+At an equal MINMEM of 45: ours 58,782 matches removing 10,537,276 bases (179
+each), theirs ~43,190 removing 9,958,661 (231 each). We find 36% more matches and
+remove 5.8% more sequence. So we are not failing to find long matches -- we are
+additionally finding shorter ones they do not, on a pseudogenome that is not the
+same string as theirs (23.2M against 21.1M, built by a different assembler).
+
+Four things have now been refuted on this stream, and the elimination is the
+result:
+
+- **MAXCAND** -- byte-identical at 64 and 512, the cap never binds
+- **consecutive-source delta** -- worse than absolute; sources have no mutual locality
+- **repeat distance `dst-src`** -- 1.1%, because a pseudogenome interleaves reads
+  from across the genome, so a repeat's source is not near its destination
+- **lazy parsing** -- 3,634 B
+
+and the source stream is within 1% of `n*log2(pg_len)`, its entropy floor. The
+remaining +95 KB is a property of which matches exist in our pg versus theirs,
+not of how we find, select, or code them.
+
+### Position after stage 34
+
+| stream | ours | PgRC2 | |
+|--------|------|-------|---|
+| sequence, coded | **3,000,111** | 3,056,474 | **-56,363** |
+| MEM references | 328,512 | 177,180 | +151,332 |
+| order | **2,309,967** | 2,852,758 | -542,791 |
+| mismatch symbols | **~242,209** | 265,900 | -23,691 |
+| **sum** | **5,880,799** | 6,352,312 | **-471,513, 7.42% ahead** |
 
 ### Verdict
 
