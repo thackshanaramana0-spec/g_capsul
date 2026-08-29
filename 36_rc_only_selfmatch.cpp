@@ -994,7 +994,12 @@ int main(int argc,char** argv){
         // only the shared, already-built index. Slicing can only differ from a
         // single serial parse at the T-1 slice boundaries, bounded by ~45 bytes
         // each -- under 0.005% of a 21 MB pseudogenome.
-        auto run=[&](const char* Q,size_t qlen,Mode mode,std::vector<uint8_t>& consumed)->size_t{
+        // DSTBASE: the cross-match is handed pg.data()+main_pg_end, so its qp is
+        // relative to the survivor pg, not to the pseudogenome. Stored raw, a
+        // cross-match destination of 0 claims to be the very start of the pg,
+        // which is why 12,003 of 58,908 rows appeared to violate src < dst.
+        auto run=[&](const char* Q,size_t qlen,Mode mode,std::vector<uint8_t>& consumed,
+                     bool RCDEST=false,size_t DSTBASE=0)->size_t{
             unsigned T=std::thread::hardware_concurrency(); if(!T) T=1;
             if(qlen < (1u<<20)) T=1;
             std::vector<std::vector<Ref>> res(T);
@@ -1011,7 +1016,19 @@ int main(int argc,char** argv){
                 nm+=v.size();
                 for(auto& m:v){
                     for(uint32_t j=0;j<m.len && (size_t)m.dst+j<qlen;++j) consumed[m.dst+j]=1;
-                    allrefs.push_back(m);
+                    // An RC pass reports its destination in reverse-complement
+                    // coordinates while the source stays in forward ones, so the
+                    // two are not comparable until the destination is converted
+                    // back: a match at RC position qp of length L covers forward
+                    // [qlen-qp-L, qlen-qp). PgRC2 does the same conversion in
+                    // correctDestPositionDueToRevComplMatching
+                    // (SimplePgMatcher.cpp:58-60); we were storing the raw RC
+                    // position, which left src and dst in different coordinate
+                    // systems.
+                    Ref r=m;
+                    if(RCDEST) r.dst=(uint32_t)(qlen-m.dst-m.len);
+                    r.dst=(uint32_t)(r.dst+DSTBASE);
+                    allrefs.push_back(r);
                 }
             }
             return nm;
@@ -1029,9 +1046,9 @@ int main(int argc,char** argv){
             if(qlen>=MINMEM){
                 std::string Q(pg,main_pg_end,qlen);
                 std::vector<uint8_t> c(qlen,0), cr(qlen,0);
-                nm_second =run(Q.data(),qlen,CROSS,c);
+                nm_second =run(Q.data(),qlen,CROSS,c,false,main_pg_end);
                 std::string R=Q; rc_inplace(R);
-                nm_second+=run(R.data(),qlen,CROSS,cr);
+                nm_second+=run(R.data(),qlen,CROSS,cr,true,main_pg_end);
                 for(size_t i=0;i<qlen;++i) if(cr[i]) c[qlen-1-i]=1;
                 for(size_t i=0;i<qlen;++i) if(c[i]) ++rem_second;
                 if(litf) for(size_t i=0;i<qlen;++i) if(!c[i]) fputc(Q[i],litf);
@@ -1060,7 +1077,7 @@ int main(int argc,char** argv){
             // FWD_SELF=0 turns forward self-matching off to measure that.
             if(FWD_SELF) nm_main =run(pg.data(),qlen,SELF_FWD,c);
             std::string R(pg,0,qlen); rc_inplace(R);
-            nm_main+=run(R.data(),qlen,SELF_RC,cr);
+            nm_main+=run(R.data(),qlen,SELF_RC,cr,true);
             for(size_t i=0;i<qlen;++i) if(cr[i]) c[qlen-1-i]=1;
             for(size_t i=0;i<qlen;++i) if(c[i]) ++rem_main;
             if(litf) for(size_t i=0;i<qlen;++i) if(!c[i]) fputc(pg[i],litf);
