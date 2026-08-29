@@ -1,28 +1,25 @@
-// STAGE 62 -- read-ID coder, SPRING's real algorithm (id_compression.cpp,
-// shubhamchandak94/SPRING, itself crediting Samcomp/Mahoney & Bonfield 2012),
-// cloned and read line by line, not from a summary. Genuinely different from
-// stage 61's fqzcomp approach, and it is why stage 61 lost to SPRING/Genozip
-// by 34-43% on real data (measured, not assumed).
+// STAGE 69 -- threaded, block-chunked names coder. SPRING's real
+// parallelism design, confirmed by reading reorder_compress_quality_id.cpp:
+// fixed-size `num_reads_per_block`, OpenMP thread pool, each block gets an
+// INDEPENDENT, FRESH model -- no cross-block context. Genozip's real design
+// (confirmed via its published architecture, Bioinformatics 2021) is
+// smarter: threads CLONE the current shared dictionary, encode against the
+// clone, then MERGE new observations back -- avoiding the fresh-model
+// ratio cost SPRING pays at every block boundary. That is stage 70 (harder:
+// merge order must stay deterministic between encoder/decoder or the
+// bitstream breaks). This stage is the simpler, first, real baseline:
+// independent blocks, no shared state -- matching SPRING's confirmed real
+// approach exactly.
 //
-// The key difference from fqzcomp: correspondence is tracked PER TOKEN
-// INDEX, not per byte position. Walk the ID string classifying runs on the
-// fly (alphabetic / zeros / digit / single-char, no delimiter list needed);
-// for token k, compare against token k of the PREVIOUS id (via
-// prev_tokens_ptr[k], a byte offset into the previous id string). A digit-
-// width shift in an EARLIER token (e.g. read counter going from 6 digits to
-// 7) never misaligns anything AFTER it, because later tokens are found by
-// token INDEX, not by counting bytes forward from a shifted position -- the
-// exact problem stage 61's byte-position realignment could only partially
-// fix.
+// compress_id/decompress_id/IdModels/ValueDict/Model/RangeEnc/RangeDec are
+// copied VERBATIM from stage 66 (66_dict_gate.cpp) -- parallelism here is a
+// call-site/framing change, not a new algorithm. Each block resets
+// prev_id="" and prev_tok_ptr={0} (identical to how stage 66's main()
+// already initializes the very first ID) -- a block boundary is just
+// "another first ID", no new code path, no re-derivation from memory.
 //
-// Per token, in order: exact match with the same-index previous token
-// (near-free once learned) > small positive delta for digit tokens (the
-// read counter is almost always +1, extremely cheap once the model learns
-// that) > raw value. Every field (token_type, alpha_len, digit bytes, delta,
-// literal chars, zero-run length) has its OWN adaptive model PER TOKEN INDEX
-// -- 1024 slots, matching SPRING's own MAX_NUMBER_TOKENS_ID.
-//
-//   g++ -O3 -march=native -o idcoder 62_id_tokenizer.cpp
+//   g++ -O3 -march=native -pthread -o namepar 69_names_blockpar.cpp
+
 #include <cstdio>
 #include <cstdlib>
 #include <cstdint>
@@ -34,6 +31,8 @@
 #include <cmath>
 #include <unordered_map>
 #include <chrono>
+#include <thread>
+#include <atomic>
 
 struct RangeEnc {
     std::vector<uint8_t> out; uint64_t low=0; uint32_t range=0xFFFFFFFFu;
@@ -60,19 +59,9 @@ struct RangeDec {
         while(range<(1u<<24)){ range<<=8; code=(code<<8)|(p<end?*p++:0); }
     }
 };
-// adaptive model over an N-symbol alphabet
 struct Model {
     std::vector<uint32_t> f; uint32_t N;
     Model(uint32_t n=256):f(n,1),N(n){}
-    // STAGE 64: real bit-cost estimate under CURRENT model state, without
-    // encoding or mutating anything -- the same RDO principle already
-    // validated earlier this session for read mapping (estimate real cost
-    // from the live adaptive model, pick the cheapest candidate, THEN
-    // encode). This is what lets the decision generalize safely: a candidate
-    // only wins if it is ACTUALLY cheaper right now, not because it matches
-    // a hand-picked rule that happens to fire on noise (X's contamination
-    // of the blanket "any signed delta in range" trigger, found in the
-    // first general-fix attempt).
     double cost(uint32_t v) const {
         if(v>=N) v=N-1;
         uint32_t tot=0; for(uint32_t i=0;i<N;++i) tot+=f[i];
@@ -97,49 +86,14 @@ struct Model {
 };
 
 enum TokType { ID_ALPHA, ID_DIGIT, ID_CHAR, ID_MATCH, ID_ZEROS, ID_DELTA, ID_END, ID_ZDELTA };
-// STAGE 63: SPRING's own ID_DELTA only fires for a SMALL POSITIVE delta
-// (0 < delta < 256) -- verified directly against real data (yeast/human
-// Illumina headers): the Y tile coordinate's delta has stdev ~348, mean
-// ~0, and is 0.0% negative in this data (a real physical raster-scan
-// signature) -- SPRING's narrow window catches only 28.9% of Y deltas,
-// falling back to 4 raw bytes (ID_DIGIT) for the rest. X's delta, by
-// contrast, has stdev ~18,710 (near the full coordinate range) -- no real
-// structure there, confirmed before building anything for it.
-// ID_ZDELTA extends the SAME underlying idea (delta from the same-index
-// token in the previous read) to the FULL SIGNED range via zigzag + a
-// 2-byte adaptive model, instead of a single-byte model restricted to
-// (0,255) positive-only. This is not a new mechanism, it is SPRING's own
-// mechanism minus the artificial window that was throwing away most of
-// the real signal.
 static const uint32_t MAXTOK=1024;
 
-// STAGE 65. Measured directly on real data: for a field with NO cross-read
-// structure (X coordinate -- 0% match rate, delta entropy 12.376 bits ==
-// its own raw-value entropy, confirmed no tile-conditioning helps either),
-// the ONLY remaining lever is how efficiently the raw VALUE gets coded.
-// SPRING's ID_DIGIT spends 4 independent byte models (up to 32 bits) where
-// the true entropy floor is ~12.5 bits (X has 6,328 distinct values in 1M
-// reads) -- splitting into independent bytes throws away the fact that
-// there are far fewer real DISTINCT VALUES than the raw bit-width implies.
-//
-// ARCS's own name_num_codec.h solves exactly this for numeric ID columns
-// with a static order-0 dictionary -- proven, held-out verified -- but it
-// is TWO-PASS (needs the whole column's distinct values before encoding
-// one symbol), which does not fit this coder's one-read-at-a-time
-// streaming design. Instead: reuse THIS PROJECT'S OWN already-proven
-// pattern (stage 58/60's sparse per-key adaptive table, there keyed by pg
-// position, here keyed by observed VALUE) -- online, growing, streaming-
-// compatible, no two-pass requirement. A classic PPM-style ESCAPE symbol
-// (Cleary & Witten) handles values not yet seen: pay the raw 4-byte cost
-// only the FIRST time a distinct value appears (6,328 times for X, not
-// 1,000,000), then near-entropy-floor cost every time after.
 struct ValueDict {
-    std::unordered_map<uint32_t,uint32_t> val2sym;   // value -> symbol (1-based; 0 = ESCAPE)
+    std::unordered_map<uint32_t,uint32_t> val2sym;
     std::vector<uint32_t> sym2val;
-    std::vector<uint32_t> freq;                       // freq[0] = ESCAPE's own frequency
+    std::vector<uint32_t> freq;
     uint32_t total;
     ValueDict():freq(1,1),total(1){}
-    // returns symbol if known, else 0 (ESCAPE) -- caller decides what to do
     uint32_t lookup(uint32_t v) const { auto it=val2sym.find(v); return it==val2sym.end()?0:it->second; }
     void encSym(RangeEnc& rc,uint32_t sym){
         uint32_t lo=0; for(uint32_t i=0;i<sym;++i) lo+=freq[i];
@@ -163,29 +117,10 @@ struct ValueDict {
 
 struct IdModels {
     std::vector<Model> token_type, alpha_len, alpha_value, chars, zero_run, delta;
-    std::vector<Model> integer; // 4 bytes per token slot: used ONLY for the escape
-                                 // (first-appearance) case now, not every occurrence
-    std::vector<Model> zdelta_hi, zdelta_lo; // stage 63: wide signed delta, 2 adaptive bytes
-    std::vector<ValueDict> valdict; // stage 65: per-token-index adaptive value dictionary
-    // STAGE 64 v2: per-token-index track record, NOT model-cost comparison
-    // (that had a real chicken-and-egg problem -- whichever model got used
-    // first specialized and looked cheap regardless of true structure).
-    // hit[k]/seen[k]: of the times token k had a real delta computed, how
-    // often did |delta| stay small (<2048, well inside zigzag's efficient
-    // range)? This observes the DATA directly, not a co-evolving model
-    // cost, so it can't get stuck -- a position with real structure (Y)
-    // accumulates a high hit rate fast; a noisy position (X) never does,
-    // purely from its own history, no hardcoded index needed.
+    std::vector<Model> integer;
+    std::vector<Model> zdelta_hi, zdelta_lo;
+    std::vector<ValueDict> valdict;
     std::vector<uint32_t> hit, seen;
-    // STAGE 66: separate track record for the VALUE DICTIONARY specifically
-    // (distinct from delta's hit/seen above). dict_hit = value was ALREADY
-    // in the dictionary (not an escape); dict_seen = total digit-fallback
-    // occurrences at this token. Both sides derive the SAME gate decision
-    // from this shared history -- no extra bits transmitted, same principle
-    // as the zdelta gate. The lookup/registration itself is ALWAYS done
-    // (free, no bit cost) so the statistic keeps tracking accurately even
-    // while the gate has switched to raw-only mode -- lets it switch back
-    // if a field's behaviour changes partway through the file.
     std::vector<uint32_t> dict_hit, dict_seen;
     IdModels():
         token_type(MAXTOK,Model(8)), alpha_len(MAXTOK,Model(256)),
@@ -212,11 +147,7 @@ void compress_id(RangeEnc& enc, IdModels& m, const char* id, std::string& prev_i
     auto prevc=[&](uint32_t off)->char{ return off<prevlen ? prevbuf[off] : 0; };
 
     while(*id_ptr){
-        token_len=0;   // BUG FIX: must be reset before use below, the original
-                       // C resets it in its end-of-token trailer; this port
-                       // dropped that reset, so the first comparison of every
-                       // token after the first used the PREVIOUS token's
-                       // leftover token_len as a stale index offset.
+        token_len=0;
         match_len = (*id_ptr==prevc(prev_tok_ptr[token_ctr]+token_len)); token_len=1;
         const char* id_ptr_tok=id_ptr+1;
         if(isalpha((unsigned char)*id_ptr)){
@@ -268,20 +199,12 @@ void compress_id(RangeEnc& enc, IdModels& m, const char* id, std::string& prev_i
             if(prev_is_digit && match_len==token_len && !isdigit((unsigned char)prevc(prev_tok_ptr[token_ctr]+token_len))){
                 m.token_type[token_ctr].enc(enc,ID_MATCH);
             } else {
-                // STAGE 64 v2: per-token-index TRACK RECORD, not a live
-                // model-cost race (that had a real chicken-and-egg problem,
-                // see the comment on IdModels::hit/seen). Update the
-                // record from every real delta observed, regardless of
-                // which path gets used, then decide from the LEARNED rate.
                 if(prev_is_digit){
                     ++m.seen[token_ctr];
                     if(delta>=-2048 && delta<=2048) ++m.hit[token_ctr];
                 }
                 const uint32_t seen=m.seen[token_ctr], hit=m.hit[token_ctr];
-                // Bootstrap period: not enough evidence yet, use SPRING's
-                // own safe narrow-only default. Once enough evidence exists,
-                // trust the position's own observed hit rate.
-                const bool trust_wide = (seen>=20) && (hit*10 >= seen*3); // >=30%
+                const bool trust_wide = (seen>=20) && (hit*10 >= seen*3);
                 if(can_delta){
                     m.token_type[token_ctr].enc(enc,ID_DELTA);
                     m.delta[token_ctr].enc(enc,(uint32_t)delta);
@@ -291,24 +214,15 @@ void compress_id(RangeEnc& enc, IdModels& m, const char* id, std::string& prev_i
                     m.zdelta_hi[token_ctr].enc(enc,(z>>8)&0xff);
                     m.zdelta_lo[token_ctr].enc(enc,z&0xff);
                 } else {
-                    // STAGE 66: gate the dictionary route on its OWN track
-                    // record (does looking values up here actually pay off,
-                    // or is this field high-cardinality-relative-to-
-                    // occurrences, where the escape overhead is pure
-                    // waste?) -- symmetric, derived identically by encoder
-                    // and decoder from shared history, no extra bits.
                     m.token_type[token_ctr].enc(enc,ID_DIGIT);
                     ValueDict& vd = m.valdict[token_ctr];
-                    uint32_t sym = vd.lookup(digit_value);   // free: no bit cost, just bookkeeping
+                    uint32_t sym = vd.lookup(digit_value);
                     const uint32_t dseen=m.dict_seen[token_ctr], dhit=m.dict_hit[token_ctr];
                     ++m.dict_seen[token_ctr]; if(sym!=0) ++m.dict_hit[token_ctr];
-                    // Bootstrap: not enough evidence, try the dictionary
-                    // anyway (bounded cost while learning). After that,
-                    // trust only if >=20% of recent lookups were real hits.
                     const bool trust_dict = (dseen<30) || (dhit*2 >= dseen);
                     if(trust_dict){
                         vd.encSym(enc,sym);
-                        if(sym==0){   // ESCAPE: never seen this value at this token before
+                        if(sym==0){
                             m.integer[token_ctr*4+0].enc(enc,(digit_value>>0)&0xff);
                             m.integer[token_ctr*4+1].enc(enc,(digit_value>>8)&0xff);
                             m.integer[token_ctr*4+2].enc(enc,(digit_value>>16)&0xff);
@@ -316,13 +230,6 @@ void compress_id(RangeEnc& enc, IdModels& m, const char* id, std::string& prev_i
                             vd.registerNew(digit_value);
                         }
                     } else {
-                        // Gate off: skip the dictionary symbol ENTIRELY
-                        // (that's the whole point -- no escape overhead
-                        // paid at all), always write raw bytes regardless
-                        // of whether this value happens to already be in
-                        // the dictionary. Still register it (free) so the
-                        // dictionary stays current in case the gate flips
-                        // back on later in the file.
                         m.integer[token_ctr*4+0].enc(enc,(digit_value>>0)&0xff);
                         m.integer[token_ctr*4+1].enc(enc,(digit_value>>8)&0xff);
                         m.integer[token_ctr*4+2].enc(enc,(digit_value>>16)&0xff);
@@ -341,7 +248,7 @@ void compress_id(RangeEnc& enc, IdModels& m, const char* id, std::string& prev_i
         }
         prev_tok_ptr[token_ctr]=i;
         i+=token_len; id_ptr=id_ptr_tok; token_ctr++;
-        if(token_ctr>=MAXTOK-1) break;   // safety
+        if(token_ctr>=MAXTOK-1) break;
     }
     prev_id.assign(id);
     m.token_type[token_ctr].enc(enc,ID_END);
@@ -368,10 +275,6 @@ std::string decompress_id(RangeDec& dec, IdModels& m, std::string& prev_id,
             token_len = m.alpha_len[token_ctr].dec(dec);
             for(uint32_t k=0;k<token_len;++k) id.push_back((char)m.alpha_value[token_ctr].dec(dec));
         } else if(tok==ID_DIGIT){
-            // STAGE 66: must mirror the encoder's gate EXACTLY -- same
-            // formula, same pre-occurrence state, same update timing --
-            // for the two sides to derive the identical trust_dict without
-            // any bit transmitted for it.
             ValueDict& vd = m.valdict[token_ctr];
             const uint32_t dseen=m.dict_seen[token_ctr], dhit=m.dict_hit[token_ctr];
             const bool trust_dict = (dseen<30) || (dhit*2 >= dseen);
@@ -394,7 +297,7 @@ std::string decompress_id(RangeDec& dec, IdModels& m, std::string& prev_id,
                 v |= m.integer[token_ctr*4+1].dec(dec)<<8;
                 v |= m.integer[token_ctr*4+2].dec(dec)<<16;
                 v |= m.integer[token_ctr*4+3].dec(dec)<<24;
-                sym = vd.lookup(v);   // free -- for stats only, matches encoder
+                sym = vd.lookup(v);
                 if(sym==0) vd.registerNew(v);
             }
             ++m.dict_seen[token_ctr]; if(sym!=0) ++m.dict_hit[token_ctr];
@@ -435,8 +338,13 @@ std::string decompress_id(RangeDec& dec, IdModels& m, std::string& prev_id,
     return id;
 }
 
+// ---- STAGE 69: block-parallel wrapper (new code, not from stage 66) ----
+
 int main(int argc,char**argv){
-    if(argc<2){ fprintf(stderr,"usage: %s names.txt\n",argv[0]); return 1; }
+    if(argc<2){ fprintf(stderr,"usage: %s names.txt [block_size=100000] [nthreads=nproc]\n",argv[0]); return 1; }
+    const size_t BLOCK = (argc>2)?(size_t)atoll(argv[2]):100000;
+    const unsigned NTHREADS = (argc>3)?(unsigned)atoi(argv[3]):std::thread::hardware_concurrency();
+
     std::vector<std::string> names;
     { FILE* f=fopen(argv[1],"r"); if(!f){perror("open");return 1;}
       char buf[2048];
@@ -444,28 +352,62 @@ int main(int argc,char**argv){
           names.emplace_back(buf,L); }
       fclose(f); }
     const size_t n=names.size();
-    fprintf(stderr,"names=%zu\n",n);
+    const size_t nblocks = (n+BLOCK-1)/BLOCK;
+    fprintf(stderr,"names=%zu  block=%zu  blocks=%zu  threads=%u\n",n,BLOCK,nblocks,NTHREADS);
 
+    std::vector<std::vector<uint8_t>> blockOut(nblocks);
     auto t0=std::chrono::steady_clock::now();
-    IdModels enc_models;
-    RangeEnc enc; enc.out.reserve(n*4);
-    std::string prev_id; std::array<uint32_t,MAXTOK> prev_ptr{}; prev_ptr.fill(0);
-    for(size_t r=0;r<n;++r) compress_id(enc, enc_models, names[r].c_str(), prev_id, prev_ptr);
-    enc.flush();
-    const size_t bytes=enc.out.size();
-    auto t1=std::chrono::steady_clock::now();
-    fprintf(stderr,"ENCODE ONLY: %.3f s\n", std::chrono::duration<double>(t1-t0).count());
-
-    IdModels dec_models;
-    RangeDec dec; dec.init(enc.out.data(),enc.out.size());
-    std::string dprev; std::array<uint32_t,MAXTOK> dprev_ptr{}, dprev_len{};
-    dprev_ptr.fill(0); dprev_len.fill(0);
-    bool ok=true;
-    for(size_t r=0;r<n;++r){
-        std::string got = decompress_id(dec, dec_models, dprev, dprev_ptr, dprev_len);
-        if(got!=names[r]){ ok=false; fprintf(stderr,"MISMATCH at %zu:\n got : %s\n want: %s\n",r,got.c_str(),names[r].c_str()); break; }
+    {
+        std::atomic<size_t> next{0};
+        auto worker=[&](){
+            size_t b;
+            while((b=next.fetch_add(1))<nblocks){
+                size_t s=b*BLOCK, e=std::min(n,s+BLOCK);
+                IdModels m;
+                RangeEnc enc; enc.out.reserve((e-s)*4);
+                std::string prev_id; std::array<uint32_t,MAXTOK> prev_ptr{}; prev_ptr.fill(0);
+                for(size_t r=s;r<e;++r) compress_id(enc, m, names[r].c_str(), prev_id, prev_ptr);
+                enc.flush();
+                blockOut[b]=std::move(enc.out);
+            }
+        };
+        std::vector<std::thread> pool;
+        for(unsigned t=0;t<NTHREADS;++t) pool.emplace_back(worker);
+        for(auto& th:pool) th.join();
     }
-    printf("names=%zu  coded=%zu B  %.3f B/name  round trip: %s\n",
-           n,bytes,bytes/(double)n, ok?"VERIFIED":"FAILED");
-    return ok?0:1;
+    auto t1=std::chrono::steady_clock::now();
+    size_t bytes=0; for(auto& b:blockOut) bytes+=b.size();
+    fprintf(stderr,"ENCODE ONLY (parallel, %u threads): %.3f s\n", NTHREADS,
+            std::chrono::duration<double>(t1-t0).count());
+
+    // round trip: decode every block back, in parallel, and verify
+    std::vector<std::vector<std::string>> blockNames(nblocks);
+    std::atomic<bool> ok{true};
+    {
+        std::atomic<size_t> next{0};
+        auto worker=[&](){
+            size_t b;
+            while((b=next.fetch_add(1))<nblocks){
+                size_t s=b*BLOCK, e=std::min(n,s+BLOCK);
+                IdModels m;
+                RangeDec dec; dec.init(blockOut[b].data(),blockOut[b].size());
+                std::string dprev; std::array<uint32_t,MAXTOK> dprev_ptr{}, dprev_len{};
+                dprev_ptr.fill(0); dprev_len.fill(0);
+                std::vector<std::string> got; got.reserve(e-s);
+                for(size_t r=s;r<e;++r) got.push_back(decompress_id(dec, m, dprev, dprev_ptr, dprev_len));
+                blockNames[b]=std::move(got);
+            }
+        };
+        std::vector<std::thread> pool;
+        for(unsigned t=0;t<NTHREADS;++t) pool.emplace_back(worker);
+        for(auto& th:pool) th.join();
+    }
+    for(size_t b=0;b<nblocks && ok;++b){
+        size_t s=b*BLOCK, e=std::min(n,s+BLOCK);
+        for(size_t r=s;r<e;++r) if(blockNames[b][r-s]!=names[r]){ ok=false; fprintf(stderr,"MISMATCH block %zu read %zu\n",b,r); break; }
+    }
+
+    printf("names=%zu  block=%zu  threads=%u  coded=%zu B  %.3f B/name  round trip: %s\n",
+           n,BLOCK,NTHREADS,bytes,bytes/(double)n, ok.load()?"VERIFIED":"FAILED");
+    return ok.load()?0:1;
 }
