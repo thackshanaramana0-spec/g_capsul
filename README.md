@@ -1309,6 +1309,77 @@ bind, consecutive-source delta is worse, repeat distance gives 1.1%, lazy parsin
 components sit at their floors. What remains is that our pseudogenome contains
 more short repeats than theirs, which is the assembler.
 
+## A measurement harness, a trustworthy baseline, and a plan killed by arithmetic
+
+### bench.sh
+
+Wall clock is unusable here -- another session runs concurrently and the same
+binary measured 1.32 s and 1.91 s for the same stage. `bench.sh <reps> <bin>
+<args>` fixes what can be fixed:
+
+- **min over repetitions**, because contention only ever ADDS time, so the
+  minimum is the least contaminated estimate while the mean is dragged by
+  whatever else was running;
+- **per stage**, so a change is judged on its own timer rather than drowned in
+  the other six;
+- **spread reported**, so a result is believed only when the spread is small
+  against the effect claimed;
+- **output equality checked across reps**, since timings of runs that computed
+  different things are not comparable.
+
+### Baseline, min of 5, outputs identical
+
+| stage | min | spread | PgRC2 |
+|-------|-----|--------|-------|
+| load+filter+dedup | 0.56 | 0.03 | 0.47 |
+| prefix seed index | 0.16 | 0.03 | -- |
+| round 1 (division) | 1.50 | **0.25** | 1.19 |
+| round 2 (assembly) | 0.71 | **0.13** | 0.60 |
+| emit chains | 0.23 | 0.02 | ~0 |
+| **pigeonhole mapping** | **0.83** | **0.02** | **0.40** |
+| pg MEM matching | 0.67 | 0.03 | ~0.56 |
+| **total** | **4.66** | | **3.70** |
+
+Mapping is both the largest fixable delta and the most measurable one, so it was
+the obvious next target. Round 1's 0.25 spread, by contrast, is comparable to its
+own 0.31 deficit -- that stage cannot support a claim on this machine.
+
+### The orientation flip, refuted before writing it
+
+The hypothesis: PgRC2 indexes the pseudogenome and streams reads through it while
+we do the reverse, and stage 24 already showed that orientation is why coprime
+sampling failed for us. Flipping looked structural and worth days.
+
+Modelled first. The sensitivity floor requires `SEEDW + k1*k2 - 1 >= 37`, so with
+SEEDW 16 the sampling product is capped at 22, and the two orientations trade
+index size against probe count:
+
+    current: index reads/22 = 1.85M entries, scan pg twice = 43.2M probes = 45.1M ops
+    flipped, unconstrained best (k1=2, k2=11):            18.0M ops -- 2.5x fewer
+
+That 2.5x is real and irrelevant: k1=2 means 10.8M index entries, **141 MB for
+the index alone**, and peak RSS is already 233 MB against their 232 MB. There is
+no memory to spend.
+
+At **equal index size** the flip inverts:
+
+    flipped, k1=12 k2=1: index 1.80M entries, probes 79.5M = 81.3M ops
+    -> 80% WORSE, and the floor drops to 27 rather than 37
+
+The asymmetry is simply that the pg is 21.6M positions while the reads are 264,930
+x 150 = 39.7M bases. The volumes are comparable, so neither orientation is
+inherently cheaper -- what differs is which side you can afford to sample densely,
+and that is decided by the memory budget, which is spent.
+
+**PgRC2 affords their side of it.** copMEM at their parameters gives k1=5, so
+their pg index is ~4.3M entries against our 1.85M, inside the same 232 MB. Their
+mapping advantage is a denser index, not a better orientation, and the way to
+match it is a more compact index entry -- ours is 13 bytes (key 8 + rid 4 + part
+1) where a position-only entry is 4 -- not a rewrite of the stage.
+
+Recorded rather than built: a day of work avoided by ten lines of arithmetic
+against a constraint that was already measured.
+
 ## Stage 39 — PgRC2's sort-merge sweep, built and measured
 
 The one place the evidence said we were algorithmically behind: their division
