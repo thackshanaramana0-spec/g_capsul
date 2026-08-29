@@ -1105,6 +1105,13 @@ int main(int argc,char** argv){
                 gaps.size()+srcs.size()+lens.size());
         fprintf(stderr,"[REF] PgRC2 pays 177,180 B coded for the same thing\n");
     }
+    // DUMP_PG: the pseudogenome BEFORE MEM removal. Needed to test whether a
+    // context model with a match model can capture the long repeats implicitly,
+    // which would remove the reference streams entirely rather than shrink them.
+    if(getenv("DUMP_PG")){
+        FILE* f=fopen("pg_full.txt","wb"); fwrite(pg.data(),1,pg.size(),f); fclose(f);
+        fprintf(stderr,"[PG] pg_full.txt written: %zu bases\n",pg.size());
+    }
     printf("PG_LEN %zu\n",pg.size());
     printf("PG_LITERAL %zu\n",lit_main+lit_second);
     return 0;
