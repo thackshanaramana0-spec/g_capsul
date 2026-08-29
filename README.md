@@ -683,6 +683,72 @@ mismatch-count streams (176,241 B) have no counterpart here, since this
 progression computes positions and discards them. But the largest omitted stream
 has now been measured rather than assumed away, and it moved the answer.
 
+### The sequence gap, taken apart: two refutations and the real cause
+
++101,610 B splits almost evenly and the halves have different causes:
+
+    232,022 extra literal bases      -> 55,863 B at their rate   (assembly)
+    1.9544 vs 1.9261 bits/base       -> 45,747 B                 (coder)
+
+**Refuted 1: an order-k context model.** The reasoning was that MEM removal has
+already stripped every exact repeat of 45+ bases, so the literal is near
+repeat-free and LZMA must be paying for match machinery it cannot use, while a
+context model would spend everything on predicting the next base. Stage 29
+implements it (order-k adaptive counts, same range coder as stage 23):
+
+| k | bits/base |
+|---|-----------|
+| 8 | 2.0206 |
+| 10 | 2.5925 |
+| 11 | 2.8329 |
+| 12 | 2.5984 |
+
+Worse than 2-bit + xz (1.9544) at every order, and worse the more context it is
+given. 12.9M bases cannot populate 4^10 contexts -- at k=10 that is ~3
+observations per counter, so the model starves. Single-order CM is the wrong
+tool here and the "repeat-free" premise was wrong too: LZMA is still finding
+real value.
+
+**Refuted 2: LZMA literal-context tuning.** Their log shows `lc=8, lp=0, pb=0`
+for the pg stream, and lc=8 means eight bits of previous-byte context for
+literals -- on packed DNA, an order-4-bases model inside the entropy coder. xz
+caps lc at 4, which looked like a handicap worth most of the deficit. Measured
+on our 2-bit stream:
+
+    lc=3,pb=2 (default)  3,157,542   1.9541 bpb
+    lc=4,pb=0            3,155,659   1.9529 bpb
+    lc=0,lp=2,pb=0       3,158,366   1.9546 bpb
+
+2,425 B. Not the cause either.
+
+**The real cause: byte alignment, and it is visible in one comparison.**
+
+| | pre-entropy | after LZMA | LZMA's gain |
+|---|-------------|------------|-------------|
+| PgRC2 VarLen | 3,670,728 B (**2.313** bpb) | 3,056,474 (1.926) | **16.7%** |
+| ours 2-bit | 3,231,732 B (**2.000** bpb) | 3,158,084 (1.954) | **2.3%** |
+
+Their intermediate stream is *larger* and still finishes *smaller*. Packing four
+bases into a byte at fixed boundaries means a repeat that does not begin at a
+multiple of four becomes an entirely different byte string, so LZMA sees almost
+nothing -- 2.3%. Their 1-4 base phrases keep boundaries tied to content, and
+LZMA still works -- 16.7%. The dictionary compounds it by grouping phrases on
+their LAST base (`VarLenDNACoder.cpp:200-219`: all phrases ending A, then C, G,
+T), so a code byte's high bits carry the terminal base and the stream has
+further structure to match on.
+
+Confirmed at the other extreme: raw one-base-per-byte ACGT, which has perfect
+alignment but 8 bits/base to start, gives 2.012 bpb with xz -9e. So 1 base/byte
+= 2.012, 4 bases/byte = 1.954, their 1-4 variable = 1.926. Theirs is the
+optimum of that trade, not an accident.
+
+**Conclusion:** the coder half of the gap is real, is worth ~45 KB, and is not
+reachable with off-the-shelf tools or a naive context model. Closing it means
+implementing alignment-preserving phrase coding -- adopting their design
+knowingly, which is a different thing from the transfers elsewhere in this file
+where ours turned out stronger. The other half, 55,863 B of extra literal, is
+assembly quality and still needs a better layout.
+
 ### Verdict
 
 Neither loss flips. **But the total does**, because stage 6 is worth more than
