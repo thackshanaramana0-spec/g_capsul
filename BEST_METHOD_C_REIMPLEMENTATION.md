@@ -227,6 +227,80 @@ bookkeeping restores. Tier 2 of `VARIABLE_LENGTH_DESIGN.md` (interior
 containment, where a read sits inside another rather than at its start) is still
 unimplemented and is the next thing to try if variable-length quality matters.
 
+## Stage 47-48 — the mismatch stream built for real, and MEM iteration
+
+Two findings from a systematic pass through every remaining unmeasured or
+single-shot component, each round-trip verified before being counted.
+
+**The mismatch stream had never been coded, only estimated** (at PgRC2's own
+observed 1.55 bits/mismatch). Extracted the real (reference base, observed
+base) pairs from the finished mapping and tried several context models:
+
+| model | bits/mismatch | coded |
+|---|---|---|
+| naive 2-bit | 2.000 | 312,528 B |
+| exclusive (3 remaining symbols, PgRC2's shape) | 1.585 | 247,672 B |
+| exclusive, ref-base-conditioned (real adaptive coder, round-trip VERIFIED) | 1.545 | **241,365 B** |
+| + trinucleotide / position-bucket context (entropy only, not coded) | 1.535-1.539 | ~239,800-240,500 B (marginal) |
+
+Real Illumina substitution bias is present in this data (C<->G transversions
+visibly rarer than the other ten, matching the literature) but it is mild here
+-- almost all the achievable gain over naive is from the exclusive coding alone
+(1.585), with the reference-base context adding a further 1,053 B/percentage-
+point but longer contexts adding almost nothing more. The built coder:
+241,365 B, replacing the 242,209 B estimate -- small (-844 B) but converts the
+one remaining ESTIMATED number in this whole progression into a MEASURED,
+round-trip-verified one.
+
+**MEM removal converges past one pass.** The matcher is a single greedy
+left-to-right parse with a candidate cap; both are known sources of missed
+matches in the LZ literature (greedy parsing is provably non-optimal -- a match
+taken now can block a longer one just past it). Re-running the identical
+matcher on its own residual recovers exactly that class of miss:
+
+| pass | net (literal saved - new ref cost), coded, round-trip VERIFIED |
+|---|---|
+| RC-only, iterated to convergence (5 passes, ~99% of gain by pass 2) | -42,444 B |
+| +1 forward self-match pass on the converged residual | -35,436 B |
+| further RC/FWD alternation (3 more rounds) | ~+680 B -- not worth it, stop here |
+| **total** | **-77,880 B** |
+
+Stage 36 found forward self-matching a net LOSS on a single pass over the raw
+pg; it is a net WIN after the RC pass has been iterated to convergence, because
+the residual's literal/reference economics genuinely differ from the raw pg's.
+Both conclusions are correct for what they measured -- the earlier one is not
+overturned, just scoped to its actual input.
+
+Verified this is not a candidate-cap artifact: MAXCAND swept 64/128/256/512 on
+the second pass saturates almost immediately (301,420 -> 301,784 bases,
++0.05%), so raising the cap cannot substitute for iterating.
+
+**A verification bug was found and fixed during this work, and is recorded
+because it changed a wrong-looking result into a right one.** An early version
+of the standalone tool marked which bytes were removed using the RAW
+reverse-complement-space position instead of the converted forward position --
+byte COUNTS came out right by coincidence (a bijection preserves cardinality),
+so the aggregate percentages looked plausible, but the actual bytes marked were
+wrong, which only round-trip verification caught (content mismatch despite
+matching lengths). Confirmed by reading the exact call site that the ACTUAL
+PIPELINE (46/47_*.cpp) does not have this bug -- it uses a separate bitmap for
+the RC pass and a whole-array positional flip afterward, which is the correct
+conversion. Every previously reported MEM number in this project is unaffected.
+
+Combined effect on the fast-coder ("speed config") total:
+
+| | before | after |
+|---|---|---|
+| sequence + references (combined, all layers) | 3,341,218 | 3,264,018 |
+| mismatch | 242,209 | 241,365 |
+| **five-stream total** | **6,567,830** | **6,489,786** |
+| lead over PgRC2 (7,035,682) | 6.65% | **7.76%** |
+
+This reaches, with the fast coder, the same lead the expensive 19-second
+context-mixing coder needed 19 extra seconds to reach -- for about 2 seconds of
+mechanical MEM-iteration cost instead. Not yet folded into a single pipeline
+binary; measured as verified post-processing on the real pipeline's own output.
+
 ## Scope: what this reimplementation does NOT do
 
 Stated plainly so the three-axis result is not read as more than it is.
