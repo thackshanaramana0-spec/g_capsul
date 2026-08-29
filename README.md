@@ -67,6 +67,7 @@ it.
 | 32 | ref_cost | price the MEM reference streams; sweep MINMEM | -- | **+122,700 B uncounted**; MINMEM tuning worth ~5 KB |
 | 33 | maximal_mem | extend matches BACKWARD; MINMEM/MAXCAND swept | -- | **-77 KB**; literal now within 1,774 bases of theirs |
 | 34 | lazy_parse | one-position lookahead in the MEM parse | -- | -3,634 B; greedy parsing was not the cause |
+| 35 | match_model | CM + match model, tested as a REPLACEMENT for MEM removal | 1.8487 bpb | **refuted as a replacement**; kept as a coder, -12 KB |
 
 ## Stage 16 — the missing MEM-removal stage
 
@@ -1060,6 +1061,56 @@ not of how we find, select, or code them.
 | order | **2,309,967** | 2,852,758 | -542,791 |
 | mismatch symbols | **~242,209** | 265,900 | -23,691 |
 | **sum** | **5,880,799** | 6,352,312 | **-471,513, 7.42% ahead** |
+
+## Stage 35 — could a match model delete the reference stream entirely?
+
+Four attempts to shrink the reference stream failed and the structural check
+found zero mergeable matches, so the question became whether the stream needs to
+exist at all. MEM removal is only there because an order-22 context model cannot
+see a repeat 10 Mbases back. A MATCH MODEL can: hash a recent k-mer to where it
+last occurred and, while the match holds, predict the base that followed. Long
+repeats would then cost almost nothing AND cost no references, because nothing is
+removed and nothing has to be pointed at.
+
+Tested on the pseudogenome BEFORE removal (23,233,953 bases), against
+literal-coded + references = 3,332,257 B:
+
+    bases 23,233,953   coded 5,369,074 B   1.8487 bits/base   round trip VERIFIED
+
+**Refuted, and not narrowly.** The per-base rate is genuinely better than our
+1.9174 -- and lands on DNA-COMPACT's published 1.838 for yeast, so the coder is
+now at literature-competitive rates. But there are 1.86x more bases to code, and
+5,369,074 against 3,332,257 is not close. **MEM removal is strongly justified and
+the reference stream is worth paying for.**
+
+Why the match model cannot substitute: it follows one pointer, anchored on the
+most recent occurrence of a 24-mer, and drops on a single mismatch. In a
+pseudogenome the other copy of a repeat is usually not the most recent
+occurrence, so the pointer is wrong more often than not. Explicit MEM references
+find the right copy by construction. That is the argument for the architecture,
+and it is now measured rather than assumed.
+
+### Kept as a coder, though
+
+The same model applied to the literal it was meant to replace:
+
+| coder | bits/base | on 12,926,925 bases |
+|-------|-----------|---------------------|
+| stage 30 (mixing, no match model) | 1.9174 | 3,098,294 |
+| **stage 35 (+ match model)** | **1.9098** | **3,086,012** |
+
+12,282 B, round trip verified. Measured on the stage-22 literal dump; on the
+current best literal (12,517,415 at MINMEM 36) the same rate is worth ~11,500 B.
+
+### Position
+
+| stream | ours | PgRC2 | |
+|--------|------|-------|---|
+| sequence, coded | **~2,988,300** | 3,056,474 | **-68,174** |
+| MEM references | 328,512 | 177,180 | +151,332 |
+| order | **2,309,967** | 2,852,758 | -542,791 |
+| mismatch symbols | **~242,209** | 265,900 | -23,691 |
+| **sum** | **~5,869,000** | 6,352,312 | **-483,300, 7.61% ahead** |
 
 ### Verdict
 
