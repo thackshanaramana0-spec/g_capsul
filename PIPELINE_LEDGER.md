@@ -196,3 +196,56 @@ None of these close the remaining ~0.38s gap. Closing it further needs a
 different data structure or algorithm for mapping/MEM matching, not a
 reordering of the existing one -- genuinely out of scope for further
 incremental tuning within this pipeline's current design.
+
+## Stage 57/58 — repeat-confusion structure confirmed real; the fix is in the coder, not rerouting
+
+Web-validated design process (2026-08-30): confirmed via search that per-position
+base counting (samtools mpileup / VarScan) is the established foundational
+operation for exactly this kind of structure, and that PPM's escape/backoff
+(Cleary & Witten) is the established precedent for "prefer a specific context,
+fall back to a general one when it lacks data" -- with PPM's own literature
+flagging the known failure mode (too many singleton contexts -> escape overhead
+makes things WORSE), which is exactly what an earlier raw-position experiment in
+this project already hit. Design avoids that trap by construction: linear
+blending (Katz-backoff style) instead of a hard escape symbol, so a
+never-seen-before position falls back to EXACTLY the existing global model, not
+a fresh cold-start state.
+
+**Stage 57 (reroute mismatched reads to the survivor/assembly path): real,
+honest NEGATIVE result.** 33,588 reads unmapped from confirmed repeat-confusion
+sites; the resulting second pg self-matched at 69.9% (vs 7-62% for any other
+config), CONFIRMING the underlying structural hypothesis -- but the net archive
+cost went UP by 383,523 B (6,865,663 vs the 6,482,140 baseline). Mismatch
+savings (-191,981 B) were swamped by reference-stream growth (+339,084 B, from
+~31,000 new MEM match records needed to re-link the rerouted reads back to the
+main pg) and residual literal growth (+255,624 B). The structural insight was
+right; moving the reads to a different representation was the wrong way to use
+it -- referencing has real per-match overhead that a naive estimate ignored.
+
+**Stage 58 (per-pg-position adaptive mismatch context, blended with the
+existing global model): real, LARGE, cross-validated win.** A bug (int32
+overflow in the blend weight multiply, not the final total) caused a crash at
+high W and was found and fixed properly (uint64 arithmetic + a total cap
+matching the codebase's established 65536-safe-bound pattern), not worked
+around. Swept W from 0 to 4,194,304; clean, well-behaved peak, not
+crash-truncated:
+
+| config | ref-only | stage 53 (ref x readpos x prev) | stage 58 (pg-position backoff), best W |
+|---|---|---|---|
+| DIV=1 (1,872,286 mismatches) | 363,018 B | 362,125 B | **276,008 B** (W~240,000) |
+| DIV=3 (1,250,111 mismatches) | 241,365 B | 238,993 B | **195,621 B** (W~240,000) |
+
+24.0% reduction at DIV=1, 18.2% at DIV=3 -- cross-validated on two genuinely
+different read populations, same order-of-magnitude optimal W in both,
+confirming this is real structure, not a fit to one dataset. Both round-trip
+VERIFIED at every tested point.
+
+**Archive-wide impact, DIV=1 (the recommended config):**
+
+| | total | lead over PgRC2 (7,035,682) |
+|---|---|---|
+| before (stage 53 mismatch coder) | 6,482,140 | 7.87% |
+| **after (stage 58 mismatch coder)** | **6,396,023** | **9.09%** |
+
+This is the largest single finding of the entire 2026-08-29/30 session --
+larger than the MAXMAP retune (82,474 B) that was previously the biggest.
