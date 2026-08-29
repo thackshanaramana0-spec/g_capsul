@@ -576,6 +576,47 @@ of the gap is ~56 KB coded; the other ~45 KB is our stand-in coder being weaker
 than their tuned one. Neither is a missing stage -- it is mean overlap, already
 diagnosed as a layout problem.
 
+### Speed, chased further: 1.46x -> 1.24x, and the bottleneck was misdiagnosed twice
+
+Stage 24 refuted "fewer probes". Two more attempts located the real cost.
+
+**Stage 25 -- packed verify.** Stage 21 packed the reads but then, for every
+candidate, unpacked all 150 bases into a stack buffer and compared byte by byte:
+~300 operations per candidate, run ~26M times. PgRC2 never unpacks
+(`SymbolsPackingFacility.cpp:344-362`) -- it packs the pattern a word at a time
+and compares whole packed words, falling back to per-symbol only when a word
+differs. Packing the text once per direction goes further: both sides packed
+makes a 150-base comparison 5 loads, 5 XORs and 5 popcounts. **Mapping
+0.95 -> 0.84 s.** Real, but only 12% -- so verification was not dominant either.
+
+**Stage 26 -- the probe filter.** 43M probes (21.6M pg positions x 2 directions)
+against ~24 MB of CSR arrays plus a 16 MB open-addressing table is past L3, so
+essentially every probe is a memory access. That is also the retrospective
+explanation for stage 24: it halved the probes but doubled the table, and the
+table was the problem. Almost every probe misses, so a one-bit-per-slot presence
+filter -- 2 MB, cache-resident -- rejects misses without touching the 40 MB
+structure. A false positive costs one wasted lookup and cannot change the result.
+**Mapping 0.84 -> 0.78 s, total 5.33 -> 4.53 s.**
+
+| | mapping | total | vs PgRC2 3.66 s |
+|---|---------|-------|------------------|
+| stage 21/22 | 0.95 s | 5.33 s | 1.46x |
+| stage 25 (packed verify) | 0.84 s | 5.20 s | 1.42x |
+| **stage 26 (+ probe filter)** | **0.78 s** | **4.53-4.75 s** | **1.24x** |
+
+Output byte-identical throughout: 12,926,925 literal, 252,865 mapped, 12,065
+survivors. Still behind, so speed does not flip -- but the residual is now 0.9 s,
+and the honest read is that most of it went to a cache effect rather than to
+anything algorithmic.
+
+**Memory moved the wrong way and it is not free.** Peak RSS is 238 MB against
+214 MB at stage 21, because stage 22's order tracking adds `ppos` (n x 8 B) and
+`orig2uid` (~4 MB), and stage 25/26 add the packed text and the filter. Against
+PgRC2's 232 MB that is 1.03x -- parity, not the win stage 21 had. Adding
+OrderInfo costs memory, and the earlier "0.92x, ahead" number was measured
+before OrderInfo existed. Both numbers are real; they are just not the same
+configuration.
+
 ### Verdict
 
 Neither loss flips. **But the total does**, because stage 6 is worth more than
@@ -586,6 +627,14 @@ both:
 | sequence, coded | 3,158,084 | 3,056,474 | +101,610 |
 | order | **2,309,967** | 2,852,758 | **-542,791** |
 | **combined** | **5,468,051** | **5,909,232** | **-441,181, 7.5% ahead** |
+
+Final three-axis position, all at 12 threads, order info included on both sides:
+
+| | ours | PgRC2 | |
+|---|------|-------|---|
+| sequence + order, coded | **5,468,051** | 5,909,232 | **7.5% ahead** |
+| time | 4.53-4.75 s | 3.66 s | 1.24x behind |
+| peak RSS | 238 MB | 232 MB | 1.03x, parity |
 
 Scope, stated plainly: these are the two largest streams, not whole archives.
 Their `-o` archive is 7,063,459 B and these two are 84% of it; the remaining
