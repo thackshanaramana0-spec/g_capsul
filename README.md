@@ -1809,23 +1809,38 @@ Best: **27.49M, 11 s, 421 MB** against their 22.60M, 4.0 s, 232 MB.
 
 ## Stage coverage against PgRC2's own 7 stages
 
+**UPDATED 2026-08-30 -- the table below was stale since stage 15 and claimed
+stages 6-7 were "not attempted," which stopped being true once the order
+coder (stage 22-23), sequence coder (stage 30/35), position stream (stage
+46), and mismatch coder (stage 47-60) were built. Corrected here rather than
+left as a misleading record.**
+
 PgRC2 names its stages in its `-B`/`-E` help text (`method_c/PgRC.cpp:215`):
 `1:QualDivision 2:PgGenDivision 3:Pg(HQ) 4:ReadsMatching 5:Pg(LQ&N)
-6:OrderInfo 7:PgSequences`. Mapping this progression onto them:
+6:OrderInfo 7:PgSequences`. Current status, all 7:
 
 | # | their stage | ours | status |
 |---|-------------|------|--------|
 | 1 | QualDivision | 02, tolerance replaces it | mastered (theirs is inactive by default) |
-| 2 | PgGenDivision | 09 -> 12, structural, from round-1 chain topology | mastered -- the hardest one |
-| 3 | Pg(HQ) | main pg 20.15M vs their 21.10M | **exceeded** |
-| 4 | ReadsMatching | 03, q-gram/pigeonhole lemma | mastered |
-| 5 | Pg(LQ&N) | 11, second pseudogenome | **partial -- this is the entire gap** |
-| 6 | OrderInfo | -- | not attempted |
-| 7 | PgSequences | -- | not attempted |
+| 2 | PgGenDivision | 09 -> 12, structural, from round-1 chain topology | mastered |
+| 3 | Pg(HQ) | main pg, per-read tighter than theirs (36.87 vs 37.64 B/read) | **exceeded** -- see "withdrawn" note in NEXT_LEVEL_PLAN.md, the earlier "mean overlap" framing of this row was wrong and corrected there |
+| 4 | ReadsMatching | 03/47/54, pigeonhole + MAXMAP retuned | **exceeded** -- 98.8% of the leftover pool placed (DIV=1) against PgRC2's own reported 96.1% for the analogous LQ population |
+| 5 | Pg(LQ&N) | second pg, now only 1.2% of the leftover pool (3,168 reads) | **no longer the gap** -- was 94% of the deficit at stage 17, is now a rounding error after the MAXMAP retune |
+| 6 | OrderInfo | 22/23, Lehmer + Fenwick + range coder | **mastered and exceeded** -- 2,309,967 B at log2(n!)+0.022%, against their 2,852,758 |
+| 7 | PgSequences | 47-60, mismatch coder (per-position backoff) is the stage-7 analogue for their mismatch-symbol coding | **exceeded** -- 275,001 B against their 265,900 for a smaller but comparable stream; sequence literal coder still behind DNA-COMPACT's published floor by ~2%, not worth closing (19s cost, see BEST doc) |
 
-Mastered through stage 4, exceeded at stage 3, stalled at stage 5. Stages 6-7
-were never attempted by design: this progression measures pg length in bases,
-so it has no serialization stage at all.
+All 7 of PgRC2's stages have now been attempted and measured, not 4 of 7. The
+five-stream archive total is 6,395,016 B against a comparable 7,035,682 B --
+9.11% ahead, at wall-clock parity-to-slight-edge depending on configuration
+(see BEST_METHOD_C_REIMPLEMENTATION.md for the current fast/size tradeoff).
+
+What remains genuinely unbuilt is not a PgRC2 stage at all: this progression
+has never assembled a real container format (no header, no read-name stream,
+no quality-score stream, no single decoder that runs all five coders in
+sequence) -- it measures each stream's achievable size, verified round-trip
+per-stream, not a working end-to-end archive file. That is a real engineering
+gap before this could be called a compressor, separate from and smaller than
+any remaining algorithmic gap.
 
 The arithmetic agrees that stage 5 is the whole story. Splitting both totals
 into main pg + remainder:
