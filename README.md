@@ -1309,6 +1309,60 @@ bind, consecutive-source delta is worse, repeat distance gives 1.1%, lazy parsin
 components sit at their floors. What remains is that our pseudogenome contains
 more short repeats than theirs, which is the assembler.
 
+## Stage 38 — two speed/memory attempts, both refuted, neither kept
+
+The checkpoint after stage 37 was size won, memory 1.3 MB behind, speed ~1.2x
+behind. Two changes were built to close the last two axes. Both failed, and the
+failures are worth more than the code was.
+
+**Parallel chunked load.** Measurement said this stage is CPU-bound, not
+I/O-bound: the input is fully page-cached (`cat` 0.01 s, `wc -l` 0.02 s on
+311 MB) while the serial getline loop took 0.59 s, so ~0.57 s was parsing,
+hashing and packing. PgRC2 has no OpenMP anywhere in reads loading either -- only
+`CodersLib`, `ReadsMatchers`, `CopMEMMatcher` and the decoder -- so this was ours
+to win, and their equivalent stage is 464 ms serial.
+
+It worked as designed (load 0.59 -> 0.51 s, output byte-identical) and still
+lost. A first version read the whole 311 MB file at once and took peak RSS from
+239 MB to **563 MB** -- 325 MB for 0.10 s. Chunking to a 16 MB window fixed the
+blow-up but still measured **~5 MB above baseline**, consistently across reps,
+because the window plus per-batch packed arrays outweigh what was saved. Memory
+was the axis in play, so paying 5 MB for a time gain smaller than this machine's
+noise is the wrong trade.
+
+**Narrowing `ppos` from uint64 to uint32.** Positions index a 23M-base
+pseudogenome, so 32 bits is ample and this halves a 6.8 MB array. Measured over
+three interleaved reps:
+
+    s36 (uint64)  238,776 / 238,668 / 238,752 KB
+    s38 (uint32)  238,800 / 238,692 / 238,892 KB
+
+**No saving. Identical within noise.** Peak RSS occurs during the mapping stage
+(232 MB), where the seed index and packed text dominate; `ppos` is allocated by
+then but is not what sets the peak. Halving a 6.8 MB array cannot move a peak
+that other structures determine. The reasoning was arithmetic on an array size
+without checking where the peak actually is.
+
+Neither file is kept. Both were verified byte-identical (`PG_LITERAL 12,506,313`,
+851,275 unique) so no size result is affected.
+
+### A measurement-methodology failure worth recording
+
+The first A/B run gave s36 4.56 s and s38 5.29 s, which looked like a clean
+refutation. It was not measurable at all: `ps` showed a concurrent `arcs` job at
+256% CPU from another session, violating CLAUDE.md rule 3 ("never run two timed
+benchmark jobs concurrently"). The same baseline binary then measured 4.56 s and
+6.17 s, and round 1 read 1.32 s in one run and 1.91 s in another.
+
+Re-run on an idle machine, interleaved, the timings still overlap:
+s36 5.46-6.09 s against s38 5.91-6.02 s, ordering flipping between pairs. **This
+machine cannot resolve a 0.2 s effect on a 5 s run.** Memory is stable to ~0.1%
+and is the only axis these prototypes can measure reliably at this scale, which
+is why the memory numbers above are trusted and the timing ones are not.
+
+Any future speed claim here needs either a much larger input, or a stage-level
+timer around the specific change rather than end-to-end wall clock.
+
 ### Verdict
 
 Neither loss flips. **But the total does**, because stage 6 is worth more than
