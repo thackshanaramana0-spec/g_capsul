@@ -31,7 +31,7 @@ pseudogenomes. That comparison is internally consistent, but it concealed that
 an entire stage was missing rather than merely underperforming. Stage 16 adds
 it.
 
-**The canonical result is in [BEST.md](BEST.md)** -- one configuration, one run,
+**The canonical result is in [BEST_METHOD_C_REIMPLEMENTATION.md](BEST_METHOD_C_REIMPLEMENTATION.md)** -- one configuration, one run,
 every number from that run, with what is measured and what is estimated stated
 separately. The table below is the history of how it was reached, including the
 refuted steps, which are the more useful half.
@@ -1313,6 +1313,43 @@ bind, consecutive-source delta is worse, repeat distance gives 1.1%, lazy parsin
 3,634 B, a match model cannot replace removal, the varint is fixed, and all three
 components sit at their floors. What remains is that our pseudogenome contains
 more short repeats than theirs, which is the assembler.
+
+## Stage 42 — variable length, and containment as a generalisation of dedup
+
+PgRC2 refuses variable-length input outright (`Unsupported variable length
+reads.`), so this is capability rather than margin. Verified on a realistic
+input: 30% of reads trimmed 1-20 bases from the 3' end, 21 distinct lengths from
+130 to 150. An earlier attempt truncated EVERY read and was invalid -- it
+destroyed the suffixes the overlap search depends on and measured the test rather
+than the code.
+
+Ours runs to completion where theirs refuses, but the quality cost is real and is
+exactly what `VARIABLE_LENGTH_DESIGN.md` predicted: a trimmed read is a strict
+PREFIX of its untrimmed twin, exact-hash dedup cannot see it, and unique reads go
+851,275 -> 918,598 while both-side-overlapped falls 69.8% -> 40.0%.
+
+Stage 42 implements the designed Tier 1 fix. Sorting lexicographically puts a
+prefix immediately before its extensions, so one linear scan finds every prefix
+containment; a contained read is then handled exactly as a duplicate already is,
+its originals redirected to the container at offset 0.
+
+| | fixed 150 bp | variable, without | variable, with |
+|---|--------------|-------------------|----------------|
+| both-side overlapped | 69.8% | 40.0% | 40.8% |
+| survivors | 12,065 | 57,230 | **53,808** |
+| literal | 12,506,313 | 15,564,505 | **15,309,682** |
+
+69,466 contained reads folded, 254,823 bases of literal recovered.
+
+**Fixed-length output is byte-identical with and without it** (`PG_LITERAL
+12,506,313`). That is the property the design turned on: containment subsumes
+dedup, so at constant length one read contains another only when they are equal
+and the pass degenerates to the existing behaviour. No three-axis result moves.
+
+The remaining variable-length gap is not bookkeeping -- trimming genuinely
+destroys 3' overlap and nothing recovers that. Tier 2 (interior containment, a
+read sitting inside another rather than at its start) is still unimplemented and
+is the next lever if variable-length quality matters.
 
 ## Stages 40-41 — three targeted memory cuts measured zero, and then 45 MB
 
