@@ -69,6 +69,7 @@ it.
 | 34 | lazy_parse | one-position lookahead in the MEM parse | -- | -3,634 B; greedy parsing was not the cause |
 | 35 | match_model | CM + match model, tested as a REPLACEMENT for MEM removal | 1.8487 bpb | **refuted as a replacement**; kept as a coder, -12 KB |
 | 36 | rc_only_selfmatch | drop forward self-matching, as PgRC2 does | -- | **-36 KB**; forward self-matches were a net loss |
+| 37 | ref_coder | sources range-coded bounded by their own destination | -- | **-12.5 KB**, 23.68 bits/match, beats their 23.83 |
 
 ## Stage 16 — the missing MEM-removal stage
 
@@ -1181,6 +1182,74 @@ it in five lines.
 | order | **2,309,967** | 2,852,758 | -542,791 |
 | mismatch symbols | **~242,209** | 265,900 | -23,691 |
 | **sum** | **5,832,518** | 6,352,312 | **-519,794, 8.18% ahead** |
+
+## Stage 37 — profiling the reference stream by component, not in aggregate
+
+Every previous attempt treated "MEM references" as one number. Split by
+component at MINMEM 24, RC-only:
+
+| component | ours | bits/match | PgRC2 | bits/match | delta |
+|-----------|------|------------|-------|------------|-------|
+| sources | 186,852 | **25.38** | 128,671 | **23.83** | +58,181 |
+| lengths | 63,988 | 8.69 | 48,509 | 8.99 | +15,479 |
+| dest gaps | 43,932 | 5.97 | 0 | -- | +43,932 |
+| TOTAL | 294,772 | 40.03 | 177,180 | 32.82 | +117,592 |
+
+**The gap stream is not a loss, and an earlier note in this file was wrong to
+imply it.** Their destination positions are in-band -- a '%' MATCH_MARK sits in
+the literal and rides inside the VarLenDNA codebook, which carries phrases like
+"T%", "AT%", "GG%". The fair unit is literal plus positions: ours
+2,985,570 + 43,932 = 3,029,502 against their 3,056,474, so we are **26,972
+ahead** there. Comparing the gap stream against a zero was double-counting.
+
+**Sources are the loss, and a varint was the reason.** log2(23,233,953) = 24.47
+bits is the naive floor; we spent 25.38 because a varint near 23M needs four
+bytes. Theirs sits at 23.83, *below* their own naive floor, so LZMA was finding
+structure we were not.
+
+The structure: in a self-match the source always precedes the destination, and
+matches are stored in destination order, so src is uniform in [0, dst) rather
+than [0, pg_len). Range-coding it against that bound needs no extra information
+-- the decoder knows dst before it reads src.
+
+    naive floor    180,183 B   24.47 bits/match
+    bounded floor  174,339 B   23.68
+    this coder     174,346 B   23.68   round trip VERIFIED
+    varint + xz    186,852 B   25.38   <- replaced
+    PgRC2          128,671 B   23.83
+
+**12,506 B**, and the rate now beats theirs. Seven bytes off the bounded floor.
+
+### Two real bugs this uncovered
+
+Building it failed twice, and both failures were defects in the pipeline rather
+than in the coder.
+
+**RC destinations were never converted back.** An RC pass reports its
+destination in reverse-complement coordinates while the source stays in forward
+ones, so the two were not comparable. PgRC2 converts in
+`correctDestPositionDueToRevComplMatching` (`SimplePgMatcher.cpp:58-60`); we
+stored the raw RC position.
+
+**Cross-match destinations were relative.** The survivor cross-match is handed
+`pg.data()+main_pg_end`, so its `qp` counts from the survivor pg, not the
+pseudogenome. Stored raw, a cross-match at 0 claimed to be the very start of the
+pg. Together these made 12,003 of 58,908 rows violate `src < dst`; after both
+fixes, **0 of 58,908**.
+
+Neither changed the literal (12,506,313 throughout), so no size measurement in
+this file was wrong because of them -- but any real decoder would have produced
+garbage, and only building a coder that depends on the invariant exposed them.
+
+### Position after stage 37
+
+| stream | ours | PgRC2 | |
+|--------|------|-------|---|
+| sequence, coded | **2,985,570** | 3,056,474 | -70,904 |
+| MEM references | 282,266 | 177,180 | +105,086 |
+| order | **2,309,967** | 2,852,758 | -542,791 |
+| mismatch symbols | **~242,209** | 265,900 | -23,691 |
+| **sum** | **5,820,012** | 6,352,312 | **-532,300, 8.38% ahead** |
 
 ### Verdict
 
