@@ -1251,6 +1251,64 @@ garbage, and only building a coder that depends on the invariant exposed them.
 | mismatch symbols | **~242,209** | 265,900 | -23,691 |
 | **sum** | **5,820,012** | 6,352,312 | **-532,300, 8.38% ahead** |
 
+## Stage 37b — the reference stream is now closed, all three components
+
+After the bounded source coder, MINMEM was re-swept because references got
+cheaper (25.38 -> 23.68 bits/match) and a cheaper reference makes more matches
+profitable, so the optimum should move down:
+
+| MINMEM | matches | literal | seq | refs (gaps/src/len) | **total** | vs PgRC2 |
+|--------|---------|---------|-----|---------------------|-----------|----------|
+| 30 | 53,650 | 12,621,364 | 3,013,035 | 260,901 (44,268 / 158,713 / 57,920) | 3,273,936 | +40,282 |
+| 26 | 56,988 | 12,544,994 | 2,994,804 | 275,431 (45,760 / 168,639 / 61,032) | 3,270,235 | +36,581 |
+| **24** | 58,908 | 12,506,313 | 2,985,570 | 283,686 (46,592 / 174,346 / 62,748) | **3,269,256** | **+35,602** |
+| 22 | 60,666 | 12,476,703 | 2,978,501 | 291,382 (47,456 / 179,530 / 64,396) | 3,269,883 | +36,229 |
+
+It did not move -- 24 remains optimal, and every row round-trip verified.
+
+### All three components are now at their floors
+
+| stream | we spend | bits/match | order-0 floor | headroom |
+|--------|----------|------------|---------------|----------|
+| sources | 174,346 | 23.68 | 174,339 (bounded) | **7 B** |
+| lengths | 62,748 | 8.52 | 63,418 (8.61 bits) | **-670 B, below it** |
+| gaps | 46,592 | 6.33 | 46,219 (6.28 bits) | **373 B** |
+
+Lengths coming in *below* their order-0 entropy is not an error: varint plus xz
+exploits correlation between neighbouring lengths that an order-0 measure cannot
+see. Either way there is nothing left to extract by coding.
+
+**PgRC2's own lengths cost 8.99 bits/match against our 8.52, and their sources
+23.83 against our 23.68.** We are better on every per-match rate. The entire
+remaining +35,602 is match count -- 58,908 against their 43,190 -- and the count
+is optimal for our pseudogenome, which the sweep confirms twice under two
+different reference prices.
+
+### Confirmation from their source that the bounded coder is the right idea
+
+`resolveMappingCollisionsInTheSameText` (`SimplePgMatcher.cpp:160-165`):
+
+    if (match.posSrcText > match.posDestText) { swap(posSrcText, posDestText); }
+
+They explicitly force `src < dst` by swapping, which is exactly the invariant
+stage 37's coder exploits. They then `sort` and `unique` the match list
+(`:94-95`) before trimming overlaps. So the structure LZMA was finding in their
+offsets is the structure we now code directly.
+
+### Where this leaves the sequence axis
+
+| stream | ours | PgRC2 | |
+|--------|------|-------|---|
+| literal, coded | **2,985,570** | 3,056,474 | **-70,904** |
+| references | 283,686 | 177,180 | +106,506 |
+| **sequence total** | **3,269,256** | 3,233,654 | **+35,602** |
+
+Every coding avenue on this stream is now measured and closed: MAXCAND does not
+bind, consecutive-source delta is worse, repeat distance gives 1.1%, lazy parsing
+3,634 B, a match model cannot replace removal, the varint is fixed, and all three
+components sit at their floors. What remains is that our pseudogenome contains
+more short repeats than theirs, which is the assembler.
+
 ### Verdict
 
 Neither loss flips. **But the total does**, because stage 6 is worth more than
