@@ -46,12 +46,22 @@ below consume.
 | stream | ours | PgRC2 | delta |
 |--------|------|-------|-------|
 | sequence (literal, coded) | **2,979,683** | 3,056,474 | **-76,791** |
-| MEM references | 283,686 | 177,180 | +106,506 |
 | order (permutation) | **2,309,967** | 2,852,758 | **-542,791** |
+| positions + strand (stage 46) | **674,436** | 683,370 | **-8,934** |
+| MEM references | 283,686 | 177,180 | +106,506 |
 | mismatch symbols (estimated) | **242,209** | 265,900 | **-23,691** |
-| **TOTAL** | **5,815,545** | 6,352,312 | **-536,767, 8.45% ahead** |
+| **TOTAL** | **6,489,981** | 7,035,682 | **-545,701, 7.76% ahead** |
+
+**The positions row was added 2026-08-29 and it corrects the record.** Earlier
+versions of this table showed four streams and an 8.45% lead, omitting the
+per-read (pg offset, strand) that a decoder needs to recover reads from the
+pseudogenome -- ours stored nothing, PgRC2 pays 683,370 B. Closing it moves the
+lead to 7.76%. It also nearly closes their side: their five streams sum to
+7,035,682 against a 7,063,459 B archive, a 27,777 B residual for headers and
+props. Against that actual archive the lead is 8.12%.
 
 References break down as gaps 46,592 + sources 174,346 + lengths 62,748.
+Positions break down as deltas 626,052 + strand 48,384.
 
 The sequence row is the context-mixing coder. Substituting 2-bit + `xz -6 -T12`
 gives 3,057,532 B, a total of 5,893,394 and a 7.22% lead, at 1/44th of the coding
@@ -79,11 +89,12 @@ two honest configurations, and both are reported:
 
 | axis | ours, size config | ours, speed config | PgRC2 |
 |------|-------------------|--------------------|-------|
-| size (four streams) | **5,815,545** -- 0.92x | **5,893,394** -- 0.93x | 6,352,312 |
+| size (five streams) | **6,489,981** -- 0.92x | **6,567,830** -- 0.93x | 7,035,682 |
 | wall, end to end | 21.9 s -- 6.4x, **lost** | **3.34 s** -- 0.97x | 3.43 s |
 | peak RSS | **219 MB** -- 0.93x | **209.6 MB** -- 0.89x | 234.7 MB |
 
-**Size is won decisively either way** -- 7.2% ahead even with the fast coder.
+**Size is won decisively either way** -- 6.7% ahead even with the fast coder,
+7.8% with the context model, on the corrected five-stream accounting.
 **Memory is won either way.** **Speed is parity, not a win:** 3.34 s against
 3.43 s is a 3% margin, inside the spread of these measurements. The defensible
 statement is that speed stopped being a deficit -- it was 1.27x behind and is now
