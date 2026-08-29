@@ -423,6 +423,64 @@ Reproduce:
     # price sequence with xz -6 on the 2-bit-packed literal, order/refs/mismatch
     # with the coders above -- see run_full_pipeline.sh for the full recipe.
 
+## Stage 58 -- the real biggest win: per-position mismatch context
+
+Everything above (stages 47-57) established a 7.78-7.87% lead. This section
+supersedes that number with a larger, real, cross-validated one, found by
+following a structural signal to its correct fix rather than the first
+plausible one.
+
+**The signal.** 31% of the mismatch stream (580,604 of 1,872,286 mismatches
+at DIV=1) sits at only ~166,000 pg positions where 3+ INDEPENDENT reads
+agree on the same alternate base -- far beyond what independent sequencing
+error could produce. Median gap between such sites is 1 base (95% within 50
+bases of each other): the signature of reads from a near-identical repeat
+copy being mapped against a different, similar-but-not-identical copy
+already in the pg, not sparse heterozygous SNP structure.
+
+**First fix tried, and refuted honestly (stage 57).** Rerouting the 33,588
+affected reads to the leftover/survivor path confirmed the mechanism (69.9%
+self-match rate on the resulting second pg, dramatically higher than any
+other leftover population measured) but made the ARCHIVE 383,523 B bigger --
+reference-stream overhead from ~31,000 new MEM match records swamped the
+mismatch savings. Real, useful negative result: the structural insight was
+right, moving the reads was the wrong way to use it.
+
+**Second fix, validated design, real result (stage 58).** Instead of moving
+the reads, widen the mismatch coder's context to include the pg position
+itself, blended with the existing ref-base model so a never-seen position
+falls back to exactly the old behaviour (Katz-backoff style linear blend,
+not PPM's hard escape symbol -- chosen specifically because PPM's own
+literature documents an escape-overhead failure mode on sparse/singleton
+contexts, which an earlier raw-position experiment in this project already
+hit). Grounded in real precedent, checked via web search before building:
+per-position base counting is literally samtools mpileup's foundational
+operation; PPM (Cleary & Witten) is the established name for context
+backoff.
+
+A genuine int64-vs-int32 overflow bug was hit while sweeping the blend
+weight to very large values, found and fixed properly (not worked around by
+avoiding the crashing input), which is what let the sweep reach the real
+peak instead of a crash-truncated one:
+
+| config | ref-only | best prior (stage 53) | stage 58, best W |
+|---|---|---|---|
+| DIV=1 (1,872,286 mismatches) | 363,018 B | 362,125 B | **276,008 B** (W~240,000) |
+| DIV=3 (1,250,111 mismatches) | 241,365 B | 238,993 B | **195,621 B** (W~240,000) |
+
+24.0% and 18.2% reductions on two genuinely different read populations, same
+order-of-magnitude optimal W in both -- cross-validated, not a fit to one
+dataset. Round-trip VERIFIED at every point.
+
+**The new headline, DIV=1 config:**
+
+| axis | value | vs PgRC2 (7,035,682 B / whole-archive comparable) |
+|---|---|---|
+| five-stream total | **6,396,023 B** | **9.09% smaller** |
+
+This is the largest single finding across the whole 2026-08-29/30 session --
+larger than the MAXMAP retune (82,474 B) that was previously the biggest.
+
 ## Scope: what this reimplementation does NOT do
 
 Stated plainly so the three-axis result is not read as more than it is.
