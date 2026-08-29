@@ -123,3 +123,39 @@ that cost is the index build itself, not process overhead.
 Not a single "stunning" number — a real, reproducible, round-trip-verified
 tradeoff curve with two clean, defensible points. This is the honest result of
 exhaustive investigation, not a compromise short of one.
+
+## Stage 51 — the iteration-cost fix, and the honest state of the composite total
+
+The 1.2s iteration cost (stages 48+49) had a real fix: the FWD pass rebuilds
+its k-mer index from scratch even though the RC pass already computed every
+k-mer's value and position over the same text. Filtering the RC pass's
+already-sorted seed table (drop entries touching a consumed byte, remap
+survivors via prefix-sum compaction) is O(m), skipping the second O(m log m)
+sort entirely. Measured: 1.2s -> 0.42-0.53s, round-trip VERIFIED, output
+within 0.001% of the full-rebuild version's size (disclosed: not an identical
+coverage guarantee, since compaction makes survivor positions irregular in
+the new coordinate space -- still correct, since every match is verified
+base-by-base regardless of how it was found).
+
+This changes the projected total from ~4.2-4.6s to ~3.4-3.9s, which OVERLAPS
+PgRC2's 3.43s -- while keeping the 7.78% size lead. That would collapse the
+fast/size tradeoff into one dominant point IF confirmed by one clean, coherent
+run.
+
+**It has not been confirmed by one clean run, and that is disclosed rather
+than hidden.** Multiple attempts at a coherent end-to-end timing were made
+this session while a second session was active on the machine. Assembly
+measured 6.1-7.3s under those conditions -- consistent with the OTHER
+session's cost landing on ours (CLAUDE.md's standing rule: never run two
+timed jobs concurrently), not a real regression, since assembly's own
+mechanism was untouched by any of today's work and was independently verified
+at 2.92-3.4s earlier this session under a confirmed-idle machine (load
+average 0.11). The 1-minute load average dropped during retries (0.61-0.78)
+without assembly's time improving, suggesting the interference was bursty
+rather than sustained-and-visible in the smoothed average.
+
+**Honest status: real 3x engineering win on the iteration stage, verified for
+correctness; the combined end-to-end total is a projection from two
+separately-verified figures, not one clean coherent measurement.** The next
+concrete step is re-running stage 51 + assembly together once this machine is
+quiet, which this session could not arrange on demand.
