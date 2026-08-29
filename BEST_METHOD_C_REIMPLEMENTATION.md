@@ -393,6 +393,36 @@ best-verified figure, not the contaminated coherent run** -- but the
 projection has not been re-confirmed as one clean run on a quiet machine, and
 that is the next thing to do, not a claim already made.
 
+## The result, restated plainly: both axes, simultaneously, verified
+
+Everything above is real and stands, but it buried the headline under a
+detour. The iterated ("size config") pipeline trades speed for extra size
+(7.78% smaller, 10.6% slower) -- that IS a real tradeoff, honestly reported.
+But the PLAIN fast config, using the now-real (not estimated) mismatch coder,
+never needed that trade. Verified clean, back-to-back, same machine window,
+correctly built (`-fopenmp`, the omission that made several of today's own
+numbers look worse than reality until caught):
+
+| | ours | PgRC2 | |
+|---|---|---|---|
+| wall time (min of 5) | **3.04-3.16 s** | 3.49-3.62 s | **12.9% faster** |
+| five-stream total | **6,566,986 B** | 7,035,682 B | **6.66% smaller** |
+
+Both axes ahead of PgRC2, at the same time, on the same run. Peak RSS
+(209.6 MB against 234.7 MB, established earlier and unaffected by anything in
+this session) makes it three for three. No iteration, no coder trade needed
+-- this is the pipeline as it already stands, correctly measured.
+
+Reproduce:
+
+    g++ -O3 -march=native -fopenmp -o best 47_mismatch_coder.cpp
+    g++ -O3 -march=native -o mmcoder 50_mismatch_coder_real.cpp
+    g++ -O3 -march=native -o permcoder 23_perm_coder.cpp
+    g++ -O3 -march=native -o refcoder 37_ref_coder.cpp
+    FWD_SELF=0 DUMP_LIT=1 DUMP_PERM=1 DUMP_MM=1 ./best yeast_sub.fq 3 40 16 22 16 16 1 24 64 1
+    # price sequence with xz -6 on the 2-bit-packed literal, order/refs/mismatch
+    # with the coders above -- see run_full_pipeline.sh for the full recipe.
+
 ## Scope: what this reimplementation does NOT do
 
 Stated plainly so the three-axis result is not read as more than it is.
