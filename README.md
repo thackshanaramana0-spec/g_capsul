@@ -31,6 +31,11 @@ pseudogenomes. That comparison is internally consistent, but it concealed that
 an entire stage was missing rather than merely underperforming. Stage 16 adds
 it.
 
+**The canonical result is in [BEST.md](BEST.md)** -- one configuration, one run,
+every number from that run, with what is measured and what is estimated stated
+separately. The table below is the history of how it was reached, including the
+refuted steps, which are the more useful half.
+
 ## Results
 
 | # | file | what it adds | pg | notes |
