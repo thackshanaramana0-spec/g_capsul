@@ -1309,6 +1309,73 @@ bind, consecutive-source delta is worse, repeat distance gives 1.1%, lazy parsin
 components sit at their floors. What remains is that our pseudogenome contains
 more short repeats than theirs, which is the assembler.
 
+## Stage 39 — PgRC2's sort-merge sweep, built and measured
+
+The one place the evidence said we were algorithmically behind: their division
+runs 1186 ms with a **parallel sort and a serial merge**
+(`GreedySwipingPackedOverlapPseudoGenomeGenerator.cpp:6-10`, pstld), while ours
+took 1.3-1.9 s fully threaded. Beating us with less parallelism means the
+algorithm differs, and no amount of threading closes it. So it was rebuilt.
+
+Their `overlapSortedReadsAndMergeSortSuffixes` is a two-list merge:
+- reads sorted by full sequence are already sorted by *every* prefix length, so
+  the prefix side is built once and never rebuilt;
+- as L drops by one the suffix key loses its **first** base, so the suffix side
+  is re-sorted in O(n) rather than O(n log n);
+- two sorted lists then merge in a linear pass.
+
+**The algorithm is validated.** Against the hash sweep, on identical input:
+
+| | hash sweep | merge sweep |
+|---|-----------|-------------|
+| round 1 links | 673,334 | **673,334** identical |
+| round 2 links | 546,899 | **547,569** (+670) |
+| final literal | 12,506,313 | **12,506,278** (-35 B) |
+| comparisons | 20,879,865 | **1,909,923 (11x fewer)** |
+| round 1 + 2 wall | **2.15 s** | 6.81 s |
+
+Same-or-better output for a fraction of the comparisons -- and 3.2x slower.
+
+### Three bugs, each found by measuring rather than reasoning
+
+**The re-sort was a no-op.** Bucketing by the dropped base and *concatenating*
+A/C/G/T rebuilds sorted-by-(dropped_base, rest), which is the OLD key. Every
+level after the first merged an order that had never changed. It showed as 41,564
+links at L=149 and almost none across the 130 levels below. The buckets must be
+**merged**, not concatenated -- which is exactly what PgRC2 keeps in `ssiOrder` +
+`updateSuffixQueue`, machinery that reads like bookkeeping and is in fact the
+algorithm.
+
+**Allocation churn was not the cost.** Three pairwise merges with vector locals
+looked like the obvious waste; replacing them with one preallocated 4-way merge
+moved 10.81 -> 10.52 s. Nothing.
+
+**Random access was the cost.** Comparing through the packed reads means two
+loads into a 34 MB array per comparison, ~320M cache misses. Giving each read a
+32-base key in a compact array -- prefix key fixed, suffix key rolled one base
+per level -- halved it, 10.52 -> 5.31 s.
+
+### Why it still loses, and it is not the algorithm
+
+Parallelising the merge search (stage 19's split: search wide, commit ordered,
+slice boundaries found by binary search since the walk is monotone) gave only
+5.31 -> 4.32 s. **1.2x from 12 threads.**
+
+The reason is structural: the search is not where the time goes. The per-level
+bucket, 4-way merge, compaction and key roll are each O(n) and each inherently
+sequential, across 134 levels. Parallelising the one part that parallelises
+cannot help when the serial remainder dominates.
+
+**So the hash sweep is the right choice on this hardware**, despite doing 11x
+more comparisons: it is embarrassingly parallel and this machine has 12 cores.
+PgRC2 reaches 1.79 s with the merge because their per-level maintenance is far
+tighter than ours -- but they have no parallel alternative to compare against,
+and we do.
+
+Kept behind `MERGE_SWEEP=1`, not made default. The measurement that matters is
+the comparison count and the output equality, both of which are deterministic
+and therefore trustworthy on a machine where wall clock is not.
+
 ## Stage 38 — two speed/memory attempts, both refuted, neither kept
 
 The checkpoint after stage 37 was size won, memory 1.3 MB behind, speed ~1.2x
