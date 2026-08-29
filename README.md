@@ -64,6 +64,7 @@ it.
 | 29 | dna_cm | single order-k context model | 2.0206 bpb | **refuted** — dilution; worse with more context |
 | 30 | dna_mix | multi-order logistic mixing + SSE | **1.9174 bpb** | **beats PgRC2's 1.9261**; round trip verified |
 | 31 | rc_probe | measure RC-overlap headroom before building it | -- | 9,188 links available; >=367 KB, exceeds the deficit |
+| 32 | ref_cost | price the MEM reference streams; sweep MINMEM | -- | **+122,700 B uncounted**; MINMEM tuning worth ~5 KB |
 
 ## Stage 16 — the missing MEM-removal stage
 
@@ -861,6 +862,74 @@ the mapping stage, MEM removal and the order permutation, and each of those
 currently has a verified byte-identical or round-trip-verified result that the
 change would put at risk. That is a real piece of work, not a parameter, and it
 is the only thing left on the board.
+
+## Stage 32 — the MEM references were never counted either
+
+`PG_LITERAL` is `lit_main + lit_second`: surviving bases only. The
+`(offset, length)` pairs for 59,013 accepted matches cost nothing in it. That is
+the same failure stage 27 caught with mismatches -- an aggressive stage looking
+free because its cost lands in a stream nobody measures -- and it had been sitting
+under every sequence number in this file.
+
+Emitted and priced (destination gaps, source offsets, lengths as varints, xz -9e):
+
+| stream | raw | coded |
+|--------|-----|-------|
+| gaps | 74,740 | 54,576 |
+| sources | 223,528 | **182,168** |
+| lengths | 79,213 | 63,136 |
+| **total** | 377,481 | **299,880** |
+| PgRC2's equivalent | | **177,180** |
+
+**We are +122,700 B worse on this stream**, having 59,013 matches against their
+~38,762 (implied by their 155,048 B raw offset stream).
+
+**The source stream cannot be coded better.** 59,013 offsets into a 23.2 Mbase
+pg is 59,013 x log2(23,233,953)/8 = 180,494 B, and we spend 182,168 -- within 1%
+of the floor. A zigzag delta in destination order was tried and is *worse*
+(187,904), because self-match sources have no locality: a repeat points anywhere.
+The only way to shrink it is fewer matches.
+
+### MINMEM swept, with the full objective
+
+`MINMEM = 45` was PgRC2's `CODER_LEVEL_NORMAL` default (`pgrc-params.h:145`),
+copied and never swept. With references finally priced the trade is computable,
+and the memory objection dissolves: `STEP = MINMEM - SEED + 1`, so shrinking the
+seed alongside the threshold holds the index size constant.
+
+| MINMEM | literal | coded seq | refs | **total** | peak RSS |
+|--------|---------|-----------|------|-----------|----------|
+| 45 | 12,953,039 | 3,104,520 | 304,780 | 3,409,300 | 239 MB |
+| **36** | 12,787,587 | 3,064,865 | 339,392 | **3,404,257** | 239 MB |
+| 30 | 12,657,987 | 3,033,803 | 375,788 | 3,409,591 | 239 MB |
+| 24 | 12,515,916 | 2,999,752 | 423,824 | 3,423,576 | 239 MB |
+
+**Worth 5,043 B.** The curve is almost flat and turns over at 36. A simple model
+said each match costs ~5.07 B and saves `L * 1.9174/8`, implying break-even near
+L = 21 and a large win from lowering the threshold. That was wrong: a source
+offset costs ~24.5 bits regardless of match length, so short matches pay nearly
+the same reference price for much less literal. Measuring both sides is what
+made the flatness visible -- optimising literal alone would have read MINMEM 24
+as a 105 KB win when it is a 14 KB loss.
+
+Note the MINMEM=45 row here is 12,953,039 rather than the 12,926,925 recorded
+elsewhere: the parameterised seed gives 31/step 15 where the original used
+32/step 14. A 26,114-base difference from sampling density alone, worth
+remembering before reading small literal differences as algorithmic.
+
+### Corrected position
+
+| stream | ours | PgRC2 | |
+|--------|------|-------|---|
+| sequence, coded (MINMEM 36) | 3,064,865 | 3,056,474 | +8,391 |
+| MEM references | 339,392 | 177,180 | **+162,212** |
+| order | **2,309,967** | 2,852,758 | -542,791 |
+| mismatch symbols | **~242,209** | 265,900 | -23,691 |
+| **sum** | **5,956,433** | 6,352,312 | **-395,879, 6.23% ahead** |
+
+The lead is real but **6.23%, not the 8.50% reported before this stage**. Every
+earlier summary in this file that quotes 8.50% or 7.5% predates the reference
+stream being counted and is superseded by this table.
 
 ### Verdict
 
