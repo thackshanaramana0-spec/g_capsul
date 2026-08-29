@@ -159,3 +159,40 @@ correctness; the combined end-to-end total is a projection from two
 separately-verified figures, not one clean coherent measurement.** The next
 concrete step is re-running stage 51 + assembly together once this machine is
 quiet, which this session could not arrange on demand.
+
+## Stage 52 — bucketed mapping probes: real, verified, but modest
+
+Tested the memory-locality hypothesis directly against the real pipeline
+(not just synthetic), since the isolated benchmark showed a dramatic
+28x-in-lookup-phase effect. Real result: 0.64s -> 0.58s (~9%), because the
+real index (~14 MB) is much smaller than the synthetic test's 64 MB table and
+mostly fits in L3 already on this hardware -- the synthetic test's dramatic
+gain doesn't transfer, and MEM matching's similarly-sized (~17 MB) index
+would plausibly show the same modest pattern.
+
+Verified correct: PG_LITERAL, mapped count, full mismatch histogram all
+IDENTICAL to baseline; literal.txt byte-identical. Costs +130 MB RAM for the
+per-thread bucketing scratch space -- a bad trade for a 0.06s gain by this
+project's own standard. Documented as a tested, available option; NOT
+adopted as the default.
+
+## Final honest state after exhausting available speed levers
+
+Real, fair, same-conditions comparison (both tools measured back to back,
+same machine state): **ours 3.98s / PgRC2 3.60s -- 10.6% slower, 7.78%
+smaller.** Every concrete speed idea available within this pipeline's current
+architecture has now been tested:
+
+  - K2 query-side stride: real but NEGATIVE (drops mapped count sharply,
+    net wall-clock slightly worse)
+  - concurrent fwd/rc mapping scans: correctness risk (races on shared
+    per-read state) for a benefit the stage's own documented
+    memory-bandwidth-bound diagnosis says is unlikely -- declined, not
+    attempted unsafely
+  - bucketed/cache-blocked mapping probes: real, verified, but modest (9%,
+    +130MB RAM) -- tested on real data, not assumed from the synthetic result
+
+None of these close the remaining ~0.38s gap. Closing it further needs a
+different data structure or algorithm for mapping/MEM matching, not a
+reordering of the existing one -- genuinely out of scope for further
+incremental tuning within this pipeline's current design.
