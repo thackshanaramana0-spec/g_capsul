@@ -1309,6 +1309,61 @@ bind, consecutive-source delta is worse, repeat distance gives 1.1%, lazy parsin
 components sit at their floors. What remains is that our pseudogenome contains
 more short repeats than theirs, which is the assembler.
 
+## Stages 40-41 — three targeted memory cuts measured zero, and then 45 MB
+
+Peak RSS sat at 233 MB against PgRC2's 232 MB all session, and three separate
+reductions moved it by nothing at all:
+
+| change | what it removed | peak RSS effect |
+|--------|-----------------|-----------------|
+| `ppos` uint64 -> uint32 (stage 38) | 3.4 MB of array | **0** |
+| parallel chunked loader (stage 38) | -- | **+5 MB, worse** |
+| packed mapping index (stage 40) | 13 B -> 8 B/entry, and a 30 MB temp | **0** |
+
+Stage 40 is worth describing because it *should* have worked. The index was
+`mkey`(8) + `mrid`(4) + `mpart`(1) built through a `vector<E>` of 16 B/entry that
+coexists with all three during the copy -- 29 B/entry, ~54 MB at the build
+moment. Packing it into one sorted `uint64` of `(key32 << 32) | (rid << 3) |
+part` gives 8 B/entry with no temp and no copy: 24 MB -> 14.1 MB, verified by the
+index's own printout. Sorting the whole word sorts by key because the key is in
+the high bits, so the run-detection and first-occurrence logic are untouched. The
+key truncates to 32 bits, exact at the default SEEDW 16 and merely a partial key
+above it -- partial is safe, since a collision only produces a candidate and every
+candidate is verified against the text.
+
+**It changed peak RSS by zero.** Three real reductions, no effect, which stops
+being a coincidence and starts being a measurement: **the peak is not the live
+set.** Summing what is actually live during mapping gives ~155 MB against a
+measured 232 MB.
+
+### The 77 MB was glibc, and ARCS already knew
+
+`src/vodbg_pg.cpp` says it outright: *"malloc_trim is what makes the release
+visible: glibc keeps freed arenas by default, so an earlier measurement recovered
+only 52 MB of a 312 MB free until the arena was returned explicitly."*
+
+The sweep's per-level candidate array and the 851k-entry prefix map are both
+freed before mapping. Both stay resident. One `malloc_trim(0)` after the free:
+
+| | peak RSS | mapping stage RSS |
+|---|----------|-------------------|
+| without | 238,828 / 238,908 / 238,932 KB | 232 MB |
+| **with** | **193,648 / 193,732 KB** | **186 MB** |
+
+**45 MB, reproducible across reps, output byte-identical** (`PG_LITERAL
+12,506,313`).
+
+### Memory is now won
+
+| | ours | PgRC2 | |
+|---|------|-------|---|
+| peak RSS | **189 MB** | 232 MB | **0.81x -- 19% ahead** |
+
+The lesson is the one this file keeps paying for: three plausible fixes were
+built and measured before the *fourth* question -- "is the thing I am shrinking
+even at the peak?" -- got asked. The answer was in this repository's own source
+the whole time.
+
 ## A measurement harness, a trustworthy baseline, and a plan killed by arithmetic
 
 ### bench.sh
