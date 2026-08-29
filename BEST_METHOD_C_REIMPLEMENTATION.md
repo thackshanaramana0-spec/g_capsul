@@ -301,6 +301,53 @@ context-mixing coder needed 19 extra seconds to reach -- for about 2 seconds of
 mechanical MEM-iteration cost instead. Not yet folded into a single pipeline
 binary; measured as verified post-processing on the real pipeline's own output.
 
+## The honest tradeoff: iteration buys size, and it is not free
+
+Stages 48-50 (this file's iterative MEM removal and real mismatch coder) were
+initially reported as a pure win. They are not -- the iteration itself costs
+real, measured time, and that changes which configuration to recommend.
+
+Timed directly (not estimated), on an idle machine, single RC pass + single
+FWD pass (the efficient point -- further RC/FWD alternation nets +680 B, a
+wash, established earlier and reconfirmed here):
+
+| stage | time |
+|---|---|
+| assembly (stages 01-45) | ~2.9-3.4 s |
+| MEM iteration (1 RC + 1 FWD pass) | 1.2 s |
+| mismatch coder | 0.04 s |
+| **total** | **~4.2-4.6 s** |
+
+Against PgRC2's 3.43 s, that is **1.2-1.3x SLOWER**, not the parity this
+progression established for the non-iterated pipeline. A combined
+single-process RC+FWD tool was built to see whether process-spawn/file-I/O
+overhead was the cost -- it was not: 1.4 s, no faster than two separate
+processes. The 1.2 s is genuinely the index build (sort + hash table) run
+twice, which is compute, not overhead, and has no free fix at this effort
+level.
+
+**So there are two honest configurations, not one:**
+
+| | fast config | size config |
+|---|---|---|
+| what it does | assembly only, no iteration | assembly + 1 RC + 1 FWD MEM pass |
+| wall time | **2.92-3.4 s** (parity/slight edge vs PgRC2's 3.43 s) | **~4.2-4.6 s** (1.2-1.3x slower) |
+| five-stream total | 6,567,830 (6.65% ahead) | **6,488,486 (7.78% ahead)** |
+
+Both are real, round-trip verified, reproducible with
+`run_full_pipeline.sh`. Neither dominates the other -- this is a genuine
+size/speed Pareto tradeoff, not a bug to be fixed. A paper reporting this
+should present both points rather than picking the one that looks best,
+which is exactly the discipline this file has tried to hold throughout.
+
+Reproduce either point:
+
+    g++ -O3 -march=native -pthread -o best   47_mismatch_coder.cpp
+    g++ -O3 -march=native -pthread -o iter_mem 48_iterate_mem.cpp
+    g++ -O3 -march=native -pthread -o fwd_mem  49_fwd_after_converge.cpp
+    g++ -O3 -march=native -o mmcoder 50_mismatch_coder_real.cpp
+    ./run_full_pipeline.sh ./best yeast_sub.fq /tmp/fullrun
+
 ## Scope: what this reimplementation does NOT do
 
 Stated plainly so the three-axis result is not read as more than it is.
