@@ -68,6 +68,7 @@ it.
 | 33 | maximal_mem | extend matches BACKWARD; MINMEM/MAXCAND swept | -- | **-77 KB**; literal now within 1,774 bases of theirs |
 | 34 | lazy_parse | one-position lookahead in the MEM parse | -- | -3,634 B; greedy parsing was not the cause |
 | 35 | match_model | CM + match model, tested as a REPLACEMENT for MEM removal | 1.8487 bpb | **refuted as a replacement**; kept as a coder, -12 KB |
+| 36 | rc_only_selfmatch | drop forward self-matching, as PgRC2 does | -- | **-36 KB**; forward self-matches were a net loss |
 
 ## Stage 16 — the missing MEM-removal stage
 
@@ -1111,6 +1112,75 @@ current best literal (12,517,415 at MINMEM 36) the same rate is worth ~11,500 B.
 | order | **2,309,967** | 2,852,758 | -542,791 |
 | mismatch symbols | **~242,209** | 265,900 | -23,691 |
 | **sum** | **~5,869,000** | 6,352,312 | **-483,300, 7.61% ahead** |
+
+## Stage 36 — we were doing a whole matching pass they never do
+
+The reference stream sat at +151,332 B through five refuted attempts to shrink
+it. Every one of those attacked how references are found, selected or coded.
+None asked why there are 65,994 of them against their 43,190. Reading their
+stage 7 line by line answers it:
+
+`SimplePgMatcher::exactMatchPg` (`SimplePgMatcher.cpp:32-42`):
+
+    if (revComplMatching) {
+        if (destPgIsSrcPg) {
+            string queryPg = reverseComplement(destPg);
+            matcher->matchTexts(textMatches, queryPg, ...);
+        } else { reverseComplementInPlace(destPg); ... }
+    } else
+        matcher->matchTexts(textMatches, destPg, ...);
+
+`revComplMatching` is `true` for every call in `matchPgsInPg`, so the `else`
+branch never runs there. For the self-match they build
+`reverseComplement(destPg)` and match *that*. Their parameter is even named
+`minimalReverseComplementedRepeatLength` (the `-p` flag, `PgRC.cpp:197`).
+
+**Their stage 7 is reverse-complement only. They never search for forward
+repeats inside the pseudogenome.** We always did both, and that entire extra
+pass is where the match-count difference comes from.
+
+It is a net loss. A match only pays when `L * bits_per_base / 8` beats the ~40
+bits its reference costs, and forward self-matches in a pseudogenome are mostly
+short:
+
+| | matches | literal | seq | refs | **total** |
+|---|---------|---------|-----|------|-----------|
+| forward + RC | 65,994 | 12,517,415 | 2,988,220 | 328,512 | 3,316,732 |
+| **RC only** | **49,766** | 12,730,875 | 3,039,178 | **255,780** | **3,294,958** |
+
+The forward pass removed 213,460 more literal bases -- worth ~50,958 B once
+coded -- while costing 72,732 B of extra references.
+
+### MINMEM re-swept, because its optimum moved
+
+The threshold had been tuned with forward matching on, so it was optimising a
+different trade:
+
+| MINMEM | matches | literal | refs | **total** | vs PgRC2 |
+|--------|---------|---------|------|-----------|----------|
+| 45 | 45,166 | 12,896,442 | 236,060 | 3,314,763 | +81,109 |
+| 36 | 49,766 | 12,730,875 | 255,780 | 3,294,958 | +61,304 |
+| 30 | 53,650 | 12,621,364 | 272,728 | 3,285,763 | +52,109 |
+| **24** | 58,908 | 12,506,313 | 294,772 | **3,280,342** | **+46,688** |
+| 22 | 60,666 | 12,476,703 | 302,304 | 3,280,805 | +47,151 |
+
+**Together: 3,316,732 -> 3,280,342, a 36,390 B gain**, and the sequence+reference
+deficit falls from +83,078 to **+46,688**. 4.40 s, 239 MB.
+
+The lesson is the one this file keeps relearning: five attempts failed because
+they all assumed the work was necessary and only argued about how to pay for it.
+The question worth asking was whether to do it at all, and their source answered
+it in five lines.
+
+### Position after stage 36
+
+| stream | ours | PgRC2 | |
+|--------|------|-------|---|
+| sequence, coded | **2,985,570** | 3,056,474 | **-70,904** |
+| MEM references | 294,772 | 177,180 | +117,592 |
+| order | **2,309,967** | 2,852,758 | -542,791 |
+| mismatch symbols | **~242,209** | 265,900 | -23,691 |
+| **sum** | **5,832,518** | 6,352,312 | **-519,794, 8.18% ahead** |
 
 ### Verdict
 
