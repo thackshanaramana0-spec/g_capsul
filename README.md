@@ -56,6 +56,13 @@ it.
 | 21 | packed_reads | reads 2 bits/base; seed retuned on copMEM's lemma | **12.93M literal** | **+1.8% of PgRC2**, 5.3 s / **214 MB (ahead)**; see below |
 | 22 | order_info | track pg position of every original read | (permutation) | their stage 6, never previously attempted |
 | 23 | perm_coder | Lehmer + Fenwick + range coder | **2,309,967 B** | **-19.0% vs PgRC2's 2,852,758**; 0.022% off the floor |
+| 24 | coprime_scan | sample the query side too | -- | **refuted** — verification-bound, not probe-bound |
+| 25 | packed_verify | packed-vs-packed XOR + popcount | -- | mapping 0.95 -> 0.84 s |
+| 26 | probe_filter | 2 MB cache-resident presence filter | -- | mapping 0.78 s, total 4.53 s |
+| 27 | mismatch_cost | count what first-acceptable placement costs | -- | 10.74 mismatches/read; a ~260 KB stream nobody counted |
+| 28 | best_match | keep the fewest-mismatch placement | -- | 4.94/read; total **below** theirs |
+| 29 | dna_cm | single order-k context model | 2.0206 bpb | **refuted** — dilution; worse with more context |
+| 30 | dna_mix | multi-order logistic mixing + SSE | **1.9174 bpb** | **beats PgRC2's 1.9261**; round trip verified |
 
 ## Stage 16 — the missing MEM-removal stage
 
@@ -673,6 +680,15 @@ extra candidate verification itself.
 | mismatch symbols | **~242,209** | 265,900 | **-23,691** |
 | **sum** | **5,710,260** | 6,175,132 | **-464,872, 7.5% ahead** |
 
+With stage 30's coder replacing 2-bit + xz:
+
+| stream | ours | PgRC2 | |
+|--------|------|-------|---|
+| sequence, coded | **3,098,294** | 3,056,474 | +41,820 |
+| order | **2,309,967** | 2,852,758 | -542,791 |
+| mismatch symbols | **~242,209** | 265,900 | -23,691 |
+| **sum** | **5,650,470** | 6,175,132 | **-524,662, 8.50% ahead** |
+
 | | ours | PgRC2 | |
 |---|------|-------|---|
 | time @12 threads | 4.97 s | 3.66 s | 1.36x |
@@ -748,6 +764,53 @@ implementing alignment-preserving phrase coding -- adopting their design
 knowingly, which is a different thing from the transfers elsewhere in this file
 where ours turned out stronger. The other half, 55,863 B of extra literal, is
 assembly quality and still needs a better layout.
+
+### Beating the phrase coder instead of copying it
+
+The choice was: implement their VarLenDNACoder, which caps at 1.9261 bits/base
+and is their design, or find something better. The literature says better exists
+-- DNA-COMPACT reports **1.838 bits/base on yeast**, and GeCo3 gets its gains the
+same way: several finite context models of different orders combined by logistic
+mixing, rather than one model or a dictionary.
+
+That is exactly the fix for what killed stage 29. A starved high order
+contributes little weight instead of dominating, low orders carry the
+prediction, and the mixer learns the balance per position instead of it being
+fixed.
+
+Stage 30, standard lpaq-style and textbook throughout -- their path has no
+context model to copy: each base as two binary decisions; one hashed table of
+12-bit predictions per order (1,2,3,4,6,8,11,14,18,22); combination in the
+logistic domain, `p = squash(sum w_i * stretch(p_i))`; mixer weights selected by
+(node, order-2 context) and trained online; an SSE/APM stage refining against a
+low-order context.
+
+| coder | bits/base | on our 12,926,925 bases |
+|-------|-----------|--------------------------|
+| single order-8 (stage 29) | 2.0206 | 3,264,940 |
+| 2-bit + xz -9e | 1.9544 | 3,158,084 |
+| PgRC2 VarLen + LZMA | **1.9261** | (3,112,319 equivalent) |
+| **stage 30 mixing** | **1.9174** | **3,098,294** |
+
+**Our coder is now better than theirs**: on the same literal it would save
+14,025 B. The 45,747 B coder deficit is gone and is a small surplus.
+
+**Two bugs, and they mattered more than the architecture.** The first version
+scored 2.0730 -- worse than a single order. Weights initialised at 1<<14 with
+ten models put the dot product near 5000, far past squash's +-2047 domain, so
+the mixer saturated on the first symbol; `w = 65536/NM` makes the initial mix a
+plain average. And the counter update was `delta*2/rate` with rate starting at
+2, a full jump to 0 or 4095 on one observation. Fixing those two moved
+2.0730 -> 1.9174. The architecture was never the problem.
+
+Round trip is verified, not assumed: the decoder reruns the identical model with
+the same update order and rebuilds all 12,926,925 bases before any size is
+reported, on the standard set in stage 23 that a number which has not survived a
+decode is not evidence.
+
+**The sequence axis is still +41,820 B behind** -- but the cause is now entirely
+the 232,022 extra literal bases, i.e. assembly, not coding. Every byte of the
+coder deficit has been recovered.
 
 ### Verdict
 
