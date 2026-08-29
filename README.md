@@ -63,6 +63,7 @@ it.
 | 28 | best_match | keep the fewest-mismatch placement | -- | 4.94/read; total **below** theirs |
 | 29 | dna_cm | single order-k context model | 2.0206 bpb | **refuted** — dilution; worse with more context |
 | 30 | dna_mix | multi-order logistic mixing + SSE | **1.9174 bpb** | **beats PgRC2's 1.9261**; round trip verified |
+| 31 | rc_probe | measure RC-overlap headroom before building it | -- | 9,188 links available; >=367 KB, exceeds the deficit |
 
 ## Stage 16 — the missing MEM-removal stage
 
@@ -811,6 +812,55 @@ decode is not evidence.
 **The sequence axis is still +41,820 B behind** -- but the cause is now entirely
 the 232,022 extra literal bases, i.e. assembly, not coding. Every byte of the
 coder deficit has been recovered.
+
+### The last deficit is assembly, and RC is worth re-testing
+
+After stage 30 the sequence gap is +41,820 B and it is entirely the 232,022
+extra literal bases -- coding is settled. Mean overlap is the cause:
+
+    admitted reads 593,968 x 150 = 89,095,200 bases
+    pg after chains                21,619,175
+    over 546,899 links           = 123.4 bases/link
+
+against the ~133.7 this file records for them.
+
+Their merge loop is not the difference. `GreedySwiping...cpp:196-204` scans
+forward through every read whose prefix matches the current suffix, skipping
+self-links and cycles until one is acceptable -- structurally the same as our
+capped candidate list plus the stage 19 re-probe. Candidate coverage is equal.
+
+The one clearly-identified untested lever is **reverse complement in the
+greedy**. This file refutes it twice (stage 04, and again in a second
+architecture) -- but both refutations predate MEM removal, exactly the situation
+that made stage 14's refutation stale and that this file already flags as
+needing a re-test.
+
+Stage 31 measures the headroom instead of assuming either way. Index every
+read's RC prefix, then for each chain TAIL after round 2 ask whether its suffix
+matches the RC prefix of some chain HEAD:
+
+    chain tails after round 2      47,069
+      would link via RC             9,188  (19.5%)
+      forward seed existed anyway  37,086
+
+A tail joining a head drops that head's contribution from a full read to
+`rlen - L`, so 9,188 links are worth at least 40 bases each at the MINOV floor:
+**>=367,520 bases, already more than the 232,022-base deficit**, and ~1.13M at
+the 123-base mean.
+
+**This is an upper bound, and the two prior refutations are the reason to say so
+loudly.** A head can be claimed once, so some of the 9,188 conflict; taking an
+RC link may displace a better forward link; and RC merges put sequence into the
+pg in an orientation the later mapping and MEM stages then see differently,
+which is the most likely explanation for why RC measured *worse* before. Nothing
+here says the realised gain is positive -- only that the raw opportunity is
+larger than the deficit, which it was not obvious it would be.
+
+**Cost of finding out.** Orientation has to be carried through chain emission,
+the mapping stage, MEM removal and the order permutation, and each of those
+currently has a verified byte-identical or round-trip-verified result that the
+change would put at risk. That is a real piece of work, not a parameter, and it
+is the only thing left on the board.
 
 ### Verdict
 
