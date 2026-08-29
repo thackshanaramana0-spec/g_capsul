@@ -53,13 +53,54 @@ below consume.
 
 References break down as gaps 46,592 + sources 174,346 + lengths 62,748.
 
-| axis | ours | PgRC2 | |
-|------|------|-------|---|
-| size (four streams) | **5,815,545** | 6,352,312 | **0.92x -- ahead** |
-| wall time @12 threads | **2.92 s** | 3.43 s | **0.85x -- ahead** |
-| peak RSS | **209.6 MB** | 234.7 MB | **0.89x -- ahead** |
+The sequence row is the context-mixing coder. Substituting 2-bit + `xz -6 -T12`
+gives 3,057,532 B, a total of 5,893,394 and a 7.22% lead, at 1/44th of the coding
+time -- see the time discussion below for why that is the configuration to quote
+when speed is also being claimed.
 
-All three axes won.
+**The time axis has to be stated carefully, because the obvious comparison is not
+a fair one.** PgRC2's wall clock is its whole binary: assemble *and* entropy-code
+the archive. Ours, above, is the assembler alone -- the stream coders are separate
+programs and their cost is not in it. Timing our assembler against their whole
+pipeline flatters us, and it hid a large cost for most of this session.
+
+Coding cost, measured on the streams this run produces:
+
+| stream | coder | time | output |
+|--------|-------|------|--------|
+| sequence | `35_match_model.cpp`, CM + match model | **19.01 s** | 2,979,683 B |
+| sequence | 2-bit + `xz -6 -T12` | **0.43 s** | 3,057,532 B |
+| order | `23_perm_coder.cpp` | 0.18 s | 2,309,967 B |
+| MEM refs | `37_ref_coder.cpp` + xz | 0.06 s | 283,686 B |
+
+The context model buys 77,865 B for 18.6 s. That is a bad trade at the pipeline
+level and it was invisible while only the assembler was being timed. So there are
+two honest configurations, and both are reported:
+
+| axis | ours, size config | ours, speed config | PgRC2 |
+|------|-------------------|--------------------|-------|
+| size (four streams) | **5,815,545** -- 0.92x | **5,893,394** -- 0.93x | 6,352,312 |
+| wall, end to end | 21.9 s -- 6.4x, **lost** | **3.34 s** -- 0.97x | 3.43 s |
+| peak RSS | **219 MB** -- 0.93x | **209.6 MB** -- 0.89x | 234.7 MB |
+
+**Size is won decisively either way** -- 7.2% ahead even with the fast coder.
+**Memory is won either way.** **Speed is parity, not a win:** 3.34 s against
+3.43 s is a 3% margin, inside the spread of these measurements. The defensible
+statement is that speed stopped being a deficit -- it was 1.27x behind and is now
+level -- not that this is faster than PgRC2.
+
+The speed configuration runs the four coders concurrently (they are independent);
+the sequence coder dominates at 0.43 s, so the whole coding step is 0.42 s
+measured, on top of the 2.92 s assembler.
+
+Assembler stage alone, which is what stages 43-45 moved:
+
+| axis | ours | PgRC2 (whole binary) |
+|------|------|----------------------|
+| assembler wall @12 threads | **2.92 s** | 3.43 s |
+
+That row is a stage result and is labelled as one. It is not a like-for-like
+comparison and must not be quoted as the headline.
 
 Time and RSS are the minimum of three runs of each binary, taken back to back on
 an otherwise idle machine (`load average 0.11`) so the two sides face the same
@@ -86,8 +127,10 @@ assembler, not better coding.
 
 ## Speed: where the 1.40 s came from
 
-Stages 43-45 are pure engineering -- the output is byte-identical throughout, so
-nothing here trades size for time. Per-stage minimum over 5 reps, `bench.sh`,
+This section is about the **assembler stage**, not the pipeline; see the time
+discussion above for why those are different numbers. Stages 43-45 are pure
+engineering -- the output is byte-identical throughout, so nothing here trades
+size for time. Per-stage minimum over 5 reps, `bench.sh`,
 both binaries measured in the same quiet window:
 
 | stage | 41 (previous record) | 45 (now) | |

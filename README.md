@@ -1314,10 +1314,10 @@ bind, consecutive-source delta is worse, repeat distance gives 1.1%, lazy parsin
 components sit at their floors. What remains is that our pseudogenome contains
 more short repeats than theirs, which is the assembler.
 
-## Stages 43-45 — the speed axis, flipped
+## Stages 43-45 — the assembler's speed, and a correction to what that proves
 
-Speed was the one axis still lost: ~4.3 s against PgRC2's ~3.4 s. Three changes
-took it to 2.92 s against their 3.43 s, and none of them changes what is
+Speed was the one axis still lost. Three changes took the **assembler** from
+4.32 s to 2.92 s against PgRC2's 3.43 s, and none of them changes what is
 computed -- `literal.txt`, `perm.u32`, `mem_triples.bin`, `mem_gaps.bin`,
 `mem_lens.bin` and `mem_srcs.bin` are all byte-identical to stage 41's, checked
 with `cmp`, so the 8.45% size lead is untouched.
@@ -1381,6 +1381,19 @@ Rounds 1 and 2 together: **1.77 s -> 0.82 s**, with `links=673334`,
 The lesson is the one this file keeps recording: the expensive thing was never
 where the algorithm is. Two of the three costs were bookkeeping around the work
 and the third was cache traffic on a statistics counter.
+
+**What this does and does not prove.** PgRC2's 3.43 s is its whole binary:
+assemble *and* entropy-code the archive. The 2.92 s above is the assembler alone.
+Timing one against the other flatters us, and for most of this session it hid the
+coding cost entirely. Measured: the CM sequence coder is **19.01 s** for
+2,979,683 B, where 2-bit + `xz -6 -T12` is **0.43 s** for 3,057,532 B -- 77,865
+bytes bought for 18.6 seconds. End to end, with the coders run concurrently, the
+speed configuration is **3.34 s against their 3.43 s** and the size configuration
+is 21.9 s against 3.43 s. So the honest reading is: size won decisively either
+way (7.2% ahead even with the fast coder), memory won either way, and speed at
+**parity** -- a 3% margin is inside the spread of these measurements. Speed
+stopped being a deficit; it did not become a win. The 2.92 s figure is a stage
+result and is only ever quoted as one.
 
 **Measurement protocol.** Both tools were re-measured back to back on an idle
 machine (`load average 0.11`), minimum of three runs each, PgRC2 as
