@@ -617,6 +617,72 @@ OrderInfo costs memory, and the earlier "0.92x, ahead" number was measured
 before OrderInfo existed. Both numbers are real; they are just not the same
 configuration.
 
+### Whole-architecture check: a stream that was never on the books
+
+Everything above measures pg literal plus order. A real archive also stores,
+for every read placed by the mapper, where it sits and how it differs. PgRC2's
+log prices that stream:
+
+    Mismatched symbols codes ... 1,369,413 bytes to 265,900   (ppmd)  = 1.55 bits/mismatch
+    Mismatches counts (zero flags)  988,702 ->  93,290
+    Mismatches counts (non-zero)    214,603 ->  82,951
+    Reads list offsets              988,702 -> 683,370
+
+~1.15 MB this progression never counted. And stage 17 had bought its survivor
+win precisely by relaxing acceptance to 50 mismatches while taking the FIRST
+placement that qualified, with the note that best-match "only shrinks their
+mismatch stream, which this progression does not measure". That was wrong: it
+shrinks OURS too, and the stream is real whether or not it is measured.
+
+**Stage 27 measured it.** First-acceptable placement: 252,865 reads placed with
+**2,715,908 mismatches, 10.74 per read**, against their 1.39. 30.6% of
+placements carried 12 or more. At their coded rate that is ~526 KB against their
+266 KB -- a ~260 KB liability, more than half the order-coding win, hidden
+purely by not being on the books.
+
+**Stage 28 fixes it.** PgRC2 re-scans and keeps the best placement
+(`ReadsMatchers.cpp:315-328`). What makes that cheap is that the current best
+doubles as the early-exit bound -- a candidate is abandoned as soon as it is
+worse than what the read already holds, so better placements also mean less
+work per candidate.
+
+| | placed | total mismatches | mean | zero-mm |
+|---|--------|------------------|------|---------|
+| stage 27 (first acceptable) | 252,865 | 2,715,908 | 10.74 | 9.9% |
+| **stage 28 (best match)** | 252,865 | **1,250,111** | **4.94** | **18.2%** |
+| PgRC2 | (988,702 in reads list) | 1,369,413 | 1.39 | -- |
+
+Literal, placements and survivors byte-identical: 12,926,925 / 252,865 / 12,065.
+
+**The right comparison is total, not per-read.** Our chained reads carry zero
+mismatches by construction, so across the whole read set ours is 1,250,111
+against their 1,369,413 -- **8.7% below**, roughly 242 KB against their 266 KB.
+The liability becomes a small asset.
+
+Cost is 0.44 s (4.53 -> 4.97 s), and it is not the rescan: skipping reads
+already placed at or below 1, 2 or 4 mismatches changes neither the time
+(4.97 / 5.16 / 5.14 s) nor the mismatch total (within 0.3%). The cost is the
+extra candidate verification itself.
+
+### Three axes, whole architecture, everything measured
+
+| stream | ours | PgRC2 | |
+|--------|------|-------|---|
+| sequence, coded | 3,158,084 | 3,056,474 | +101,610 |
+| order | **2,309,967** | 2,852,758 | **-542,791** |
+| mismatch symbols | **~242,209** | 265,900 | **-23,691** |
+| **sum** | **5,710,260** | 6,175,132 | **-464,872, 7.5% ahead** |
+
+| | ours | PgRC2 | |
+|---|------|-------|---|
+| time @12 threads | 4.97 s | 3.66 s | 1.36x |
+| peak RSS | 238 MB | 232 MB | 1.03x |
+
+Still not a whole-archive comparison -- their reads-list offsets (683,370 B) and
+mismatch-count streams (176,241 B) have no counterpart here, since this
+progression computes positions and discards them. But the largest omitted stream
+has now been measured rather than assumed away, and it moved the answer.
+
 ### Verdict
 
 Neither loss flips. **But the total does**, because stage 6 is worth more than
