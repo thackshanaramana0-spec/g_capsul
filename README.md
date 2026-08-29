@@ -65,6 +65,7 @@ it.
 | 30 | dna_mix | multi-order logistic mixing + SSE | **1.9174 bpb** | **beats PgRC2's 1.9261**; round trip verified |
 | 31 | rc_probe | measure RC-overlap headroom before building it | -- | 9,188 links available; >=367 KB, exceeds the deficit |
 | 32 | ref_cost | price the MEM reference streams; sweep MINMEM | -- | **+122,700 B uncounted**; MINMEM tuning worth ~5 KB |
+| 33 | maximal_mem | extend matches BACKWARD; MINMEM/MAXCAND swept | -- | **-77 KB**; literal now within 1,774 bases of theirs |
 
 ## Stage 16 — the missing MEM-removal stage
 
@@ -930,6 +931,77 @@ remembering before reading small literal differences as algorithmic.
 The lead is real but **6.23%, not the 8.50% reported before this stage**. Every
 earlier summary in this file that quotes 8.50% or 7.5% predates the reference
 stream being counted and is superseded by this table.
+
+## Stage 33 — our matches were not maximal
+
+Stage 32 left the reference stream +162,212 B behind and I attributed the rest to
+assembly quality. Both readings were wrong, and one number said so: our matches
+averaged **179 bases against copMEM's 250**.
+
+copMEM reports *maximal* exact matches. Ours extended **forward only** from a
+seed hit. The source is sampled every `STEP`, so a true maximal match at source
+`ss` is first seen at the first sampled position `p >= ss` inside it -- and
+extending forward from there captures a SUFFIX, abandoning the leading `p-ss`
+bases (about STEP/2 each) to literal. Same match count, shorter matches, more
+literal, for 58,782 matches.
+
+Extending backward before accepting costs nothing in references -- the match
+count is unchanged, so the streams are unchanged, and the recovered bases come
+straight off the literal. Care needed on three bounds: no overlap with the
+previous match, no run past the source start, and for SELF_FWD the source must
+still end at or before the destination. SELF_RC needs no extra cap, since its
+condition `src+L <= qlen-qp-L` is unchanged on both sides by backward extension.
+
+| at MINMEM 45 | literal | refs | total |
+|---|---------|------|-------|
+| forward only (stage 32) | 12,953,039 | 304,780 | 3,409,300 |
+| **maximal (stage 33)** | **12,696,677** | 300,212 | **3,343,288** |
+
+**Literal is now within 1,774 bases of their 12,694,903.** The "232,022-base
+assembly deficit" diagnosed over the previous several stages was almost entirely
+this defect, not mean overlap. That earlier conclusion is withdrawn.
+
+### MINMEM re-swept on maximal matches
+
+| MINMEM | matches | literal | refs | **total** |
+|--------|---------|---------|------|-----------|
+| **36** | 66,831 | 12,517,972 | 332,012 | **3,332,257** |
+| 45 | 58,782 | 12,696,677 | 300,212 | 3,343,288 |
+| 60 | 46,041 | 13,144,569 | 244,152 | 3,394,577 |
+| 80 | 35,704 | 13,640,589 | 194,756 | 3,464,064 |
+
+### Two coding ideas refuted, and one of them twice
+
+**MAXCAND is not binding.** Candidates are scanned in index order and the longest
+kept, so a cap can hide the best match. At 64 and 512 the output is
+byte-identical -- the lists are simply shorter than 64.
+
+**The source stream is at its floor.** 66,831 offsets into a 23.2 Mbase pg has a
+~205 KB floor and we spend 212,880 absolute. Two alternatives tried:
+
+    consecutive-source delta   worse  (sources have no locality with each other)
+    repeat distance dst-src    210,600 vs 212,880, 1.1%
+
+The second was the better-motivated idea -- every self-match points backwards, so
+`dst-src` is an LZ77 match distance, and distances are normally far more skewed
+than absolute positions. It barely helps here because a pseudogenome interleaves
+reads from across the genome, so a repeat's source is not near its destination.
+Kept anyway on keep-the-smaller. The only real lever on this stream remains
+fewer matches, which is what the MINMEM sweep optimises.
+
+### Position after stage 33
+
+| stream | ours | PgRC2 | |
+|--------|------|-------|---|
+| sequence, coded | 3,000,245 | 3,056,474 | **-56,229** |
+| MEM references | 332,012 | 177,180 | +154,832 |
+| order | **2,309,967** | 2,852,758 | -542,791 |
+| mismatch symbols | **~242,209** | 265,900 | -23,691 |
+| **sum** | **5,884,433** | 6,352,312 | **-467,879, 7.37% ahead** |
+
+Sequence itself is now **ahead by 56,229 B**. The single remaining loss is the
+reference stream, and it is a match-count difference (66,831 against their
+~43,190) whose coding is already at the entropy floor.
 
 ### Verdict
 
