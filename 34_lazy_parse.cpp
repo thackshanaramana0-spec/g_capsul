@@ -1093,6 +1093,9 @@ int main(int argc,char** argv){
             prev=(uint64_t)r.dst+r.len;
         }
         { FILE* g=fopen("mem_srcdelta.bin","wb"); fwrite(srcd.data(),1,srcd.size(),g); fclose(g); }
+        { FILE* t=fopen("mem_triples.bin","wb");
+          for(const Ref& r:allrefs){ fwrite(&r.dst,4,1,t); fwrite(&r.src,4,1,t); fwrite(&r.len,4,1,t); }
+          fclose(t); }
         FILE* f;
         f=fopen("mem_gaps.bin","wb"); fwrite(gaps.data(),1,gaps.size(),f); fclose(f);
         f=fopen("mem_srcs.bin","wb"); fwrite(srcs.data(),1,srcs.size(),f); fclose(f);
