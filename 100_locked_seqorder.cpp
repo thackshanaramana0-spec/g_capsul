@@ -1079,6 +1079,29 @@ int main(int argc,char** argv){
             fprintf(stderr,"[POS] reads=%zu  deltas raw=%zu B  strand raw=%zu B  deltas>255=%zu\n",
                     ord2.size(),dl.size(),sb.size(),bigd);
             fprintf(stderr,"[POS] PgRC2 pays 683,370 B coded for its reads-list offsets\n");
+
+            // LAYER 7 -- real, previously-missing piece, found while building
+            // the first genuine full-pipeline decoder (not just per-coder
+            // round trip): knowing only a read's START position in the pg is
+            // not enough to know where it ENDS, because reads overlap by
+            // design in the greedy chain -- length is not inferable from
+            // neighboring positions. PgRC2 doesn't need this stream because
+            // it requires fixed-length reads (255-base hard cap, confirmed
+            // from their own paper) -- length is one global constant for
+            // them, not per-read. We support real variable-length reads
+            // (up to 1023 bases, stage 90/100's fix), so this is a genuine
+            // per-read cost, not free. Design matches SPRING's real,
+            // verified approach (confirmed from source,
+            // reorder_compress_streams.cpp/encoder.cpp): a raw uint16_t
+            // length value per read, general-purpose compressed -- not a
+            // novel guess. Stored in the SAME position-sorted order as
+            // pos_delta/pos_strand (ord2) so a decoder walking positions in
+            // order can pair (position, strand, length) directly, one read
+            // at a time, without a second lookup pass.
+            std::vector<uint16_t> lenarr; lenarr.reserve(ord2.size());
+            for(size_t i=0;i<ord2.size();++i) lenarr.push_back((uint16_t)rlen[uidOrder[ord2[i]]]);
+            { FILE* g=fopen("read_lengths.bin","wb"); fwrite(lenarr.data(),2,lenarr.size(),g); fclose(g); }
+            fprintf(stderr,"[LEN] reads=%zu  raw=%zu B (uint16 per read)\n",lenarr.size(),lenarr.size()*2);
         }
     }
 
