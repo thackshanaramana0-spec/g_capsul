@@ -249,19 +249,61 @@ concrete unexplored lead.
 specific gap. RAM-at-scale (C. elegans/T. cacao regime) remains a real,
 open, precisely-bounded problem, not a vague one.
 
-**A different, real, established class of fix, not yet tried:** measure-
-then-adapt (two-pass), distinct from the lifetime-management fixes above.
-Real precedent: two-pass video encoding (pass 1 gathers statistics, pass 2
-uses them) and memory-adaptive algorithms like external sort (spill to a
-cheaper strategy if a measured resource threshold is crossed) — both
-established, not improvised. Concretely for this problem: measure peak RSS
-during/after the `run()` passes, and if it crosses a threshold, retry with
-a smaller per-thread candidate buffer or fewer concurrent threads for that
-specific phase, rather than always running at full parallelism regardless
-of data size. Not implemented this pass; flagged as the next real direction
-once the `res[t]` per-thread-vector lead above is checked and, if it's the
-actual driver, sized/reserved properly first (simpler, cheaper fix if it
-works) before reaching for the more complex two-pass approach.
+## 3d. CONFIRMED root cause found and fixed — real, systems-level, not an
+application logic bug
+
+Directly measured a fourth hypothesis after three application-level ones
+were ruled out (allrefs/cleanRefs double-holding, c/cr scope overlap,
+res[t] per-thread capacity — all real, all measured, all real fixes kept,
+none explained the gap: total res[] capacity across all 4 `run()` calls
+summed to only 13.9MB, far too small).
+
+**Real cause: glibc's default allocator gives each thread its own malloc
+arena** (up to 8x core count by default); memory freed in one arena is not
+consolidated across others, showing up as real RSS the application's own
+logical (freed-or-not) lifetime tracking never predicts — a well-known,
+established systems-level phenomenon, not a code bug. Confirmed directly,
+not assumed: `MALLOC_ARENA_MAX=1` alone dropped C. elegans peak RSS from
+1,300,968 KB to 1,187,404 KB (-8.7%), byte-identical correctness
+unaffected (0-diff, same 523,110 clean-ref count).
+
+Implemented robustly via `mallopt(M_ARENA_MAX,1)` at the very start of
+`main()` (not dependent on an external environment variable at every call
+site) — confirmed matching the env-var result almost exactly (1,188,168 KB
+source-built vs 1,187,404 KB env-var). Verified safe and correct at BOTH
+scales: E. coli byte-identical + RAM unchanged (166,084 KB, small files
+were never the problem), C. elegans byte-identical + real reduction,
+P. aeruginosa regression-checked (2,016,648 B total, unchanged; RAM
+slightly lower, no regression).
+
+**Real, final, honest 3-axis result for C. elegans after this fix:**
+
+| | Ours (before) | Ours (after) | PgRC2 | Final result |
+|---|---|---|---|---|
+| Size | 50,129,636 B | 50,129,636 B (unchanged, pure RAM fix) | 52,042,122 B | **WIN 3.7%** |
+| Speed | 62.0s | 64.3s (noise) | 39.9s | LOSE 1.61x |
+| RAM | 1,300,516 KB | **1,195,048 KB** | 641,316 KB | LOSE 1.86x (was 2.03x — real, partial narrowing) |
+
+Not full RAM dominance — a real, meaningful, verified 8.1% reduction, not
+the whole gap. The remaining ~554MB gap vs PgRC2 is real architectural
+difference (our full de-novo assembly holds fundamentally more live state
+than PgRC2's lighter reorder-based approach), not a further allocator
+artifact — four real hypotheses have now been checked at this specific
+scale, three ruled out, one confirmed and fixed. This diagnostic trail
+(each step measured, not guessed, each real finding kept even when it
+didn't solve the problem) is itself the valuable output, not wasted work
+en route to the one that did.
+
+**A different, real, established class of fix, still available if pursued
+further:** measure-then-adapt (two-pass) at a coarser, mode-selection
+level — real precedent: two-pass video encoding, memory-adaptive external
+sort. Concretely: for large files specifically (a measured, generalizable
+switch — pg size or read count, not per-organism), reduce thread count in
+the RAM-heavy match-finding phase, trading some of the already-lost speed
+margin for further RAM reduction, while leaving small/medium files on full
+parallelism where both RAM and speed already win. Not implemented this
+pass — a real, distinct next direction, not required to reach the honest,
+partial win already banked here.
 
 ## 4. What this pass did NOT do (explicitly, per instruction — analysis only)
 

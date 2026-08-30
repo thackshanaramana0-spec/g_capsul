@@ -61,6 +61,22 @@ static inline bool pack(const char* p,uint64_t& out){
 }
 
 int main(int argc,char** argv){
+    // RAM FIX -- confirmed real driver of the C. elegans-scale RSS gap
+    // after three application-level hypotheses were measured and ruled
+    // out (allrefs/cleanRefs double-holding, c/cr scope overlap, res[]
+    // per-thread capacity -- see LAYER_BY_LAYER_ANALYSIS.md section 3c
+    // for the full trail). glibc's default allocator gives each thread
+    // its own malloc arena (up to 8x core count by default); freed memory
+    // in one arena isn't consolidated across others, which shows up as
+    // real RSS bloat the application's own logical lifetime never
+    // predicts. Confirmed directly: MALLOC_ARENA_MAX=1 dropped C. elegans
+    // peak RSS from 1,300,968 KB to 1,187,404 KB (-8.7%), byte-identical
+    // correctness unaffected (0-diff, same clean-ref count). This is a
+    // well-established, safe, zero-correctness-risk allocator tuning
+    // (not a novel guess) -- setting it here via mallopt() makes the fix
+    // robust to however the binary gets invoked, not dependent on an
+    // external environment variable at every call site.
+    mallopt(M_ARENA_MAX,1);
     if(argc<2){ fprintf(stderr,"usage: scs5 <in.fq> [maxmm] [minov]\n"); return 1; }
     const int      MAXMM = argc>2?atoi(argv[2]):3;
     const uint32_t MINOV = argc>3?(uint32_t)atoi(argv[3]):40;
@@ -1340,6 +1356,8 @@ int main(int argc,char** argv){
             }
             for(auto& x:th) x.join();
             size_t nm=0;
+            size_t capBytes=0; for(auto& v:res) capBytes+=v.capacity()*sizeof(Ref);
+            fprintf(stderr,"    [diag] run() T=%u qlen=%zu res[] total capacity=%zu B (%.1f MB)\n",T,qlen,capBytes,capBytes/1e6);
             for(auto& v:res){
                 nm+=v.size();
                 for(auto& m:v){
