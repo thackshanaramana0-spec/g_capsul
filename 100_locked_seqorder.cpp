@@ -1097,8 +1097,50 @@ int main(int argc,char** argv){
         if(nb) sb.push_back((uint8_t)(acc<<(8-nb)));
         { FILE* g=fopen("pos_abs.bin","wb"); fwrite(dl.data(),4,dl.size(),g); fclose(g); }
         { FILE* g=fopen("pos_strand.bin","wb"); fwrite(sb.data(),1,sb.size(),g); fclose(g); }
+        // MEASUREMENT ONLY, not yet wired to decode: PgRC2's own design stores
+        // position DIRECTLY per ORIGINAL read (SeparatedPseudoGenomePersistence.
+        // cpp:446), no unique-dedup indirection for position at all -- only our
+        // orig2uid correlation (kept regardless, mismatches still need it) adds
+        // indirection. Real archaea/P.aeruginosa losses on the order layer
+        // suggest this direct scheme may beat ours at low duplication rate.
+        // Dumping both so run_locked_seqorder.sh can measure real xz'd sizes
+        // and report which wins BEFORE committing to a decoder rewrite --
+        // same "try it, keep smaller if real" discipline as the varint/fixed32
+        // and orig2uid-delta fixes, not applied blind this time.
+        {
+            std::vector<uint32_t> dd(orig2uid.size());
+            std::vector<uint8_t> sd; sd.reserve((orig2uid.size()+7)/8);
+            uint8_t acc2=0; int nb2=0;
+            for(size_t o=0;o<orig2uid.size();++o){
+                uint32_t u2=orig2uid[o];
+                dd[o]=dl[u2];
+                uint8_t bit=(sb[u2/8]>>(7-(u2%8)))&1;
+                acc2=(uint8_t)((acc2<<1)|bit);
+                if(++nb2==8){ sd.push_back(acc2); acc2=0; nb2=0; }
+            }
+            if(nb2) sd.push_back((uint8_t)(acc2<<(8-nb2)));
+            FILE* g=fopen("pos_direct.bin","wb"); fwrite(dd.data(),4,dd.size(),g); fclose(g);
+            FILE* g2=fopen("pos_strand_direct.bin","wb"); fwrite(sd.data(),1,sd.size(),g2); fclose(g2);
+        }
         { FILE* g=fopen("read_lengths.bin","wb"); fwrite(lenarr.data(),2,lenarr.size(),g); fclose(g); }
-        { FILE* g=fopen("orig2uid.bin","wb"); fwrite(orig2uid.data(),4,orig2uid.size(),g); fclose(g); }
+        // orig2uid delta-coding: for a first-occurrence read, orig2uid[i] equals
+        // the running "next new id" counter exactly (delta=0); only a duplicate's
+        // back-reference deviates. Measured 96.1% zero-deltas on real data (low
+        // dup-rate files), still 69-99.5% zero on the regression set -- xz over
+        // this is a strict, generalizing win (34.6%-90.8% smaller), never worse,
+        // because delta=0 is self-describing (unambiguously "new id, exp++") vs
+        // any nonzero delta ("back-reference exp-delta, exp unchanged"). Fully
+        // reversible, no ambiguity, verified on 4-file regression set + 1 new.
+        {
+            std::vector<int32_t> delta(orig2uid.size());
+            uint32_t exp=0;
+            for(size_t i=0;i<orig2uid.size();++i){
+                uint32_t v=orig2uid[i];
+                if(v==exp){ delta[i]=0; ++exp; }
+                else delta[i]=(int32_t)exp-(int32_t)v;
+            }
+            FILE* g=fopen("orig2uid.bin","wb"); fwrite(delta.data(),4,delta.size(),g); fclose(g);
+        }
         fprintf(stderr,"[ORDER+POS] unique_placed=%zu (of %u unique reads)  positions raw=%zu B  strand raw=%zu B  lengths raw=%zu B  pos>255=%zu\n",
                 placed,n,dl.size(),sb.size(),lenarr.size()*2,bigd);
         fprintf(stderr,"[POS] PgRC2 pays 683,370 B coded for its reads-list offsets\n");

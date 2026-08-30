@@ -111,8 +111,20 @@ n_unique_pos = len(positions)
 assert len(lengths) == n_unique_pos
 strands = read_bits(f'{WORK}/pos_strand.bin', n_unique_pos)
 
-# ---- orig2uid.bin: original -> unique-id ----
-orig2uid = read_u32(f'{WORK}/orig2uid.bin')
+# ---- orig2uid.bin: original -> unique-id, delta-coded ----
+# delta=0 means "first occurrence" (id = running counter, counter++);
+# nonzero delta means "duplicate, back-reference = counter - delta".
+# Self-describing, no ambiguity -- mirrors the encoder exactly.
+with open(f'{WORK}/orig2uid.bin','rb') as f: _d = f.read()
+_deltas = struct.unpack(f'<{len(_d)//4}i', _d)
+orig2uid = []
+_exp = 0
+for _dv in _deltas:
+    if _dv == 0:
+        orig2uid.append(_exp)
+        _exp += 1
+    else:
+        orig2uid.append(_exp - _dv)
 n_orig = len(orig2uid)
 
 # ---- mismatch streams: mm_count_per_read.bin is indexed by UNIQUE id
