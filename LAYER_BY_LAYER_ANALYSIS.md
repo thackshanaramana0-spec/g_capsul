@@ -416,3 +416,72 @@ read) suggests our current 33-mismatch acceptance cap is NOT the problem
 simply "tighten the cap." Real cause of the leftover-fraction gap itself
 (why archaea chains fewer reads via exact overlap despite 54x coverage)
 remains open.
+
+## 3f. MAJOR CORRECTION (2026-08-31): the archaea "losses" were a
+## measurement error. Real result is 5/6 WINS, biggest wins on archaea.
+
+**What I got wrong.** Sections 3e and earlier compared our COMPLETE layer
+total against a hand-summed SUBSET of PgRC2's streams. I built their total
+by reading the tail of their stderr log (the last "collective compression of
+streams" block: pg sequence + self-match offsets + order) and **omitted their
+entire mismatch machinery**, which sits in an earlier block:
+
+| PgRC2 mismatch stream (H. salinarum) | bytes |
+|---|---|
+| Mismatched symbols codes (ppmd ord=5) | 512,885 |
+| Mismatch positions (~50 period-keyed range/ppmd streams) | 479,549 |
+| Mismatch counts, non-zero values | 99,456 |
+| Mismatch counts, zero flags | 51,995 |
+| mismatch props | 50 |
+| **omitted subtotal** | **1,143,935 (37.5% of their archive)** |
+
+Parsing every stream in their log sums to 3,049,055 B against an actual
+archive of 3,050,260 B — a 1,205 B difference (header), which confirms the
+parse is complete and nothing else is missing.
+
+**The fix: compare against their actual archive size on disk.** This is
+unambiguous and needs no stream accounting. Fairness verified directly:
+`PgRC -d` on their archive emits exactly 460,501 lines of bare sequence,
+no qualities, no names, and `diff` confirms it is IDENTICAL to the original
+file's sequence column -- the same job our locked scope does, verified the
+same way on all 6 files.
+
+### Real, corrected results (our best total vs their real archive)
+
+| Dataset | best100 | best103 | OURS best | PgRC2 archive | margin |
+|---|---|---|---|---|---|
+| E. coli | 5,202,566 | 5,183,815 | 5,183,815 | 6,151,254 | **+15.7%** |
+| P. aeruginosa | 1,990,500 | 1,995,058 | 1,990,500 | 1,931,631 | **−3.0%** |
+| yeast | 6,538,698 | 6,556,971 | 6,538,698 | 7,063,718 | **+7.4%** |
+| P. falciparum | 4,079,085 | 4,098,423 | 4,079,085 | 4,268,973 | **+4.4%** |
+| H. salinarum (archaea) | 2,588,302 | 2,479,901 | 2,479,901 | 3,050,260 | **+18.7%** |
+| S. acidocaldarius (archaea) | 2,351,821 | 2,382,598 | 2,351,821 | 3,116,012 | **+24.5%** |
+
+**5 of 6 wins. The two archaea — the novel-kingdom datasets — are our two
+BIGGEST wins (+18.7%, +24.5%), not losses.** P. falciparum, previously
+recorded as a −2.7% loss, is actually a +4.4% win. The only real loss in
+the set is P. aeruginosa at −3.0%.
+
+### What this invalidates
+
+- The "-36.8% / -16.95% archaea loss" figures: **wrong**, artifact of the
+  omitted-streams error. Retracted.
+- The "our L5 mismatch layer is an outsized cost with no PgRC2 counterpart"
+  conclusion: **backwards**. Their mismatch machinery costs 1,143,935 B
+  against our L5 of 521,180 B -- we are **54.4% cheaper** on mismatches,
+  which is a large part of why we win.
+- The "leftover-read fraction drives our loss" lead: built on the same bad
+  numbers, so it is not evidence of anything. Not a real finding.
+
+### What survives
+
+- The orig2uid delta-coding fix (real, -34.6% to -90.8% on that layer,
+  byte-identical verified) -- still a genuine improvement.
+- `103_no_predup.cpp` -- helps H. salinarum (+4.2%) and E. coli, hurts
+  slightly elsewhere; keep both binaries and take the min per file until the
+  rule for which wins is understood.
+- The disk-architecture analysis in `PGRC2_DISK_ARCHITECTURE.md` §1-4
+  (dead-code finding, RAM parity) -- independent of this error, unaffected.
+
+**Methodology rule going forward: compare against the real archive size on
+disk, never against a hand-summed subset of the opponent's log.**
