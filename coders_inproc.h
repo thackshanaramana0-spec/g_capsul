@@ -58,12 +58,39 @@ static std::vector<uint8_t> xz_compress_lzma(const void* data, size_t n,
     out.resize(pos);
     return out;
 }
-// Try the tuned parameters and the default, keep whichever is smaller. Same
-// "measure, do not assume" discipline used for every other transform here.
+// Byte-plane (structure-of-arrays) split for a uint32 stream: emit every
+// value's byte 0, then every byte 1, and so on. Each plane then has uniform
+// statistics -- the high plane is highly skewed and compresses hard, the low
+// planes are near-random. This beats stride-aligned lp tuning on real data
+// (P. aeruginosa pos_abs: 4,983,604 vs 5,021,990 vs 5,082,152 for xz default).
+static std::vector<uint8_t> u32_byteplanes(const uint8_t* d, size_t n){
+    const size_t cnt=n/4;
+    std::vector<uint8_t> out(cnt*4);
+    for(size_t i=0;i<cnt;++i)
+        for(size_t k=0;k<4;++k) out[k*cnt+i]=d[i*4+k];
+    return out;
+}
+// Try every candidate encoding and keep the smallest, recording the choice in
+// a 1-byte header so the decoder can invert it. "Measure, do not assume" --
+// the same discipline used for every other transform here. PgRC2 does the
+// equivalent with its selector coders.
+//   0 = xz default, 1 = lzma lc2/lp2/pb2, 2 = byte-planes + xz,
+//   3 = byte-planes + lzma lc0/lp0/pb0
 static std::vector<uint8_t> xz_best_for_u32(const void* data, size_t n){
-    auto a = xz_compress(data,n);
-    auto b = xz_compress_lzma(data,n,2,2,2);
-    return (!b.empty() && b.size()<a.size()) ? b : a;
+    std::vector<std::vector<uint8_t>> cand(4);
+    cand[0] = xz_compress(data,n);
+    cand[1] = xz_compress_lzma(data,n,2,2,2);
+    if(n>=4 && n%4==0){
+        auto bp = u32_byteplanes((const uint8_t*)data,n);
+        cand[2] = xz_compress(bp.data(),bp.size());
+        cand[3] = xz_compress_lzma(bp.data(),bp.size(),0,0,0);
+    }
+    int best=0; size_t bs=SIZE_MAX;
+    for(int i=0;i<4;++i) if(!cand[i].empty() && cand[i].size()<bs){ bs=cand[i].size(); best=i; }
+    std::vector<uint8_t> out; out.reserve(bs+1);
+    out.push_back((uint8_t)best);
+    out.insert(out.end(), cand[best].begin(), cand[best].end());
+    return out;
 }
 
 // ---------- mismatch symbol coder (from 50_mismatch_coder_real.cpp) ----------
