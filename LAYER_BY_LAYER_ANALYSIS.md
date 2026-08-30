@@ -77,13 +77,21 @@ numbers, this session's own measurement on the identical E. coli file.
 
 **Major finding: PgRC2's OWN order/permutation stream is its single most
 expensive stream — 2,915,270 B, bigger than its entire sequence stream
-(1,312,634 B).** This directly contradicts an assumption this session
-implicitly carried ("PgRC2's order is cheap, ours is the expensive part") —
-it isn't. Order/read-list-restoration is expensive for BOTH tools; PgRC2
-just pays it as one big LZMA'd raw permutation, while we pay it as two
-smaller, more targeted arrays (L4 position 526,888 B + L8 orig2uid 890,332 B
-= 1,417,220 B combined) — **a real, already-confirmed advantage on this
-specific axis** (1.4M vs 2.9M), not something needing further work.
+(1,312,634 B).** Order/read-list-restoration is expensive for BOTH tools,
+confirmed real, not an assumption.
+
+**CORRECTION (found and fixed in a later pass, self-caught):** this
+section originally claimed "our combined L4+L8 (1,417,220 B) already beats
+PgRC2's 2.9M" — that used L4=526,888, the number from the position-sorted
+delta-coded ROUND 2 attempt (see section 3), which was tried, found to net
+zero elsewhere, and REVERTED. The actual, current, committed L4 is
+2,796,144 B (the direct per-unique-id, non-delta-coded version actually
+shipped). **Real, corrected comparison: L4+L8 = 3,686,476 B, which is
+WORSE than PgRC2's 2,915,270 B — we LOSE on the position/order axis on
+E. coli too, not just on P. aeruginosa.** We still win E. coli overall
+(5,784,514 vs 6,144,327) only because sequence+refs (L1+L3=1,346,506) beat
+PgRC2's equivalent enough to cover this gap. This was a real error in this
+document, not a code bug — corrected here rather than left standing.
 
 **Open question, not resolved in this pass:** the ~50 "range_coder/ppmd,
 period=1..50" lines in PgRC2's log don't map cleanly to a single named
