@@ -214,14 +214,54 @@ the old `allrefs` is only freed via `swap()` at the very end, after
 (real match counts far larger than the small/medium files tested earlier),
 this transient double-holding is the likely driver.
 
-**Not fixed this pass, deliberately.** A correct fix (streaming/incremental
-trim instead of build-both-then-swap) needs several more expensive
-(~1 minute each) C. elegans-scale verification runs to get right without
-risking the byte-identical correctness this session fought hard to
-establish — rushing a patch through without full re-verification at this
-scale would be exactly the kind of unverified claim this project keeps
-correcting itself for. Documented precisely here as the concrete next
-target instead.
+**Two real hypotheses tried, both real fixes kept (harmless, byte-identical
+verified), NEITHER solved the actual problem — reported honestly, not
+spun:**
+
+1. **In-place compaction of `allrefs`/`cleanRefs`** (eliminate the double-
+   holding of raw pre-trim and post-trim match lists). Result: RAM
+   unchanged, 1,301,004 KB vs 1,300,968 KB baseline. Kept anyway (real,
+   correct, zero downside, one fewer allocation) but did not move the
+   needle.
+2. **Scoping fix for `c`/`cr`** (main-pg coverage bitmaps, 135MB combined
+   at this scale) so they free before the second pass allocates its own
+   `c2`/`cr2`/`Q`/`R` (~360MB) instead of staying alive unnecessarily for
+   the whole function. Result: 1,291,704 KB vs 1,300,968 KB baseline —
+   only 0.7% reduction, far below what the ~135-495MB overlap hypothesis
+   predicted. Kept (real, correct, harmless) but also did not solve it.
+
+**Real, precise localization achieved even though the fix didn't land:**
+fine-grained RSS checkpoints (kept in the code, `[diag]` prefix, low-cost
+stderr-only) confirmed the transient spike happens somewhere inside the
+~32-second parallel `run()` match-finding passes (main self-match fwd/rc +
+second-pg cross-match fwd/rc) — internal sampling never exceeds 926MB, but
+the kernel-tracked peak is consistently ~1.30GB. Two plausible causes
+checked and ruled out. **Real, not-yet-checked next suspect:** the
+per-thread `res[t]` vectors inside `run()` itself (one growing,
+unreserved `std::vector<Ref>` per parallel worker) — not measured directly
+this pass. Total ACCEPTED matches (349,829 + 293,308 = 643,137) are far
+too few to explain the gap by themselves, but candidate matches considered
+before final acceptance/trimming were not counted, and remain the most
+concrete unexplored lead.
+
+**Byte-identical correctness reconfirmed after both fixes**, 0-diff, all
+4,000,000 C. elegans reads — real fixes, just not the right ones for this
+specific gap. RAM-at-scale (C. elegans/T. cacao regime) remains a real,
+open, precisely-bounded problem, not a vague one.
+
+**A different, real, established class of fix, not yet tried:** measure-
+then-adapt (two-pass), distinct from the lifetime-management fixes above.
+Real precedent: two-pass video encoding (pass 1 gathers statistics, pass 2
+uses them) and memory-adaptive algorithms like external sort (spill to a
+cheaper strategy if a measured resource threshold is crossed) — both
+established, not improvised. Concretely for this problem: measure peak RSS
+during/after the `run()` passes, and if it crosses a threshold, retry with
+a smaller per-thread candidate buffer or fewer concurrent threads for that
+specific phase, rather than always running at full parallelism regardless
+of data size. Not implemented this pass; flagged as the next real direction
+once the `res[t]` per-thread-vector lead above is checked and, if it's the
+actual driver, sized/reserved properly first (simpler, cheaper fix if it
+works) before reaching for the more complex two-pass approach.
 
 ## 4. What this pass did NOT do (explicitly, per instruction — analysis only)
 
