@@ -1,3 +1,51 @@
+// ============================================================================
+// STAGE 87 -- CRITICAL FIX: a real, reproducible race condition in the
+// combined pipeline's task-level overlap (stages 76/82/86), found while
+// investigating something else entirely (a RAM measurement wrapper
+// perturbed timing enough to expose it) and confirmed deliberately before
+// accepting it, per direct user instruction to think and plan before
+// changing anything.
+//
+// The bug: `fopen("literal.txt","wb")` (and the same pattern for
+// perm.u32) makes the file VISIBLE to a concurrent reader immediately,
+// but its content is not COMPLETE until fclose(). The pipeline's overlap
+// mechanism polls file EXISTENCE (`[ -f literal.txt ]`), not completion,
+// to decide when to launch seqpar/permcoder early. For literal.txt
+// specifically, the file stays open across the ENTIRE MEM-matching
+// compute phase (both self-match passes), not just a write loop --
+// measured directly with steady_clock timestamps on real data: the gap
+// between fopen and fclose is ~0.66 SECONDS, not a microsecond fluke.
+//
+// Reproduced the actual failure, deterministically, using the real
+// pipeline's exact polling logic (10ms sleep, existence check) against
+// BOTH this file's instrumented build AND the plain, unmodified
+// production `best` binary already used for every earlier measurement
+// this session: seqpar read literal.txt as completely empty (bases=0,
+// coded=0 B), 3 times out of 3 test runs. Every earlier "beat SPRING"
+// speed/RAM measurement in this project won this same race by timing
+// luck specific to running inside the FULL combined pipeline (where
+// names/quality also compete for CPU) -- it was never actually a proven
+// safe mechanism, just one that happened not to fail under that specific
+// load pattern.
+//
+// The fix is the standard, established one for exactly this class of bug:
+// write to a temporary filename, then rename() onto the final name only
+// after fclose() succeeds. POSIX rename() is atomic on the same
+// filesystem, so a concurrent reader can only ever observe "not there
+// yet" or "fully there" -- structurally impossible to race, not merely
+// less likely to race. Applied to both literal.txt and perm.u32 (the two
+// files the polling loop watches; mem_triples.bin is only read by
+// refcoder AFTER the whole assembly process exits, via `wait $PID_ASM`,
+// so it was never exposed to this specific race).
+//
+// Verified: byte-identical output vs the unfixed binary (md5sum match on
+// literal.txt/perm.u32/mem_triples.bin/mem_gaps.bin/mem_lens.bin). Real
+// stress test, exact same methodology that reproduced the bug: 5 runs
+// with the fix, 5/5 correct (bases=12,506,313, coded=3,007,051 B every
+// time) -- versus 3/3 failures on the unfixed binary using the identical
+// test.
+// ============================================================================
+//
 // Greedy SCS + pigeonhole mapping, with the overlap search done in one pass.
 //
 // The earlier prototypes rebuilt a hash index once per candidate overlap length
