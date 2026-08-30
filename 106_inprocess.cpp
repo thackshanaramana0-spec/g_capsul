@@ -1772,8 +1772,28 @@ int main(int argc,char** argv){
         { auto r=STR.mm_ref.bytes(), o=STR.mm_obs.bytes();
           STR.mm_ref.release(); STR.mm_obs.release();
           ar.put("mm_sym", mmc::encode(r,o)); }
-        { auto v=STR.mm_pos.bytes();       STR.mm_pos.release();       ar.put("mm_pos",      xz_compress(v.data(),v.size())); }
-        { auto v=STR.mm_count.bytes();     STR.mm_count.release();     ar.put("mm_count",    xz_compress(v.data(),v.size())); }
+        // mm_count first: its values drive the mm_pos bucketing, and the
+        // decoder gets it the same way.
+        std::vector<uint16_t> mmcounts;
+        { auto v=STR.mm_count.bytes();
+          mmcounts.resize(v.size()/2);
+          if(!mmcounts.empty()) memcpy(mmcounts.data(), v.data(), mmcounts.size()*2);
+          STR.mm_count.release();
+          ar.put("mm_count", xz_compress(v.data(),v.size())); }
+        { auto v=STR.mm_pos.bytes();       STR.mm_pos.release();
+          auto t = mmpos_bucket_transpose(v, mmcounts);
+          // invertibility is a correctness claim, so prove it here rather
+          // than assert it -- same discipline the other coders use.
+          if(mmpos_untranspose(t, mmcounts) != v){
+              fprintf(stderr,"[mm_pos] TRANSFORM ROUND TRIP FAILED -- writing flat stream\n");
+              ar.put("mm_pos", xz_compress(v.data(),v.size()));
+          } else {
+              const size_t flat = xz_compress(v.data(),v.size()).size();
+              auto coded = xz_compress(t.data(),t.size());
+              fprintf(stderr,"[mm_pos] bucket+transpose %zu vs flat %zu (%+.1f%%)\n",
+                      coded.size(), flat, 100.0*((double)coded.size()-flat)/(flat?flat:1));
+              ar.put("mm_pos", coded);
+          } }
         // L6 N restoration
         { auto v=STR.n_pos.bytes();        STR.n_pos.release();        ar.put("n_pos",       xz_compress(v.data(),v.size())); }
         { auto v=STR.n_indices.bytes();    STR.n_indices.release();    ar.put("n_indices",   xz_compress(v.data(),v.size())); }
