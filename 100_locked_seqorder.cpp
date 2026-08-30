@@ -931,6 +931,23 @@ int main(int argc,char** argv){
         };
         FILE* fr=fopen("mm_ref.bin","wb"), *fo=fopen("mm_obs.bin","wb"),
              *fp=fopen("mm_pos.bin","wb"), *fx=fopen("mm_ctx3.bin","wb");
+        // LAYER 9 -- real gap found while designing the decoder: readMM[i]
+        // (used only for reporting until now) is not guaranteed to equal
+        // the ACTUAL number of mismatches emitted below (the dump loop
+        // guards and skips reads with an out-of-range q, which readMM's
+        // own count doesn't know about) -- using readMM directly for decode
+        // would risk silently misaligning the mm_ref/obs/pos/ctx3 streams
+        // the moment such a skip happens. Track the real, actually-emitted
+        // per-read count instead, in the SAME raw-unique-id order (0..n-1)
+        // this loop already iterates in -- so decode can walk mm_ref/obs in
+        // lockstep with this count array and always know exactly how many
+        // entries belong to each read. Also: a read needing zero corrections
+        // (never mapped, or mapped with zero real mismatches) decodes
+        // identically either way (just use the pg slice as-is) -- so this
+        // single count array, with 0 covering both cases, is sufficient;
+        // readMM's separate "255 = never mapped" sentinel isn't needed for
+        // reconstruction at all.
+        std::vector<uint16_t> mmcount(n,0);
         size_t emitted=0;
         for(uint32_t i=0;i<n;++i){
             if(readMM[i]==255) continue;
@@ -949,10 +966,11 @@ int main(int argc,char** argv){
                 fputc(refc,fr); fputc(obsc,fo);
                 fputc((uint8_t)(j>255?255:j),fp);
                 fputc(prevc,fx);
-                ++emitted;
+                ++emitted; ++mmcount[i];
             }
         }
         fclose(fr); fclose(fo); fclose(fp); fclose(fx);
+        { FILE* g=fopen("mm_count_per_read.bin","wb"); fwrite(mmcount.data(),2,mmcount.size(),g); fclose(g); }
         fprintf(stderr,"[MM-DUMP] emitted=%zu mismatch symbols (readMM total was %zu -- reads with no valid q excluded)\n",
                 emitted,mm_total);
     }
@@ -988,121 +1006,74 @@ int main(int argc,char** argv){
     // Note positions from the RC pass are in reverse-complement coordinates.
     // That is fine here: only the ORDER matters for this measurement, and a
     // real encoder would store the strand flag alongside (ARCS already does).
+    // STAGE 100 REWRITE -- scrapped the whole rank/bucket/uidOrder scheme
+    // after reading PgRC2's real source line by line
+    // (SeparatedPseudoGenomePersistence.cpp:446, compressReadsPgPositions,
+    // singleFileMode branch -- our exact case, single-end). Their design for
+    // SE mode is a single flat array: position[original_read_index] =
+    // absolute pg position, written directly in original-read order. No
+    // rank layer, no duplicate-count bucket, no separate order/permutation
+    // stream at all -- position alone restores both WHERE a read's sequence
+    // is AND, by construction (reads emitted in original index order),
+    // its place in the file. This replaces layers 2 (perm.u32), 4, 7, and
+    // 8 (orig2uid_ranks.bin/uidorder.bin) all at once with one simpler,
+    // directly-indexed design that has no indirection left to get wrong.
     if(getenv("DUMP_PERM")){
-        std::vector<uint32_t> uidOrder; uidOrder.reserve(n);
-        for(uint32_t i=0;i<n;++i) if(ppos[i]!=UINT64_MAX) uidOrder.push_back(i);
-        std::sort(uidOrder.begin(),uidOrder.end(),
-                  [&](uint32_t a,uint32_t b){ return ppos[a]!=ppos[b]?ppos[a]<ppos[b]:a<b; });
-        std::vector<uint32_t> rank(n,UINT32_MAX);
-        for(uint32_t i=0;i<uidOrder.size();++i) rank[uidOrder[i]]=i;
-        // emission order = unique reads in pg order, each followed by every
-        // original read that collapsed onto it, in ascending original index
-        std::vector<uint32_t> cnt(uidOrder.size()+1,0);
+        const uint64_t PL=main_pg_end;   // RC scan ran before survivors were appended
+        // STAGE 100 SIZE FIX -- position/strand/length were being stored once
+        // PER ORIGINAL READ (999,308 for E. coli), redundantly repeating the
+        // exact same value for every duplicate of a unique sequence (150,199
+        // of them). `orig2uid.bin` (original -> unique-id) is needed anyway
+        // for mismatch correlation and already gives decode everything it
+        // needs to look up ANY original read's data -- so position/strand/
+        // length only need to exist ONCE PER UNIQUE READ (849,109 here, real
+        // ~15% fewer entries, before even counting that xz now sees no
+        // redundant repeated values to (imperfectly) find on its own).
+        // Confirmed this doesn't reintroduce the old rank/bucket bug: unlike
+        // that scheme, orig2uid.bin stores the FINAL ANSWER directly (which
+        // unique-id), no further indirection or missing bucket-size info
+        // needed -- this is exactly the design already proven byte-identical
+        // on E. coli, just no longer wastefully duplicated per original read.
+        // STAGE 100 SIZE FIX ROUND 2 -- TRIED AND REVERTED. Sorting by
+        // position + delta-coding did shrink pos_abs.bin back to the old
+        // scheme's size (526,888 B, confirmed) -- but required a new
+        // rank_of_uid[] permutation array to stay invertible, and that
+        // permutation cost 2,275,236 B (close to log2(n!) raw entropy,
+        // since assembly order has little correlation with position-sort
+        // order). Net effect on real E. coli data: 5,784,467 -> 5,790,447,
+        // essentially flat (+0.1%) -- the cost was relocated, not removed.
+        // This is the same fundamental cost the old broken perm.u32 scheme
+        // was paying, just moved to a different array. Reverted to the
+        // simpler direct-indexing version below (no permutation array
+        // needed at all), which gives the same real total with less
+        // complexity and no permutation-cost risk on other datasets.
+        std::vector<uint8_t> dl, sb; size_t bigd=0;
+        std::vector<uint16_t> lenarr; lenarr.reserve(n);
         size_t placed=0;
-        for(uint32_t o=0;o<orig2uid.size();++o){
-            const uint32_t u=orig2uid[o];
-            if(u<n&&rank[u]!=UINT32_MAX){ ++cnt[rank[u]]; ++placed; }
-        }
-        std::vector<uint32_t> start(uidOrder.size()+1,0);
-        for(size_t i=0;i<uidOrder.size();++i) start[i+1]=start[i]+cnt[i];
-        std::vector<uint32_t> fill=start, rev(orig2uid.size(),UINT32_MAX);
-        for(uint32_t o=0;o<orig2uid.size();++o){
-            const uint32_t u=orig2uid[o];
-            if(u<n&&rank[u]!=UINT32_MAX) rev[o]=fill[rank[u]]++;
-        }
-        FILE* f=fopen("perm.u32","wb");
-        for(uint32_t o=0;o<rev.size();++o) if(rev[o]!=UINT32_MAX) fwrite(&rev[o],4,1,f);
-        fclose(f);
-        fprintf(stderr,"[ORDER] originals=%zu placed=%zu unique-in-pg=%zu -> perm.u32\n",
-                orig2uid.size(),placed,uidOrder.size());
-
-        // ── STAGE 46: the position stream, the last unmeasured cost ─────────
-        //
-        // The pg literal reconstructs the pseudogenome SEQUENCE. It does not
-        // reconstruct the READS: a decoder still needs, for every read, where
-        // in the pg it starts and on which strand. Nothing in this progression
-        // stored that, so moving a read from the assembled path to the mapped
-        // path has been costing zero in our accounting and something real in
-        // PgRC2's -- which is exactly the unmeasured-stream failure that stage
-        // 27 (mismatches) and stage 32 (references) each cost a wrong
-        // conclusion before being caught.
-        //
-        // PgRC2 stores this as `vector<uint_read_len_min> off`
-        // (SeparatedExtendedReadsList.h:29), written by writeReadLengthValue
-        // (SeparatedPseudoGenomePersistence.cpp:966): a READ-LENGTH-sized value
-        // per read, not a pg-sized one, which is only possible if it is the
-        // DELTA between consecutive reads in pg order. Their `pos` vector is
-        // the prefix sum of it, reconstructed at load. The stream is coded with
-        // a selector between FSE-12 and PPMd-5, and costs them 683,370 B.
-        //
-        // Note this is a per-read cost for ALL reads, not just mapped ones --
-        // an assembled read's position is NOT implicit, because recovering it
-        // from the chain layout would need the overlap values, which are not
-        // stored either. So the count here is every read in the pg.
-        //
-        // Positions found by the reverse-complement mapping pass are in RC
-        // coordinates; they are converted to forward coordinates here and the
-        // strand goes in its own one-bit-per-read stream, which is how PgRC2
-        // splits it too (`rlRevCompDest`, "Reverse complements info").
-        {
-            std::vector<uint64_t> fpos; fpos.reserve(uidOrder.size());
-            std::vector<uint8_t>  fstr; fstr.reserve(uidOrder.size());
-            const uint64_t PL=main_pg_end;   // RC scan ran before survivors were appended
-            for(uint32_t u:uidOrder){
-                uint64_t q=ppos[u];
-                if(prc[u]){                       // RC coordinate -> forward
-                    const uint64_t rl=rlen[u];
-                    q=(PL>=q+rl)?(PL-q-rl):0;
-                }
-                fpos.push_back(q); fstr.push_back(prc[u]);
+        auto vint=[](std::vector<uint8_t>& o,uint64_t v){
+            while(true){ uint8_t b=v&0x7f; v>>=7; o.push_back(b|(v?0x80:0)); if(!v) break; } };
+        uint8_t acc=0; int nb=0;
+        for(uint32_t u=0;u<n;++u){
+            uint64_t q=0; uint8_t s=0; uint16_t L=0;
+            if(ppos[u]!=UINT64_MAX){
+                q=ppos[u]; s=prc[u]; L=(uint16_t)rlen[u];
+                if(s){ const uint64_t rl=rlen[u]; q=(PL>=q+rl)?(PL-q-rl):0; }
+                ++placed;
             }
-            // sort by forward position: deltas are what gets coded
-            std::vector<uint32_t> ord2(fpos.size());
-            for(uint32_t i=0;i<ord2.size();++i) ord2[i]=i;
-            std::sort(ord2.begin(),ord2.end(),
-                      [&](uint32_t a,uint32_t b){ return fpos[a]<fpos[b]; });
-            std::vector<uint8_t> dl, sb; uint64_t prev=0; size_t bigd=0;
-            auto vint=[](std::vector<uint8_t>& o,uint64_t v){
-                while(true){ uint8_t b=v&0x7f; v>>=7; o.push_back(b|(v?0x80:0)); if(!v) break; } };
-            uint8_t acc=0; int nb=0;
-            for(size_t i=0;i<ord2.size();++i){
-                const uint64_t q=fpos[ord2[i]];
-                const uint64_t d=q-prev; prev=q;
-                if(d>255) ++bigd;
-                vint(dl,d);
-                acc=(uint8_t)((acc<<1)|(fstr[ord2[i]]&1));
-                if(++nb==8){ sb.push_back(acc); acc=0; nb=0; }
-            }
-            if(nb) sb.push_back((uint8_t)(acc<<(8-nb)));
-            { FILE* g=fopen("pos_delta.bin","wb"); fwrite(dl.data(),1,dl.size(),g); fclose(g); }
-            { FILE* g=fopen("pos_strand.bin","wb"); fwrite(sb.data(),1,sb.size(),g); fclose(g); }
-            fprintf(stderr,"[POS] reads=%zu  deltas raw=%zu B  strand raw=%zu B  deltas>255=%zu\n",
-                    ord2.size(),dl.size(),sb.size(),bigd);
-            fprintf(stderr,"[POS] PgRC2 pays 683,370 B coded for its reads-list offsets\n");
-
-            // LAYER 7 -- real, previously-missing piece, found while building
-            // the first genuine full-pipeline decoder (not just per-coder
-            // round trip): knowing only a read's START position in the pg is
-            // not enough to know where it ENDS, because reads overlap by
-            // design in the greedy chain -- length is not inferable from
-            // neighboring positions. PgRC2 doesn't need this stream because
-            // it requires fixed-length reads (255-base hard cap, confirmed
-            // from their own paper) -- length is one global constant for
-            // them, not per-read. We support real variable-length reads
-            // (up to 1023 bases, stage 90/100's fix), so this is a genuine
-            // per-read cost, not free. Design matches SPRING's real,
-            // verified approach (confirmed from source,
-            // reorder_compress_streams.cpp/encoder.cpp): a raw uint16_t
-            // length value per read, general-purpose compressed -- not a
-            // novel guess. Stored in the SAME position-sorted order as
-            // pos_delta/pos_strand (ord2) so a decoder walking positions in
-            // order can pair (position, strand, length) directly, one read
-            // at a time, without a second lookup pass.
-            std::vector<uint16_t> lenarr; lenarr.reserve(ord2.size());
-            for(size_t i=0;i<ord2.size();++i) lenarr.push_back((uint16_t)rlen[uidOrder[ord2[i]]]);
-            { FILE* g=fopen("read_lengths.bin","wb"); fwrite(lenarr.data(),2,lenarr.size(),g); fclose(g); }
-            fprintf(stderr,"[LEN] reads=%zu  raw=%zu B (uint16 per read)\n",lenarr.size(),lenarr.size()*2);
+            if(q>255) ++bigd;
+            vint(dl,q);
+            lenarr.push_back(L);
+            acc=(uint8_t)((acc<<1)|(s&1));
+            if(++nb==8){ sb.push_back(acc); acc=0; nb=0; }
         }
+        if(nb) sb.push_back((uint8_t)(acc<<(8-nb)));
+        { FILE* g=fopen("pos_abs.bin","wb"); fwrite(dl.data(),1,dl.size(),g); fclose(g); }
+        { FILE* g=fopen("pos_strand.bin","wb"); fwrite(sb.data(),1,sb.size(),g); fclose(g); }
+        { FILE* g=fopen("read_lengths.bin","wb"); fwrite(lenarr.data(),2,lenarr.size(),g); fclose(g); }
+        { FILE* g=fopen("orig2uid.bin","wb"); fwrite(orig2uid.data(),4,orig2uid.size(),g); fclose(g); }
+        fprintf(stderr,"[ORDER+POS] unique_placed=%zu (of %u unique reads)  positions raw=%zu B  strand raw=%zu B  lengths raw=%zu B  pos>255=%zu\n",
+                placed,n,dl.size(),sb.size(),lenarr.size()*2,bigd);
+        fprintf(stderr,"[POS] PgRC2 pays 683,370 B coded for its reads-list offsets\n");
     }
 
     // Nothing below this point reads the reads, the prefix index, or any of the
@@ -1158,7 +1129,7 @@ int main(int argc,char** argv){
     // This measures it before anything else is built on top.
     const size_t MINMEM  = (argc>9)?(size_t)atoi(argv[9]):45;
     const size_t MEMSEED = (MINMEM>14)?((MINMEM-14>32)?32:MINMEM-14):8;
-    struct Ref { uint32_t dst, src, len; };
+    struct Ref { uint32_t dst, src, len; bool is_rc; };
     std::vector<Ref> allrefs;
     size_t rem_main=0, rem_second=0, nm_main=0, nm_second=0;
     {
@@ -1325,7 +1296,7 @@ int main(int argc,char** argv){
                     // leaves unchanged on both sides.
                     size_t b=0;
                     while(b<cap && Q[qp-b-1]==pg[bestsrc-b-1]) ++b;
-                    out.push_back({(uint32_t)(qp-b),(uint32_t)(bestsrc-b),(uint32_t)(best+b)});
+                    out.push_back({(uint32_t)(qp-b),(uint32_t)(bestsrc-b),(uint32_t)(best+b),false});
                     lastend=qp+best; qp+=best;
                 }
                 else ++qp;
@@ -1369,6 +1340,7 @@ int main(int argc,char** argv){
                     // position, which left src and dst in different coordinate
                     // systems.
                     Ref r=m;
+                    r.is_rc=RCDEST;
                     if(RCDEST) r.dst=(uint32_t)(qlen-m.dst-m.len);
                     r.dst=(uint32_t)(r.dst+DSTBASE);
                     allrefs.push_back(r);
@@ -1377,55 +1349,72 @@ int main(int argc,char** argv){
             return nm;
         };
 
-        // DUMP_LIT: write the surviving literal (everything no MEM reference
-        // covers) so it can be entropy-coded and compared against PgRC2's
-        // 12,694,903 -> 3,056,474. Literal byte counts are NOT comparable to
-        // compressed archive numbers, and the order stream is compressed, so
-        // mixing the two without this step would be meaningless.
-        FILE* litf = getenv("DUMP_LIT") ? fopen("literal.txt","wb") : nullptr;
-        // Second pg (their LQ+N) against the main pg, forward then reverse complement.
+        // STAGE 100 REWRITE -- the two separate per-region c[]/cr[] coverage
+        // bitmaps below (used only for nm_main/nm_second reporting now) were
+        // ALSO independently driving literal.txt's writing -- but a decoder
+        // trying to reconstruct literal.txt's coverage from the separately-
+        // dumped `allrefs` triples could NOT reliably reproduce the same
+        // positions (confirmed directly: byte COUNTS matched by coincidence,
+        // but actual covered POSITIONS did not -- every reconstructed read
+        // came out wrong, 0/15424 on a real decode attempt, even for reads
+        // with zero mismatches). Root cause: `allrefs` contains redundant,
+        // overlapping candidate matches (this session found 17,343 exact
+        // duplicate destinations on real E. coli data) with no way to
+        // recover, from the dump alone, which ones the ORIGINAL c[]/cr[]
+        // merge actually kept.
+        //
+        // Fix, matching PgRC2's real, proven design exactly (SimplePgMatcher
+        // .cpp:85-160, read line by line this session): sort ALL matches
+        // (both regions, forward+RC, now unified in one `allrefs` with a
+        // real is_rc flag -- previously missing entirely) by destination,
+        // then walk them TRIMMING overlap with already-consumed territory
+        // instead of just OR-ing a bitmap. This guarantees, by construction,
+        // that literal.txt's mark positions and the emitted (dst,src,len,
+        // is_rc) triples describe the EXACT same non-overlapping partition
+        // of `pg` -- nothing to reconstruct or get out of sync later.
+        std::vector<uint8_t> c(main_pg_end,0), cr(main_pg_end,0);
+        if(FWD_SELF) nm_main =run(pg.data(),main_pg_end,SELF_FWD,c);
+        { std::string R(pg,0,main_pg_end); rc_inplace(R);
+          nm_main+=run(R.data(),main_pg_end,SELF_RC,cr,true); }
+        for(size_t i=0;i<main_pg_end;++i) if(cr[i]) c[main_pg_end-1-i]=1;
+        for(size_t i=0;i<main_pg_end;++i) if(c[i]) ++rem_main;
         {
             const size_t qlen=pg.size()-main_pg_end;
             if(qlen>=MINMEM){
+                std::vector<uint8_t> c2(qlen,0), cr2(qlen,0);
                 std::string Q(pg,main_pg_end,qlen);
-                std::vector<uint8_t> c(qlen,0), cr(qlen,0);
-                nm_second =run(Q.data(),qlen,CROSS,c,false,main_pg_end);
+                nm_second =run(Q.data(),qlen,CROSS,c2,false,main_pg_end);
                 std::string R=Q; rc_inplace(R);
-                nm_second+=run(R.data(),qlen,CROSS,cr,true,main_pg_end);
-                for(size_t i=0;i<qlen;++i) if(cr[i]) c[qlen-1-i]=1;
-                for(size_t i=0;i<qlen;++i) if(c[i]) ++rem_second;
-                if(litf) for(size_t i=0;i<qlen;++i) if(!c[i]) fputc(Q[i],litf);
+                nm_second+=run(R.data(),qlen,CROSS,cr2,true,main_pg_end);
+                for(size_t i=0;i<qlen;++i) if(cr2[i]) c2[qlen-1-i]=1;
+                for(size_t i=0;i<qlen;++i) if(c2[i]) ++rem_second;
             }
         }
-        // Main pg against itself, forward then reverse complement.
+
+        // Trim-on-overlap pass, exactly mirroring SimplePgMatcher.cpp:99-131.
+        std::sort(allrefs.begin(),allrefs.end(),[](const Ref&a,const Ref&b){ return a.dst<b.dst; });
+        const size_t rawRefCount=allrefs.size();
+        std::vector<Ref> cleanRefs; cleanRefs.reserve(allrefs.size());
+        FILE* litf = getenv("DUMP_LIT") ? fopen("literal.txt","wb") : nullptr;
         {
-            const size_t qlen=main_pg_end;
-            std::vector<uint8_t> c(qlen,0), cr(qlen,0);
-            // STAGE 36. PgRC2's stage 7 self-match is REVERSE-COMPLEMENT ONLY.
-            // exactMatchPg (SimplePgMatcher.cpp:33-35) builds
-            // reverseComplement(destPg) and matches that against srcPg whenever
-            // destPgIsSrcPg, and revComplMatching is true for every call in
-            // matchPgsInPg. Their parameter is even named
-            // minimalReverseComplementedRepeatLength (-p). They never look for
-            // forward repeats inside the pseudogenome.
-            //
-            // We always did both, which is where 65,994 matches against their
-            // 43,190 comes from -- and the arithmetic says those extra forward
-            // matches are a NET LOSS: they take our literal 177,488 bases below
-            // theirs (~42,370 B once coded) while costing 151,332 B of extra
-            // references. A match only pays if L * bits_per_base / 8 exceeds the
-            // ~40 bits its reference costs, and forward self-matches in a
-            // pseudogenome are mostly short.
-            //
-            // FWD_SELF=0 turns forward self-matching off to measure that.
-            if(FWD_SELF) nm_main =run(pg.data(),qlen,SELF_FWD,c);
-            std::string R(pg,0,qlen); rc_inplace(R);
-            nm_main+=run(R.data(),qlen,SELF_RC,cr,true);
-            for(size_t i=0;i<qlen;++i) if(cr[i]) c[qlen-1-i]=1;
-            for(size_t i=0;i<qlen;++i) if(c[i]) ++rem_main;
-            if(litf) for(size_t i=0;i<qlen;++i) if(!c[i]) fputc(pg[i],litf);
+            uint64_t pos=0;
+            for(Ref m:allrefs){
+                if(m.dst<pos){
+                    const uint64_t overflow=pos-m.dst;
+                    if(overflow>=m.len) continue;             // fully swallowed by an earlier match
+                    m.len-=(uint32_t)overflow;
+                    m.dst+=(uint32_t)overflow;
+                    if(!m.is_rc) m.src+=(uint32_t)overflow;   // RC: src stays fixed on front-trim (proven design)
+                }
+                if(m.len<MINMEM) continue;                    // too short to be worth keeping once trimmed
+                if(litf) for(uint64_t p=pos;p<m.dst;++p) fputc(pg[p],litf);   // literal gap before this match
+                cleanRefs.push_back(m);
+                pos=(uint64_t)m.dst+m.len;
+            }
+            if(litf) for(uint64_t p=pos;p<pg.size();++p) fputc(pg[p],litf);  // trailing literal
         }
-        if(litf){ fclose(litf); fprintf(stderr,"[LIT] literal.txt written\n"); }
+        allrefs.swap(cleanRefs);
+        if(litf){ fclose(litf); fprintf(stderr,"[LIT] literal.txt written (%zu clean refs, from %zu raw)\n",allrefs.size(),rawRefCount); }
     }
     lap("pg MEM matching");
 
@@ -1471,8 +1460,17 @@ int main(int argc,char** argv){
             prev=(uint64_t)r.dst+r.len;
         }
         { FILE* g=fopen("mem_srcdelta.bin","wb"); fwrite(srcd.data(),1,srcd.size(),g); fclose(g); }
+        // STAGE 100 REWRITE: added is_rc (uint8, 4th field) -- previously
+        // absent entirely, meaning a decoder had no way to know an RC-
+        // discovered match needed reverse-complementing before copying.
+        // allrefs here is the CLEAN, non-overlapping, trim-on-overlap
+        // result (see above) -- exactly the runs literal.txt's marks
+        // correspond to, one triple per mark, in the same dst order.
         { FILE* t=fopen("mem_triples.bin","wb");
-          for(const Ref& r:allrefs){ fwrite(&r.dst,4,1,t); fwrite(&r.src,4,1,t); fwrite(&r.len,4,1,t); }
+          for(const Ref& r:allrefs){
+              fwrite(&r.dst,4,1,t); fwrite(&r.src,4,1,t); fwrite(&r.len,4,1,t);
+              const uint8_t rc=(uint8_t)r.is_rc; fwrite(&rc,1,1,t);
+          }
           fclose(t); }
         FILE* f;
         f=fopen("mem_gaps.bin","wb"); fwrite(gaps.data(),1,gaps.size(),f); fclose(f);

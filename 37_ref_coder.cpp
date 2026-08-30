@@ -105,14 +105,31 @@ int main(int argc,char** argv){
     const uint64_t PGLEN=strtoull(argv[2],nullptr,10);
     const uint64_t MAINEND=strtoull(argv[3],nullptr,10);
 
+    // STAGE 100 REWRITE: mem_triples.bin now has a 4th field (is_rc, 1 byte)
+    // added by the encoder to fix a real reverse-complement bug found while
+    // building the first genuine full-pipeline decoder -- 13 bytes/record
+    // now, not 12. A raw struct-fread at the old stride silently misaligned
+    // every record after the first. Parsed manually (not via a packed
+    // struct) to avoid any compiler-padding surprises. is_rc itself isn't
+    // part of what this tool compresses (that's a separate, tiny, disclosed
+    // stream, 1 bit/match) -- only dst/src/len feed the range coder below,
+    // unchanged from before.
     struct Ref { uint32_t dst,src,len; };
     std::vector<Ref> R;
     {
         FILE* f=fopen(argv[1],"rb"); if(!f){ perror("open"); return 1; }
         fseek(f,0,SEEK_END); const size_t sz=ftell(f); fseek(f,0,SEEK_SET);
-        R.resize(sz/12);
-        if(fread(R.data(),12,R.size(),f)!=R.size()){ fprintf(stderr,"short read\n"); return 1; }
+        const size_t n=sz/13;
+        R.resize(n);
+        std::vector<uint8_t> buf(sz);
+        if(fread(buf.data(),1,sz,f)!=sz){ fprintf(stderr,"short read\n"); fclose(f); return 1; }
         fclose(f);
+        // is_rc (byte 12 of each 13-byte record) isn't used by this tool --
+        // it doesn't feed the src range coder below -- just skipped over.
+        for(size_t i=0;i<n;++i){
+            const uint8_t* p=&buf[i*13];
+            memcpy(&R[i].dst,p,4); memcpy(&R[i].src,p+4,4); memcpy(&R[i].len,p+8,4);
+        }
     }
     std::sort(R.begin(),R.end(),[](const Ref&a,const Ref&b){ return a.dst<b.dst; });
     const size_t n=R.size();
