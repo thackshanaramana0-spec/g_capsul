@@ -103,7 +103,9 @@ print(f"[decode] pg reconstructed: {len(pg)} bytes, {n_triples} clean refs, lite
 # new permutation array costing ~log2(n!) (2.27MB on E. coli) to stay
 # invertible -- net effect was flat, not an improvement. Reverted to this
 # simpler direct-indexing version.
-positions = read_varints(f'{WORK}/pos_abs.bin')
+# STAGE 100 SIZE FIX ROUND 3: pos_abs.bin is now fixed-width uint32 (was
+# varint) -- xz'd fixed-width consistently beat xz'd varint on real data.
+positions = read_u32(f'{WORK}/pos_abs.bin')
 lengths = read_u16(f'{WORK}/read_lengths.bin')
 n_unique_pos = len(positions)
 assert len(lengths) == n_unique_pos
