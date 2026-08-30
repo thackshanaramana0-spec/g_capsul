@@ -705,12 +705,18 @@ int main(int argc,char** argv){
         // buys a shorter pg with a mismatch stream that costs more than the
         // bases it saved. Env-overridable so the real optimum can be swept
         // against the CORRECTED total rather than assumed.
-        // Swept against the CORRECTED total on three datasets: E. coli (150bp)
-        // optimum 12, yeast (150bp) optimum 12, P. aeruginosa (100bp) monotone
-        // but 12 is within 0.25% of its best. So 12 is optimal-or-near-optimal
-        // everywhere tested, not a per-dataset tuning -- vs the old Lmax/3 (=50)
-        // it is -13.4% / -2.2% / -1.9% respectively. Env-overridable for
-        // re-sweeping when the coder costs change.
+        // Re-swept on REAL full files after the mm_pos/mm_cnt transforms made
+        // mismatches cheaper, which shifts this optimum upward (cheaper
+        // mismatches -> accept more of them -> shorter pg). Real optima now:
+        // E. coli 20, P. aeruginosa 27, but validated across all five real
+        // files a fixed 20 LOSES 1.2% on P. falciparum, making the aggregate a
+        // wash (+0.04% worse than a fixed 12). Minimax regret picks 12: worst
+        // case 0.54% versus 20's 1.24%. So 12 stays, now justified on real
+        // full files rather than the subsamples it was first derived from.
+        // The true optimum is dataset-dependent across 12..27 with about a 1%
+        // spread; a formula keyed on a measured property could capture it, but
+        // no such property has been identified, and a per-dataset switch is
+        // forbidden by the standing algorithmic-first rule.
         const uint32_t MAXMAP=(uint32_t)(getenv("MAXMAP")?atoi(getenv("MAXMAP")):12);
         // Sensitivity is SEEDW + SEEDSTRIDE - 1: the shortest exact read/pg
         // stretch guaranteed to be found. copMEM's K is 28 with k1*k2 = 10, so

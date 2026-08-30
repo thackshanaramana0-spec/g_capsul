@@ -824,3 +824,56 @@ per-stream/per-bucket coder selection (0.49% / 0.2%).
 91.7% of its leftover reads at mean 1.39 mismatches; we map 82.5% at 4.70.
 Closing it means replacing the pigeonhole mapper with a MEM-anchored one
 (their copMEM, seed 38). That is the only remaining lever of any size.
+
+## 3m. Two of my own conclusions corrected by measurement
+
+**(a) "The remaining gap is match quality" -- WRONG.** That claim compared our
+mean-per-PLACED-read (4.70) against PgRC2's mean-per-ALL-reads (1.39). Apples
+to oranges. On the same file, real totals:
+
+| | mapped rate | mismatch symbols |
+|---|---|---|
+| ours, MAXMAP=50 | **92.5%** | 2,219,618 |
+| ours, MAXMAP=12 | 82.5% | — |
+| PgRC2 | 91.7% | 1,947,270 |
+
+At a comparable acceptance ceiling we map MORE reads than they do (92.5% vs
+91.7%) and append FEWER (38,352 vs 49,088), with only 14% more mismatch
+symbols -- not the 3.4x quality deficit claimed. **Our pigeonhole matcher is
+not the problem, and replacing it with a MEM-anchored one is NOT the next
+piece of work.** That recommendation is withdrawn.
+
+**(b) The MAXMAP optimum moved once mismatches got cheaper.** The mm_pos and
+mm_cnt transforms lower the price of a mismatch, which shifts the optimum
+upward (accept more, shorten the pg). Re-swept on real full files:
+E. coli optimum 20, P. aeruginosa optimum 27 (vs 12 before).
+
+But validated across all five, a fixed 20 LOSES 1.2% on P. falciparum:
+
+| Dataset | MAXMAP=12 | MAXMAP=20 |
+|---|---|---|
+| E. coli | 8,228,651 | **8,212,728** |
+| P. aeruginosa | 9,366,624 | **9,317,652** |
+| S. aureus | 13,921,389 | **13,846,439** |
+| P. falciparum | **17,494,397** | 17,710,535 |
+| L. major | 29,946,905 | **29,900,569** |
+| **aggregate** | **78,957,966** | 78,987,923 (+0.04%) |
+
+20 wins 4 of 5 yet the aggregate is a wash. Minimax regret picks **12**
+(worst case 0.54% vs 20's 1.24%), so 12 stays -- now justified on real full
+files rather than the subsamples it was first derived from. The true optimum
+is dataset-dependent across 12..27 with ~1% spread; capturing it would need a
+formula keyed on a measured property, and none has been found. A per-dataset
+switch is forbidden by the standing algorithmic-first rule.
+
+### Final state, all BYTE_IDENTICAL on real full files
+
+| Dataset | session start | final | PgRC2 | margin |
+|---|---|---|---|---|
+| E. coli | 9,905,845 | 8,228,651 | 8,864,420 | **+7.2%** |
+| P. aeruginosa | 9,908,025 | 9,366,624 | 9,043,181 | −3.6% |
+| S. aureus | 15,352,697 | 13,921,389 | 13,595,003 | −2.4% |
+| P. falciparum | 18,810,808 | 17,494,397 | 17,219,695 | −1.6% |
+| L. major | 30,612,464 | 29,946,905 | 28,272,652 | −5.9% |
+
+Session total **−6.7%**; aggregate vs PgRC2 **−2.5%**, 1 win / 4 losses.
