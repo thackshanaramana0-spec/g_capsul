@@ -1,4 +1,39 @@
 // ============================================================================
+// STAGE 90 -- CRITICAL FIX: silent data loss on reads >255 bases.
+//
+// Found while properly SCOPING generalization (per direct user instruction:
+// "do not [win on] one dataset... first define scope... how many types of
+// ds and variation") -- testing M. tuberculosis (ERR552797, one of the 10
+// locked accessions, never touched before this) instead of re-testing
+// files already measured. ERR552797 uses 300bp reads.
+//
+// The bug: `rlen` was `std::vector<uint8_t>` (stage 87 line 152), and the
+// loader silently `continue`d past any read >255 bases (stage 87 line 177)
+// -- NOT counted in n_filt like the N-filter above it, just dropped with no
+// record at all. On a 100,000-read real slice of ERR552797, 85,622 reads
+// (299-301bp) were silently discarded before dedup even ran; the loader
+// then reported "unique=8189" out of the 8,189 reads that happened to be
+// <=255bp, which looked like a plausible (if high) dedup rate until checked
+// directly: `sort -u` on the raw sequences shows 99,279 of 100,000 are
+// genuinely distinct. This was never a dedup problem -- it was near-total
+// silent data loss, invisible on every file actually tested this session
+// (yeast 150bp, E. coli 150bp, P. falciparum 100bp, SARS-CoV-2 ~100-221bp)
+// because none of them happened to exceed 255bp. Exactly the failure mode
+// proper scoping exists to catch: an architectural assumption baked in
+// early (uint8 length field), never exercised against the real locked
+// scope's actual read-length range until this file was tried.
+//
+// Fix: widen the length field to uint16_t (max 65535, far beyond any real
+// short-read length -- MiSeq 2x300 tops out at 300bp) and the two matching
+// fixed-size unpack buffers (`ubuf`/`b_`, stage 87 lines 161/231) from 256
+// to 1024 bytes so they can't overflow once longer reads are actually kept.
+// The size-cutoff filter moves from 255 to 1023 to match. Every other use
+// of uint8_t in this file (readMM's per-read mismatch count, 255 as an
+// "unplaced" sentinel) is unrelated to read length and is left untouched --
+// mismatch counts realistically never approach that range.
+// ============================================================================
+//
+// ============================================================================
 // STAGE 87 -- CRITICAL FIX: a real, reproducible race condition in the
 // combined pipeline's task-level overlap (stages 76/82/86), found while
 // investigating something else entirely (a RAM measurement wrapper
@@ -149,7 +184,7 @@ int main(int argc,char** argv){
     // wastes under a word per read and makes a prefix load aligned.
     std::vector<uint64_t> rpk;            // 32 bases per uint64, base 0 in the top bits
     std::vector<uint64_t> woff;           // starting WORD of each read
-    std::vector<uint8_t>  rlen;           // length in bases
+    std::vector<uint16_t> rlen;           // length in bases (uint16: 300bp reads are real, uint8 silently dropped them)
     // STAGE 22 (their stage 6, OrderInfo): to restore the original file order we
     // need, for every ORIGINAL read, where its sequence sits in the pg. Dedup
     // collapses duplicates, so the original->unique map has to be kept too.
@@ -158,7 +193,7 @@ int main(int argc,char** argv){
     {
         std::ifstream f(argv[1]); std::string a,b,c,d;
         std::unordered_map<uint64_t,std::vector<uint32_t>> seen; seen.reserve(1u<<21);
-        std::vector<uint64_t> tmpw; char ubuf[256];
+        std::vector<uint64_t> tmpw; char ubuf[1024];
         auto packstr=[&](const char* q,uint32_t L,std::vector<uint64_t>& out){
             out.clear();
             for(uint32_t i=0;i<L;i+=32){
@@ -174,10 +209,10 @@ int main(int argc,char** argv){
         while(std::getline(f,a)&&std::getline(f,b)&&std::getline(f,c)&&std::getline(f,d)){
             ++n_in;
             if(b.find('N')!=std::string::npos){ ++n_filt; continue; }
-            if(b.size()>255) continue;                       // uint8 length field
+            if(b.size()>1023){ ++n_filt; continue; }         // uint16 length field, matches ubuf/b_ buffer size
             auto& bk=seen[fnv(b.data(),(uint32_t)b.size())]; bool dup=false;
             for(uint32_t id:bk){
-                if(rlen[id]!=(uint8_t)b.size()) continue;
+                if(rlen[id]!=(uint16_t)b.size()) continue;
                 const uint64_t* w=&rpk[woff[id]];
                 const uint32_t nw=((uint32_t)rlen[id]+31)/32;
                 for(uint32_t t=0;t<nw;++t){
@@ -194,7 +229,7 @@ int main(int argc,char** argv){
                 packstr(b.data(),(uint32_t)b.size(),tmpw);
                 woff.push_back(rpk.size());
                 rpk.insert(rpk.end(),tmpw.begin(),tmpw.end());
-                rlen.push_back((uint8_t)b.size());
+                rlen.push_back((uint16_t)b.size());
             }
         }
         rpk.shrink_to_fit(); woff.shrink_to_fit(); rlen.shrink_to_fit();
@@ -228,7 +263,7 @@ int main(int argc,char** argv){
         for(uint32_t j=0;j<L;++j) buf[j]="ACGT"[(w32(base+j)>>62)&3ULL];
     };
     auto rappend=[&](std::string& dst,uint32_t i,uint32_t from){
-        char b_[256]; runp(i,b_); dst.append(b_+from,rlen[i]-from);
+        char b_[1024]; runp(i,b_); dst.append(b_+from,rlen[i]-from);
     };
 
     // ── STAGE 42: prefix-containment removal, generalising dedup ─────────────
@@ -1014,7 +1049,7 @@ int main(int argc,char** argv){
     // the prefix index another ~80 MB. Released before the index is built, so
     // the two allocations never coexist.
     { std::vector<uint64_t>().swap(rpk); std::vector<uint64_t>().swap(woff);
-      std::vector<uint8_t>().swap(rlen); }
+      std::vector<uint16_t>().swap(rlen); }
     { std::vector<uint64_t>().swap(pent); std::vector<uint32_t>().swap(ptab); }
     { std::vector<uint32_t>().swap(nxt);  std::vector<uint32_t>().swap(prv);
       std::vector<uint32_t>().swap(ovl);  std::vector<uint32_t>().swap(ch_h);
