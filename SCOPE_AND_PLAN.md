@@ -15,7 +15,7 @@ Source: `benchmark/DATASET_LOCKED.md`. 10 accessions + 4 human chr20 samples.
 | 1 | SRR2584863 | E. coli | 576MB | 150bp | full (~1.3 bits/val) | YES — win vs SPRING+Genozip |
 | 2 | ERR552797 | M. tuberculosis | 217MB (300bp reads) | 300bp | full | YES — found+fixed silent data loss (stage 90) |
 | 3 | SRR554369 | P. aeruginosa | 334MB | 100bp | full (39 symbols) | YES — **LOSE to SPRING by 10.8%**, broad (seq+order AND quality both worse) |
-| 4 | ERR5181310 | SARS-CoV-2 | 30MB | variable 40-221bp | near-degenerate (3 symbols) | YES — LOSE to Genozip 8.7%, root-caused (reorder cost) |
+| 4 | ERR5181310 | SARS-CoV-2 | 30MB | variable 40-221bp | near-degenerate (3 symbols) | YES — **FIXED (stage 91)**: was -8.7% vs Genozip, now +7.6% win vs Genozip, +15.2% win vs SPRING |
 | 5 | ERR17740259 | S. aureus | 970MB | 148bp | binned (6 symbols) | YES — win vs SPRING (10.4%) and Genozip (39.6%) |
 | 6 | SRR065390 | C. elegans | 11GB | ? | ? | NO — large-genome/auto-chunk regime |
 | 7 | DRR976266 | S. cerevisiae | 1.67GB | 150bp | near-degenerate (4 symbols) | YES — win, but easy case |
@@ -26,12 +26,13 @@ Source: `benchmark/DATASET_LOCKED.md`. 10 accessions + 4 human chr20 samples.
 
 **Real coverage so far: 7/10 primary accessions, 0/4 human.** Every new dataset
 tested surfaced something real: M. tuberculosis found a silent data-loss bug
-(fixed), SARS-CoV-2 and now P. aeruginosa are genuine SIZE LOSSES against real
-tools (8.7% vs Genozip, 10.8% vs SPRING respectively), not close calls. Honest
-current tally against SPRING: win on 5/7 (E. coli, yeast, P. falciparum, S.
-aureus, L. major-marginal), lose on 2/7 (SARS-CoV-2, P. aeruginosa). This is
-the actual state of the generalization claim — not "wins everywhere," a real,
-scoped, partial win with two known, mechanistically distinct losses.
+(fixed, stage 90), SARS-CoV-2 found and then FIXED a real architectural loss
+(stage 91, conditional reorder), P. aeruginosa found a real, still-open
+quality-coder gap. Current honest tally against SPRING: win on 6/7 (E. coli,
+yeast, P. falciparum, S. aureus, L. major-marginal, SARS-CoV-2), lose on 1/7
+(P. aeruginosa, -10.8%, quality-coder gap). Against Genozip: win 7/7. This is
+the actual state — one real, mechanistically-understood, unresolved loss
+remains, not zero.
 
 ## 2. The algorithmic lesson, synthesized (not fragments)
 
@@ -93,9 +94,16 @@ file's timing or size.
 5. Test the 3 remaining untested primary accessions (C. elegans, T. cacao,
    L. major already done) — wait, L. major is done; remaining: C. elegans,
    T. cacao only, both large-file regime, deferred to step 8.
-6. Implement the conditional-reorder decision (cheap pre-assembly estimate of
-   reordering gain vs exact `log2(n!)` cost) — fixes SARS-CoV-2 for certain;
-   re-check after step 4 whether it also fixes some of P. aeruginosa's gap.
+6. **DONE (stage 91, `91_conditional_reorder.sh`).** Not a pre-assembly
+   estimate — actually runs both candidates (reorder path; raw-unreordered
+   seqpar encode) and keeps the measured smaller total. Verified: fixes
+   SARS-CoV-2 (was -8.7% vs Genozip, now +7.6%; was +0.2% vs SPRING, now
+   +15.2%). Verified NO regression on all 6 other tested files — each still
+   measures reorder as cheaper and picks it, byte-for-byte same totals as
+   before. Confirmed does NOT fix P. aeruginosa (raw-unreordered there is
+   2,394,279 B vs reorder's 1,900,348 — reordering correctly stays chosen),
+   which rules out reorder-cost as P. aeruginosa's cause and confirms it's
+   purely the quality-coder gap (item 4).
 7. Re-verify all previously-tested files are unaffected by step 6 (byte-identical
    assembly output where reordering is still chosen; correct decode where it
    isn't) — same round-trip standard as stage 90's regression check.
