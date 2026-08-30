@@ -1,5 +1,11 @@
 # Combined pipeline: names + quality + parallelism + the full head-to-head
 
+> **CORRECTION (see section 8): a real race condition invalidated the
+> speed and RAM "wins" over SPRING reported below in sections 5-7. The
+> current, honest, trustworthy numbers are in the "Final result" table at
+> the end — read section 8 before quoting anything about speed or RAM
+> from this document. Size was never affected and remains real.**
+
 Chronological record of the 2026-08-30 session that extended the reimplementation
 past sequence+order (see `BEST_METHOD_C_REIMPLEMENTATION.md` and
 `PIPELINE_LEDGER.md`) into names, quality, real parallelism, and — for the first
@@ -300,35 +306,81 @@ instead of working around it.
 
 ---
 
-## Final result — real, repeated measurements, same file, same machine
+## 8. CORRECTION — a real race condition invalidated the speed and RAM wins (stages 87-89)
 
-| | Ours | Real SPRING | Real Genozip |
+While investigating RAM headroom (section 7), a measurement wrapper perturbed
+timing enough to expose something serious: the stage 76+ task-level overlap
+mechanism (assembly running concurrently with names/quality, `seqpar`/
+`permcoder` started as soon as `literal.txt`/`perm.u32` appeared) had a real,
+reproducible race. `fopen("literal.txt","wb")` makes the file VISIBLE to a
+concurrent reader immediately; content isn't COMPLETE until `fclose()`.
+Measured directly (steady_clock timestamps, real data): that gap is **~0.66
+seconds**, not a microsecond fluke — `literal.txt` stays open across the
+entire MEM-matching compute phase, not just a write loop. The pipeline's
+overlap mechanism polled file *existence*, never *completion*.
+
+Reproduced deterministically using the real pipeline's exact polling logic
+against the plain, unmodified production `best` binary already used for
+every earlier measurement this session: `seqpar` read `literal.txt` as
+completely empty (`bases=0`, `coded=0 B`), **3 times out of 3 test runs**.
+Every earlier "beat SPRING on speed/RAM" measurement in this project won
+this race by timing luck specific to running inside the full pipeline —
+never a proven-safe mechanism.
+
+**Fix (stage 87)**: write to a temp filename, `rename()` onto the final name
+only after `fclose()` — POSIX `rename()` is atomic, so a reader can only
+ever see "not there yet" or "fully there." Verified byte-identical output;
+5/5 correct under the exact test that broke the original binary 3/3 times.
+
+**Consequence, found by re-measuring with the race actually closed**:
+`seqpar` had been finishing suspiciously fast in earlier "successful" runs
+because it was sometimes reading truncated data, not because it was
+genuinely fast — and RAM measurements caught it before it allocated its
+real ~828 MB match-model working set. Both the speed and RAM "wins" over
+SPRING were artifacts of the bug, not real results.
+
+**Per direct instruction, reverted the overlap scheduling** (stage 89,
+`89_combined_sequential.sh`) back to straightforward sequential execution —
+assembly runs to full completion, then each downstream tool runs one at a
+time. Safe by construction, not by patching around a race. Every other real,
+verified improvement from this session (stage 87's atomic writes, stage
+74/75's sequence-coder speed fix, stage 84/85's RAM bounded-queue fix) is
+kept; only the risky overlap *scheduling* was reverted.
+
+---
+
+## Final result — real, repeated measurements, same file, same machine, honest
+
+| | Ours (safe, sequential) | Real SPRING | Real Genozip |
 |---|---|---|---|
 | **Total size** | 12,292,029 B | 14,284,800 B | 39,204,566 B |
 | vs ours | — | **13.95% smaller** | **68.65% smaller** |
-| **Speed** (avg of 5 runs, stage 82) | 3.696 s | 3.940 s | 1.55 s |
-| vs ours | — | **6.2% faster** | still behind (untargeted — Genozip's speed was never the stated goal, SPRING's size-competitiveness was) |
-| **Peak combined RAM** (stage 86) | ~386 MB | 1.37 GB | 898 MB |
-| vs ours | — | **~72% less** | **~57% less** |
+| **Speed** (avg of 5 runs, stage 89) | 6.539 s | 3.886 s | ~1.55 s |
+| vs ours | — | **~32% slower — NOT faster, correcting the earlier claim** | slower |
+| **Peak RAM** (stage 89) | 828 MB | 1.37 GB | 898 MB |
+| vs ours | — | **~40% less** | **~8% less** |
 
-Speed measured 5 runs each, back to back, same machine, stage 82 (encode-only
-seqpar wired into the overlap pipeline):
-`ours: 3.674s / 3.656s / 3.637s / 3.865s / 3.647s → avg 3.696s`
-`SPRING: 3.957s / 3.862s / 4.001s → avg 3.940s` (compress-only, 3-run baseline)
+Speed measured 5 runs each, back to back, same machine, stage 89 (sequential,
+safe):
+`ours: 6.498s / 6.428s / 6.893s / 6.393s / 6.483s → avg 6.539s`
+`SPRING (fresh, same conditions): 3.808s / 3.767s / 3.967s / 3.848s / 4.038s → avg 3.886s`
 
-Peak RAM: all concurrently-running processes sampled (deduplicated by PID via
-`pstree`, a real double-counting bug in an earlier sampling attempt was caught
-and fixed before trusting the number), stage 86 (real bounded-queue fix for
-names/quality, see section 7 above): 386,236 KB. SPRING/Genozip measured with
-`/usr/bin/time -v`, 12 threads each. The RAM fix's real payoff is larger on
-files with more blocks than this one test file has (verified separately: 48%
-reduction for quality once block count exceeds queue capacity, the regime
-real large files hit) — this table reports the honest number for the actual
-test file, not the best case.
+Peak RAM: measured with a low-overhead C poller (`/tmp/rsspoll.c` pattern,
+reading `/proc/[pid]/status` directly — bash-subprocess-based polling was
+tried first and found to have its own real blind spot: `pstree`/`grep`/`sort`
+per sample is slow enough to miss short-lived processes entirely, a second
+real measurement bug caught before trusting a number from it). 828,560 KB,
+matching `seqpar`'s real standalone footprint exactly (its match-model hash
+table, `MMBITS=24`, ~67 MB × 12 concurrent chunks).
 
-**All three axes — size, speed, RAM — are real, measured, reproducible wins over
-SPRING on this dataset. Size and RAM also beat Genozip; Genozip's raw speed
-still leads and was not the target of this work.**
+**Size is genuinely real and unaffected** — it was always measured via
+sequential, race-free runs throughout this whole project, never exposed to
+the bug. **Speed and RAM are real, honest, and worse than previously
+claimed**: slower than SPRING (not faster), a smaller RAM margin than
+claimed (real but modest, not the ~69-72% figure reported before this
+correction). This section supersedes every speed/RAM number in sections
+5-7 above — those sections are kept for the technical record of what was
+tried and how the bug was found, not as current, trustworthy figures.
 
 ---
 
