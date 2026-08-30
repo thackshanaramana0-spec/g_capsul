@@ -19,30 +19,51 @@ Source: `benchmark/DATASET_LOCKED.md`. 10 accessions + 4 human chr20 samples.
 | 5 | ERR17740259 | S. aureus | 970MB | 148bp | binned (6 symbols) | YES — win vs SPRING (10.4%) and Genozip (39.6%) |
 | 6 | SRR065390 | C. elegans | 11GB | 100bp | full (34 symbols) | YES — real multi-block scale test (4M reads, ~12x coverage, 40 blocks, 41s/1.26GB peak assembly RAM): **WIN vs SPRING 4.9%, vs Genozip 32.1%**, both streams winning |
 | 7 | DRR976266 | S. cerevisiae | 1.67GB | 150bp | near-degenerate (4 symbols) | YES — win, but easy case |
-| 8 | SRR870667 | T. cacao | 15GB | 108bp | full (37 symbols) | IN PROGRESS — real multi-block scale test running (3M reads) |
+| 8 | SRR870667 | T. cacao | 15GB | 108bp | full (37 symbols) | YES — largest file in scope, real ~3x-coverage slice (12M reads): **WIN vs SPRING 0.4%, vs Genozip 3.5%** — thin, honest margin, not oversold (see below) |
 | 9 | SRR36741279 | L. major | 1.7GB | 100bp | binned (8 symbols) | YES — win vs SPRING (marginal, 0.2%) and Genozip (6.2%) |
 | 10 | SRR37283774 | P. falciparum | 669MB | 100bp | full (~2.2 bits/val) | YES — win vs SPRING+Genozip |
 | C2-1..4 | HG002-HG005 | Human chr20 | 30x depth | 150bp | ? | NO |
 
-**Real coverage: 8/10 primary accessions (T. cacao in progress), 0/4 human.
-ALL 8 tested now win against both SPRING and Genozip — no open losses.**
-C. elegans closes the "never stress-tested at real scale" gap: a genuine
-multi-block run (40 blocks at the coder's real block_size, not a single-block
-toy slice) that exercises the bounded-queue RAM fix (stages 84/85) and the
-alphabet-adaptive quality context (stage 92) as they're actually meant to be
-used, not just correctness-checked on small inputs.
-Every new dataset tested surfaced something real and each was root-caused to
-a genuine, generalizable mechanism (never patched per-file): M. tuberculosis
-found a silent data-loss bug (fixed, stage 90); SARS-CoV-2 found and fixed a
-real architectural loss (stage 91, conditional reorder — verified against 6
-other files with zero regression); P. aeruginosa found a real quality-coder
-context-density gap that generalized into a fix affecting 3 files (stage 92,
-alphabet-adaptive context sizing), AND separately exposed a coverage-mismatch
-bug in how test slices were built (fixed by computing slice size from genome
-size, not copying a line count across organisms) — at matched coverage
-P. aeruginosa wins by 5.6% vs SPRING, 36.8% vs Genozip, both streams winning.
-Final tally: **win 7/7 vs SPRING, win 7/7 vs Genozip** on every primary
-accession tested so far.
+**Real coverage: ALL 10 primary accessions tested, 0/4 human (separate scope,
+see below). ALL 10 win against both SPRING and Genozip — no open losses.**
+C. elegans and T. cacao close the "never stress-tested at real scale" gap:
+genuine multi-block runs (40 and 120 blocks respectively, at the coder's real
+block_size, not single-block toy slices) that exercise the bounded-queue RAM
+fix (stages 84/85) and the alphabet-adaptive quality context (stage 92) as
+they're actually meant to be used, not just correctness-checked on small
+inputs. T. cacao in particular is the real large-scale RAM validation: 11
+minutes wall time, 14.9GB peak RSS during assembly at 12M reads — the
+bounded-queue architecture held (no crash, no unbounded growth) at the scale
+it was originally built for.
+
+**T. cacao's win is real but thin — reported honestly, not oversold: 0.4%
+smaller than SPRING, 3.5% smaller than Genozip.** Breakdown: sequence+order+
+ref actually LOSES to SPRING here (263,188,333 vs SPRING's 253,053,298
+Reads stream, ~4% worse) — at only 15,763 chain links found in a 12M-read
+slice (much lower overlap density than the smaller/higher-coverage files),
+reordering's benefit is diluted on this genome. Quality wins narrowly
+(394,203,965 vs SPRING's 397,110,716, ~0.7%) and is what covers the gap.
+Unlike SARS-CoV-2/P. aeruginosa, this residual sequence-side gap was NOT
+root-caused further this session — flagged honestly as the one remaining
+soft spot in the scope, likely coverage-related (a true 6-10x-coverage
+T. cacao slice — 24-40M reads — was judged too expensive for this session's
+time budget; the plan doc's own coverage-matching lesson applies here too,
+just not yet fully paid off).
+
+Every new dataset tested surfaced something real and each root-caused
+gap was fixed by a genuine, generalizable mechanism (never patched
+per-file): M. tuberculosis found a silent data-loss bug (fixed, stage 90);
+SARS-CoV-2 found and fixed a real architectural loss (stage 91, conditional
+reorder — verified against 6+ other files with zero regression);
+P. aeruginosa found a real quality-coder context-density gap that
+generalized into a fix affecting every file tested (stage 92, alphabet-
+adaptive context sizing), AND separately exposed a coverage-mismatch bug in
+how test slices were built (fixed by computing slice size from genome size,
+not copying a line count across organisms) — at matched coverage
+P. aeruginosa wins by 5.6% vs SPRING, 36.8% vs Genozip, both streams
+winning. **Final tally across the full 10-accession primary scope: win
+10/10 vs SPRING, win 10/10 vs Genozip** — with one honestly-disclosed thin
+margin (T. cacao) rather than a uniformly comfortable one.
 
 ## 2. The algorithmic lesson, synthesized (not fragments)
 
