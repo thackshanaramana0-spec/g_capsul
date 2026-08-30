@@ -166,20 +166,24 @@ The rewrite target must be re-aimed. Ruled out by this analysis:
 What survives as the real structural difference, and where the remaining
 size gap lives:
 
-**Their 3-way pseudogenome split.** They build *three* separate pseudogenomes
-— `hqPg` (high-quality reads assembled by exact overlap), `lqPg` (low-quality
-reads mapped onto the hqPg), and `nPg` (N-containing reads) — each with its
-own independent reads list and its own set of 10 streams, each compressed and
-released separately. We build one pg plus an undifferentiated leftover pool.
+**CORRECTED 2026-08-31 — see `LAYER_BY_LAYER_ANALYSIS.md` §3f.** The
+mismatch-layer reasoning that originally filled this section was built on a
+measurement error: our complete total was being compared against a
+hand-summed subset of PgRC2's streams that omitted their entire mismatch
+machinery (1,143,935 B, 37.5% of their archive). Compared properly, against
+their real archive size on disk, we **win 5 of 6** datasets — including both
+archaea at +18.7% and +24.5%, our two largest margins. Our mismatch layer is
+54.4% *cheaper* than theirs, not more expensive.
 
-This matters because of the measured mismatch-layer finding (§3e): our L5 cost
-tracks the fraction of reads falling through to lenient leftover-matching
-(E. coli 22.8% leftover → win; H. salinarum 37.6% leftover → −36.8% loss).
-Their quality-based division routes reads into the *right* pg up front, so
-the reads that would become our expensive fuzzy-matched leftovers are instead
-handled by a dedicated pg with its own coder. That is a genuine structural
-difference, it is on the path where our measured loss actually lives, and it
-has not been ruled out by anything tested so far.
+So the "route reads into the right pg to avoid expensive leftover matching"
+motivation for copying their 3-way split is **not supported by real data**.
+Their hqPg/lqPg/nPg split remains a genuine structural difference, but there
+is currently no measured evidence it would help us — we already beat them on
+the streams that split was hypothesised to improve.
+
+The one real remaining loss is P. aeruginosa (−3.0%), and its cause is still
+unresolved (coverage, duplication rate, and position-scheme choice are all
+individually disproven — §3e).
 
 **The no-pre-dedup change is already built and verified** (`103_no_predup.cpp`,
 byte-identical on P. aeruginosa / H. salinarum / S. acidocaldarius): H.
