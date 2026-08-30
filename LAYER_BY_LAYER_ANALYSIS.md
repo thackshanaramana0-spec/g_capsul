@@ -671,3 +671,74 @@ independent of the disk-staging question. Not yet implemented or measured.
 
 Disk cost, separately: intermediates are 361 MB for a 456 MB input (~0.8x), so
 C. elegans would stage ~8.7 GB and T. cacao ~17 GB.
+
+## 3i. Stage 106 — single-process, in-memory, compress-and-release
+## (built, verified, and measured to change almost nothing)
+
+Implements all four architecture rows PgRC2 wins on paper: single process,
+zero intermediate files, live-object stage handoff, explicit
+compress-and-release. Every stream is an `open_memstream` FILE*, so all the
+existing fwrite/fputc calls are untouched and provably write the same bytes,
+just into RAM. The three custom coders were extracted into shared headers
+(`seqpar_core.h`, `coders_inproc.h`) so the standalone binaries cannot
+diverge; liblzma replaces the external xz calls.
+
+**Coder equivalence verified on real data (not assumed):**
+
+| coder | in-process | standalone binary |
+|---|---|---|
+| seqpar (L1) | 2,893,487 | 2,893,487 |
+| refcoder (L3) | 235,983 | 235,983 |
+| mmcoder (L5) | 166,874 | 166,874 |
+| xz (L4) | 4,735,648 | 4,735,640 (8 B container diff) |
+
+Full pipeline decodes **BYTE_IDENTICAL** on real full P. aeruginosa.
+
+**Head-to-head, same input, real full P. aeruginosa:**
+
+| axis | OLD multi-process | NEW single-process | verdict |
+|---|---|---|---|
+| wall time | 12.8 s | 12.8 s | **no change** |
+| peak RSS | 255 MB | **309 MB** | **NEW WORSE** |
+| intermediate files | 21 (42 MB) | **0** | NEW better |
+| archive size | 9,482,924 | 9,483,072 | +148 B (length headers) |
+
+**Two earlier "Winner: PgRC2" claims are hereby corrected:**
+
+1. *Memory release.* Holding streams in RAM is WORSE than the multi-process
+   design. Process exit already bounded peak RAM to the max over stages; we
+   got that bound for free and now pay +54 MB to keep streams live. Their
+   `disposeReadsList` discipline is what makes single-process VIABLE, not what
+   makes it better.
+2. *Stage handoff / re-read cost.* Intermediates are 42 MB, not the 361 MB
+   quoted earlier (that figure wrongly included the input copy). Re-reading
+   42 MB is invisible against 12.8 s of compute -- hence zero speed change.
+
+The single real gain is 0 intermediate files instead of 21. **The architecture
+does not touch archive size, which is where we actually lose.**
+
+## 3j. Seed geometry ruled out as the mapping-rate cause
+
+Hypothesis: with SEEDSTRIDE=22 and SEEDW=16, a 101bp read yields only 4 seeds,
+so pigeonhole guarantees finding placements up to 3 mismatches while we accept
+12 -- suggesting we MISS mappable reads and append them.
+
+**Refuted by measurement** (real P. aeruginosa, corrected accounting):
+
+| SEEDSTRIDE | seeds | mapped | appended | TOTAL |
+|---|---|---|---|---|
+| 22 | 4 | 421,413 | 89,595 | 9,483,072 |
+| 12 | 8 | 421,560 | 89,448 | 9,481,297 |
+| 8 | 11 | 421,570 | 89,438 | 9,481,160 |
+| 4 | 22 | 421,474 | 89,534 | 9,481,884 |
+
+5.5x more seeds moves mapping by 61 reads and the total by 0.01%. The 89,595
+appended reads genuinely have no acceptable placement -- we are not failing to
+FIND one.
+
+**So the remaining gap is match QUALITY, not sensitivity.** At MAXMAP=50 we
+map more reads but at mean 4.70 mismatches/read; PgRC2 achieves 91.7% mapped
+at mean 1.39. Their placements are ~3.4x better, which comes from their
+matcher (copMEM, seed 38) and/or their hqPg being built only from both-side-
+overlapped reads. Replacing our pigeonhole mapper is the next real piece of
+work; nothing smaller has moved this number.
