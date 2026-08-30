@@ -1034,3 +1034,40 @@ architecture rewrite (0% size, 0% speed, +54 MB RAM), seed geometry (0.01%),
 no-pre-dedup as an unconditional change (0.27%), reverse-offset mismatch
 positions alone (mixed), per-stream/per-bucket coder selection among
 xz/bzip2/zstd (0.49% / 0.2%).
+
+## 3q. Remaining losses traced to assembly, not coding — coding is closed
+
+**L. major (−0.9%), stream by stream vs PgRC2 on the same file:**
+
+| stream | ours | PgRC2 | |
+|---|---|---|---|
+| positions | 15,515,217 | 15,625,904 | we win 110,687 |
+| mm_pos | 1,121,860 | 1,774,295 | we win 652,435 |
+| mm_sym | 364,885 | 917,584 | we win 552,699 |
+| mm_cnt | ~355k+ | 745,872 | we win |
+| pg sequence | 9,379,560 | 8,509,123 | **we lose 870,437** |
+| self-match refs | 1,311,720 | 322,985 | **we lose 988,735** |
+
+The refs "loss" is not inefficiency: we find **412,595** matches removing 42 M
+bases (worth ~9.8 MB of literal at 0.234 B/base) for 1.31 MB of reference
+data -- hugely net positive. They self-match far less (5.8% on their LQ pg).
+
+**Our reference coder is already optimal.** It spends 25.43 bits/match against
+`log2(pg_len)` = 25.9 bits for an unbounded source. Alternatives measured on
+the real stream, all WORSE:
+
+| encoding | bytes |
+|---|---|
+| **current bounded range coder** | **1,311,720** |
+| src raw uint32 + xz | 1,390,362 |
+| (dst−src) delta + xz | 1,442,328 |
+| (dst−src) delta + byte-planes | 1,332,486 |
+
+Delta-against-destination losing tells us the matches are genuinely
+long-range, which is what a pseudogenome should produce. No coding gain left.
+
+**Conclusion: every stream we code is now at or better than PgRC2's, or
+provably near its entropy floor.** Both remaining losses reduce to one thing
+-- their pseudogenome is smaller than ours for the same input (L. major
+8,509,123 vs our 9,379,560 coded). That is assembly structure (their HQ/LQ
+division), not stream coding, and it is the only avenue left.
