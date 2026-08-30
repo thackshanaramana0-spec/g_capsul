@@ -103,6 +103,57 @@ this pass — flagged, not guessed at.
 | `37_ref_coder.cpp` (range-coded src position) | Their sequence-mapping offset streams (LZMA, `Good/Bad sequence mapping - offsets`) | Both code a src/offset value per match | We use a range coder bounded by `log2(pg_len)`; they use generic LZMA over raw offsets — ours is a tighter, purpose-built floor (confirmed: `bounded floor 137,058 B` vs `this coder 137,065 B`, 99.995% of floor) |
 | `50_mismatch_coder_real.cpp` (mmcoder) | `Mismatched symbols codes` (PPMd ord=5) | Both code substituted bases at mismatch positions | Untested this pass whether our context (ref+pos+prev-base) beats their PPMd-5 pound-for-pound — real open comparison, not done here |
 
+## 3b. Follow-up: 4-dataset regression profiling (E. coli, yeast win; P.
+aeruginosa, P. falciparum lose) — real per-layer fractions, one real
+reversal found
+
+| Dataset | L1(seq) | L4(pos) | L5(mm) | L8(orig2uid) | Result |
+|---|---|---|---|---|---|
+| E. coli (WIN) | 20.9% | 48.3% | 12.6% | 15.4% | +5.8% |
+| yeast (WIN) | 42.6% | 41.9% | 3.5% | 9.0% | +2.0% |
+| P. aeruginosa, small slice (LOSE) | 83.2% | 13.0% | 1.1% | 1.4% | -5.9% |
+| P. falciparum (LOSE) | 43.4% | 27.2% | 6.1% | 20.6% | -2.7% |
+
+Initial hypothesis from this table: losses correlate with L1 (sequence)
+dominance. **Checked directly with real bits/base across all 4 — refuted.**
+Sequence-coder efficiency is nearly identical everywhere (1.72-1.94
+bits/base, P. aeruginosa is not a real outlier: 1.9425 vs E. coli's 1.9200).
+The coder itself is not the differentiator.
+
+**Re-tested P. aeruginosa at proper coverage** (the same coverage-mismatch
+fix that flipped it to a win vs SPRING/Genozip earlier this session,
+`pa_test_big.fq`, 1.4M reads) — **real, important finding: this does NOT
+flip it against PgRC2.** Still loses, slightly worse (-6.1% vs -5.9% on the
+small slice). Coverage-mismatch was a real bug for the SPRING/Genozip
+comparison specifically; it does not explain or fix the PgRC2 comparison —
+two genuinely different mechanisms, confirmed by testing rather than
+assumed to be the same bug.
+
+At the larger, coverage-matched scale, P. aeruginosa's layer-fraction
+profile actually SHIFTS to look like a winning dataset (L1 29.1%, L4 51.5%
+— now L4-dominant like E. coli/yeast) **yet still loses overall.** This
+directly refutes the fraction-based hypothesis as causal — it was likely
+confounded by dataset size (small slices amortize fixed-overhead layers
+less), not a real signal of where the loss lives.
+
+**The real, precise mechanism, found by comparing PgRC2's own real stderr
+output for this exact file:** their order/permutation stream —
+`5,600,000 → 4,188,183 B` (raw LZMA over the permutation, no dedup/rank
+scheme at all) — is CHEAPER than our combined position+orig2uid cost on
+this file (L4 4,393,572 + L8 715,096 = 5,108,668 B). **This is the opposite
+of what E. coli showed** (there, ours beat theirs: 1.4M vs 2.9M). Real
+generalization lesson: our position+correlation-array approach is not
+universally better than PgRC2's simple raw-permutation+LZMA — it depends on
+the file's actual duplication/order structure, and P. aeruginosa's
+structure favors their simpler approach. This is exactly the kind of
+single-dataset overfit risk the standing "algorithmic, not per-dataset"
+rule exists to catch — found here specifically because a second dataset
+was checked, not assumed from the first.
+
+**Not yet resolved:** why P. aeruginosa's permutation structure favors raw
+LZMA over our scheme specifically — real next question, not answered this
+pass (analysis only, per instruction).
+
 ## 4. What this pass did NOT do (explicitly, per instruction — analysis only)
 
 - Did not modify any code.
