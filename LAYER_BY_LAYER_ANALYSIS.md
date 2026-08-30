@@ -1113,3 +1113,40 @@ one dataset preferring a higher MINOV (+1.9% at 40 vs +0.7% at 16), but the
 aggregate strongly favours 16 and it remains a win either way.
 
 Only P. aeruginosa still loses, at −0.4%.
+
+## 3s. Joint MINOV/MAXMAP sweep — 5/5 is reachable, but costs aggregate
+
+MINOV and MAXMAP interact (a shorter pg changes the mismatch/literal trade),
+so they were swept jointly at MINOV=16. On real P. aeruginosa:
+
+| MAXMAP | total | vs PgRC2 |
+|---|---|---|
+| 12 | 9,083,594 | −0.45% |
+| 16 | 9,053,141 | −0.11% |
+| 20 | 9,044,863 | −0.02% |
+| **24** | **9,041,007** | **+0.02%** |
+| 28 | 9,042,724 | +0.01% |
+
+P. aeruginosa -- the last loss -- flips to a win at MAXMAP=24. Validated
+across all five, all BYTE_IDENTICAL:
+
+| Dataset | MAXMAP=12 | MAXMAP=24 | PgRC2 |
+|---|---|---|---|
+| E. coli | **7,974,367** (+9.89%) | 7,987,812 (+9.89%) | 8,864,420 |
+| P. aeruginosa | 9,083,594 (−0.45%) | **9,041,007 (+0.02%)** | 9,043,181 |
+| S. aureus | 13,498,413 (+0.71%) | **13,456,136 (+1.02%)** | 13,595,003 |
+| P. falciparum | **16,448,646 (+4.48%)** | 16,892,395 (+1.90%) | 17,219,695 |
+| L. major | 27,765,787 (+1.79%) | **27,641,405 (+2.23%)** | 28,272,652 |
+| **aggregate** | **+2.89%, 4/5 wins** | +2.57%, **5/5 wins** | |
+
+**Real trade, stated rather than cherry-picked.** MAXMAP=24 wins every
+dataset but costs 0.32 points of aggregate, almost all of it P. falciparum
+(+4.48% -> +1.90%). Minimax regret strongly favours 12 (worst case 0.47%
+versus 24's 2.70%, again P. falciparum).
+
+**Shipped default stays MAXMAP=12**, on aggregate compression and minimax
+regret -- the two criteria this project has used throughout. P. aeruginosa's
+−0.45% is disclosed rather than tuned away. If a "wins on every dataset"
+claim is ever wanted, MAXMAP=24 delivers it at a measured, documented cost;
+that is a presentation decision, not an engineering one, and should be made
+deliberately.
