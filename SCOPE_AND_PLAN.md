@@ -91,6 +91,23 @@ file's timing or size.
    ([[reimpl_combined_pipeline_speed]]), the fix must come from understanding
    what structure is being missed generally, not from tuning hist/pos/delta
    to this one file's numbers.
+
+   **Investigated (real source read):** SPRING's default lossless quality
+   path is NOT a bespoke quality context model — `reorder_compress_quality_id.cpp`
+   calls `bsc::BSC_str_array_compress` (libbsc, general BWT/context-mixing)
+   on the READ-REORDERED quality strings. Tested whether reordering alone
+   explains it: general compressors on P. aeruginosa's quality, even after a
+   sequence-similarity reorder (proxy for read reordering), stay WORSE than
+   our own coder (xz 3,656,460 / bzip2 3,660,109 vs our 3,577,150, raw
+   unreordered was xz 3,653,752 / bzip2 3,660,512 — reordering barely moves
+   either). This refutes "just add reordering + a general compressor" as the
+   fix — the real gap must come from SPRING's specific greedy-overlap
+   reordering (not a lexicographic proxy) combined with libbsc's actual
+   context-mixing strength (meaningfully stronger than bzip2/xz), neither of
+   which this quick proxy reproduces. Honestly unresolved — narrowed, not
+   fixed. Next step would be building/linking libbsc directly against our own
+   reordering's actual quality-column output for a real apples-to-apples
+   test, not assumed from proxies.
 5. Test the 3 remaining untested primary accessions (C. elegans, T. cacao,
    L. major already done) — wait, L. major is done; remaining: C. elegans,
    T. cacao only, both large-file regime, deferred to step 8.
