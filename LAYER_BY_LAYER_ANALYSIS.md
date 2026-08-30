@@ -742,3 +742,46 @@ at mean 1.39. Their placements are ~3.4x better, which comes from their
 matcher (copMEM, seed 38) and/or their hqPg being built only from both-side-
 overlapped reads. Replacing our pigeonhole mapper is the next real piece of
 work; nothing smaller has moved this number.
+
+## 3k. Equal-pg-size comparison finds the real gap: mismatch POSITION coding
+
+Comparing at our own operating point was misleading -- the pg/mismatch
+trade-off means the two tools sit at different points on the same curve. The
+honest comparison is at EQUAL pg size. Our MAXMAP=40 point has L1=2,482,224
+against PgRC2's 2,485,786, so the mismatch streams are directly comparable:
+
+| stream | ours (MAXMAP=40) | PgRC2 | |
+|---|---|---|---|
+| mm_sym | 362,567 | 370,090 | we are 2% BETTER |
+| **mm_pos** | **951,720** | **748,988** | **we are 27% WORSE** |
+| mm_cnt | 365,376 | 323,856 | we are 13% worse |
+
+Mismatch position coding is the concrete remaining gap.
+
+**PgRC2's technique, now implemented** (compressRlMisRevOffDest,
+SeparatedPseudoGenomePersistence.cpp:823-905): route each read's positions
+into a bucket chosen by that read's mismatch COUNT, then TRANSPOSE each bucket
+so column k holds the k-th mismatch of every read in it.
+
+| variant (real P. aeruginosa, MAXMAP=40) | mm_pos | vs flat |
+|---|---|---|
+| flat (baseline, already reverse-offset coded) | 951,720 | — |
+| bucket by count | 875,792 | −8.0% |
+| bucket + transpose | 832,364 | −12.5% |
+| + per-bucket coder selection | 831,255 | −12.7% |
+| PgRC2 | 748,988 | −21.3% |
+
+Per-bucket coder selection is worthless here (xz wins 38 of 40 buckets);
+their remaining edge over −12.7% is their range/PPMd coders, not the
+bucketing. **An earlier prototype of this at 100k-read scale showed it HURT
+(+78.8%) -- that was wrong only because the buckets were too small to
+amortize; at real scale it is a solid win.** Prototypes on subsamples cannot
+be trusted for anything bucket-structured.
+
+**Shipped** in `106_inprocess.cpp` with an encoder-side round-trip self-check
+(invertibility is a correctness claim, so it is proven at runtime, not
+asserted; falls back to the flat stream if it ever fails).
+
+Real full P. aeruginosa at the shipping MAXMAP=12, BYTE_IDENTICAL verified:
+mm_pos 627,976 -> 543,180 (**−13.5%**), archive 9,483,072 -> **9,398,276**
+(−0.89%), gap to PgRC2 −4.9% -> **−3.9%**.
