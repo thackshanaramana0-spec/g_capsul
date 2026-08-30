@@ -927,3 +927,55 @@ file when the accounting bug was first fixed). 1 win / 4 losses.
 
 Remaining losses are only two streams: pg sequence (+407,701) and self-match
 refs (+164,283). Both are assembly-side, not coding-side.
+
+## 3o. LZMA parameters aligned to the integer stride — the decisive fix
+
+The equal-pg-size comparison (ours MAXMAP=40, literal within 99 B of theirs)
+finally located the real loss, and it was NOT the sequence coder:
+
+| stream | ours | PgRC2 | delta |
+|---|---|---|---|
+| pg sequence | 2,485,885 | 2,485,786 | **+99 (parity)** |
+| **order/positions** | **5,517,012** | **4,964,368** | **+552,644** |
+| mm_pos | 826,852 | 748,988 | +77,864 |
+| self-match refs | 124,934 | 71,700 | +53,234 |
+| mm_sym | 360,060 | 370,090 | −10,030 (we win) |
+
+Our sequence coder is at parity with theirs. The position stream was the loss.
+
+**Cause:** PgRC2 codes positions with explicitly chosen LZMA parameters
+(`getReadsPositionsCoderProps`, SeparatedPseudoGenomePersistence.cpp:451-460):
+`lc=8, lp=2, pb=2` with a 6 MB dictionary, rather than the xz default
+`lc=3, lp=0, pb=2`. **`lp=2` aligns the literal-position context to a 4-byte
+stride**, which is exactly the shape of a uint32 position array. We were
+feeding an integer array to a coder configured for byte-oriented text.
+
+Swept on real pos_abs (6,631,484 B raw):
+
+| parameters | coded |
+|---|---|
+| xz -9 default (lc=3,lp=0,pb=2) | 5,082,152 |
+| lc=8,lp=2,pb=2 (PgRC2's) | 5,038,185 |
+| **lc=2,lp=2,pb=2** | **5,021,990** |
+| delta4 + lzma2 | 5,242,954 |
+
+Applied via liblzma custom filters to every uint32-shaped stream (pos_abs,
+orig2uid, n_indices), keeping whichever of tuned/default is smaller.
+
+### FINAL RESULT — all BYTE_IDENTICAL on real full locked files
+
+| Dataset | session start | final | PgRC2 | margin |
+|---|---|---|---|---|
+| E. coli | 9,905,845 | **7,995,703** | 8,864,420 | **+9.8%** |
+| P. aeruginosa | 9,908,025 | **9,260,575** | 9,043,181 | −2.4% |
+| S. aureus | 15,352,697 | **13,331,585** | 13,595,003 | **+1.9%** |
+| P. falciparum | 18,810,808 | **16,752,837** | 17,219,695 | **+2.7%** |
+| L. major | 30,612,464 | **28,526,841** | 28,272,652 | −0.9% |
+
+**Session reduction −10.3%. Aggregate vs PgRC2 +1.46% — we now WIN overall,
+3 of 5 datasets, all byte-identical.**
+
+The single-stream test predicted −1.2%; the real effect was −2.8% to −4.4% per
+dataset, because the tuning applies to every uint32 stream and those dominate
+the archive. Worth remembering: a per-stream microbenchmark understates a fix
+that generalises across streams.
