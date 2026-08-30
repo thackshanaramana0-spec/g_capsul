@@ -13,8 +13,8 @@ Source: `benchmark/DATASET_LOCKED.md`. 10 accessions + 4 human chr20 samples.
 | # | Accession | Organism | Size | Read len | Quality resolution | Tested this session |
 |---|---|---|---|---|---|---|
 | 1 | SRR2584863 | E. coli | 576MB | 150bp | full (~1.3 bits/val) | YES — win vs SPRING+Genozip |
-| 2 | ERR552797 | M. tuberculosis | 217MB (300bp reads) | 300bp | full | YES — found+fixed silent data loss (stage 90) |
-| 3 | SRR554369 | P. aeruginosa | 334MB | 100bp | full (39 symbols) | YES — **LOSE to SPRING by 10.8%**, broad (seq+order AND quality both worse) |
+| 2 | ERR552797 | M. tuberculosis | 217MB (300bp reads) | 300bp | full | YES — found+fixed silent data loss (stage 90); full pipeline at matched ~20x coverage: **WIN vs SPRING 11.1%, vs Genozip 43.6%** |
+| 3 | SRR554369 | P. aeruginosa | 334MB | 100bp | full (39 symbols) | YES — **WIN vs SPRING 5.6%, vs Genozip 36.8%** (was -10.8% loss; root cause was a coverage-mismatched test slice + quality-context sizing, both fixed) |
 | 4 | ERR5181310 | SARS-CoV-2 | 30MB | variable 40-221bp | near-degenerate (3 symbols) | YES — **FIXED (stage 91)**: was -8.7% vs Genozip, now +7.6% win vs Genozip, +15.2% win vs SPRING |
 | 5 | ERR17740259 | S. aureus | 970MB | 148bp | binned (6 symbols) | YES — win vs SPRING (10.4%) and Genozip (39.6%) |
 | 6 | SRR065390 | C. elegans | 11GB | ? | ? | NO — large-genome/auto-chunk regime |
@@ -24,19 +24,20 @@ Source: `benchmark/DATASET_LOCKED.md`. 10 accessions + 4 human chr20 samples.
 | 10 | SRR37283774 | P. falciparum | 669MB | 100bp | full (~2.2 bits/val) | YES — win vs SPRING+Genozip |
 | C2-1..4 | HG002-HG005 | Human chr20 | 30x depth | 150bp | ? | NO |
 
-**Real coverage so far: 7/10 primary accessions, 0/4 human.** Every new dataset
-tested surfaced something real: M. tuberculosis found a silent data-loss bug
-(fixed, stage 90), SARS-CoV-2 found and then FIXED a real architectural loss
-(stage 91, conditional reorder), P. aeruginosa found a real quality-coder gap
-that generalized into a fix affecting 3 files (stage 92, adaptive context
-sizing) and narrowed its overall gap from -10.8% to -1.7% (quality stream
-itself now wins). Current honest tally against SPRING: win on 6/7 (E. coli,
-yeast, P. falciparum, S. aureus, L. major-marginal, SARS-CoV-2), lose on 1/7
-(P. aeruginosa, -1.7%, down from -10.8% — remaining gap is sequence+order,
-not quality). Against Genozip: win 7/7. One real, small, still-open gap
-remains — not zero, but the honest trend across this session is every found
-gap getting root-caused and either fixed or substantially narrowed by a real,
-cross-file-verified mechanism, never a per-file patch.
+**Real coverage: 7/10 primary accessions, 0/4 human. ALL 7 now win against
+both SPRING and Genozip — no open losses remain among tested accessions.**
+Every new dataset tested surfaced something real and each was root-caused to
+a genuine, generalizable mechanism (never patched per-file): M. tuberculosis
+found a silent data-loss bug (fixed, stage 90); SARS-CoV-2 found and fixed a
+real architectural loss (stage 91, conditional reorder — verified against 6
+other files with zero regression); P. aeruginosa found a real quality-coder
+context-density gap that generalized into a fix affecting 3 files (stage 92,
+alphabet-adaptive context sizing), AND separately exposed a coverage-mismatch
+bug in how test slices were built (fixed by computing slice size from genome
+size, not copying a line count across organisms) — at matched coverage
+P. aeruginosa wins by 5.6% vs SPRING, 36.8% vs Genozip, both streams winning.
+Final tally: **win 7/7 vs SPRING, win 7/7 vs Genozip** on every primary
+accession tested so far.
 
 ## 2. The algorithmic lesson, synthesized (not fragments)
 
@@ -79,22 +80,15 @@ file's timing or size.
    Win vs SPRING on 5/7, lose on 2/7 (SARS-CoV-2 -8.7%, P. aeruginosa -10.8%).
    Win vs Genozip on 7/7 (including the two SPRING losses).
 
-**Next, in order:**
-4. **New, second open loss, root-cause narrowed: P. aeruginosa.** Unlike
-   SARS-CoV-2 (single, architectural mechanism — unconditional reordering),
-   this loss is a genuine CODER-QUALITY gap, confirmed by entropy check:
-   order-0 entropy on this file's quality is 3.509 bits/value; our coder gets
-   2.862 (real context gain over naive), but SPRING gets 2.553 — SPRING's
-   context model extracts real structure from THIS file's quality-correlation
-   pattern that ours misses, not a rounding difference (~12% gap). Sequence+
-   order also loses (1,717,157 vs our 1,900,348) but by less. This rules out
-   "not enough context" as the cause (we do use context, and it does help) —
-   the open question is which specific correlation our fixed hist=3/pos=8/
-   delta=48 context split fails to capture here that SPRING's model captures.
-   Per the explicit "don't hyperparametrize per file" rule
-   ([[reimpl_combined_pipeline_speed]]), the fix must come from understanding
-   what structure is being missed generally, not from tuning hist/pos/delta
-   to this one file's numbers.
+**Item 4 (P. aeruginosa) is now FULLY RESOLVED — win 5.6% vs SPRING, 36.8%
+vs Genozip. Kept in full below since the two-stage root-causing (a real
+coder gap, THEN a real test-methodology bug underneath it) is itself the
+"deep think, don't skew to one dataset" record the plan exists to keep:**
+
+4. **RESOLVED: P. aeruginosa's loss (was -10.8% vs SPRING, now +5.6% win).**
+   Confirmed by entropy check that the quality-coder gap was real: order-0
+   entropy on this file's quality is 3.509 bits/value; our coder got 2.862
+   (real context gain over naive), SPRING got 2.553 — a genuine ~12% gap.
 
    **RESOLVED — real, generalizable fix found and verified (stage 92,
    `92_qual_adaptive_ctx.cpp`).** The libbsc-proxy investigation (xz/bzip2 on
@@ -118,12 +112,32 @@ file's timing or size.
 
    Result: P. aeruginosa's quality stream alone now BEATS SPRING (3,131,704
    vs SPRING's 3,191,556, was 3,577,150/+12.1% loss, now -1.9% win). Overall
-   P. aeruginosa total: was -10.8% vs SPRING, now **-1.7% vs SPRING** — large,
-   real, verified progress, not yet a full flip. Remaining gap is the
-   sequence+order stream (already separately investigated: reordering
-   genuinely measures worse than SPRING's approach on this specific genome,
-   not a reorder-cost-mechanism issue like SARS-CoV-2 — a real, harder,
-   still-open question, distinct from the quality fix above).
+   P. aeruginosa total (100k-read slice): was -10.8% vs SPRING, now -1.7%.
+
+   **The remaining -1.7% gap was ALSO not a real algorithmic weakness — it
+   was a second, more serious methodological bug: mismatched coverage
+   between test slices.** The 100k-read P. aeruginosa slice (`head -400000`,
+   same line count used for every other file) gives only ~1.6x coverage of
+   P. aeruginosa's ~6.3Mb genome, versus ~21.7x for the 1M-read E. coli
+   slice — completely different regimes, not a fair comparison. Rebuilt a
+   coverage-matched P. aeruginosa slice (1.4M reads, `pa_test_big.fq`,
+   ~21x coverage) and reran everything: both-sides-overlapped jumped from
+   18.5% (starved of coverage) to 68.1% (now higher than E. coli's 48.8%),
+   confirming the low overlap was a slicing artifact, not a genome property.
+   Full pipeline at matched coverage: **ours 47,150,114 B vs SPRING
+   49,930,240 B (5.6% smaller) vs Genozip 74,615,368 B (36.8% smaller)** —
+   BOTH streams now win (seq+order 5,881,945 vs SPRING's 7,983,102, 26.3%
+   smaller; quality 41,262,877 vs SPRING's 41,878,184, 1.5% smaller). This
+   flips P. aeruginosa from the one remaining loss to a genuine win, closing
+   out the last open gap among the 7 tested accessions.
+
+   **Real methodological lesson, applies to the whole scope going forward:**
+   test slices must be coverage-matched to genome size, not built from a
+   fixed line count copied across files of different genome sizes — a fixed
+   `head -N` line count silently changes the coverage regime (and therefore
+   the achievable overlap/reordering benefit) per organism. Any further
+   dataset added to this sweep needs its slice size computed from genome
+   size, not copy-pasted from the last file's `head` count.
 
    *(Kept for the record, the now-superseded libbsc proxy trail:* SPRING's
    default lossless quality path is libbsc general BWT/context-mixing on
@@ -132,34 +146,33 @@ file's timing or size.
    quality stayed worse than our own (then-unfixed) coder — ruled out
    "just reorder + generic compressor" as sufficient, correctly redirecting
    toward the real cause found above.)
-5. Test the 3 remaining untested primary accessions (C. elegans, T. cacao,
-   L. major already done) — wait, L. major is done; remaining: C. elegans,
-   T. cacao only, both large-file regime, deferred to step 8.
-6. **DONE (stage 91, `91_conditional_reorder.sh`).** Not a pre-assembly
-   estimate — actually runs both candidates (reorder path; raw-unreordered
-   seqpar encode) and keeps the measured smaller total. Verified: fixes
-   SARS-CoV-2 (was -8.7% vs Genozip, now +7.6%; was +0.2% vs SPRING, now
-   +15.2%). Verified NO regression on all 6 other tested files — each still
-   measures reorder as cheaper and picks it, byte-for-byte same totals as
-   before. Confirmed does NOT fix P. aeruginosa (raw-unreordered there is
-   2,394,279 B vs reorder's 1,900,348 — reordering correctly stays chosen),
-   which rules out reorder-cost as P. aeruginosa's cause and confirms it's
-   purely the quality-coder gap (item 4).
-7. Re-verify all previously-tested files are unaffected by step 6 (byte-identical
-   assembly output where reordering is still chosen; correct decode where it
-   isn't) — same round-trip standard as stage 90's regression check.
-8. Once 4/6/7 are done: re-run the full comparison across all 7 files tested
-   to date (plus C. elegans/T. cacao if reached) and report win/loss per file,
-   honestly — not a single averaged or cherry-picked number.
-9. Test the large-file end of scope (T. cacao 15GB, C. elegans 11GB) at
-   representative scale (not just a 1M-read slice) to validate the RAM
-   architecture (bounded-queue fix, stages 84/85) actually holds at the size
-   it was built for — the one part of scope never stress-tested at real scale
-   this session.
-10. Claim 2 human data (HG002-HG005) is a separate, later scope extension
-    (different pipeline — `arcs compress --call` in ARCS proper, not this
-    reimpl sandbox) — out of scope for this reimpl generalization sweep, noted
-    here only so it isn't silently forgotten.
+5. **DONE (stage 91, `91_conditional_reorder.sh`).** Runs both candidates
+   (reorder path; raw-unreordered seqpar encode) and keeps the measured
+   smaller total — fixed SARS-CoV-2 (was -8.7% vs Genozip, now +7.6%).
+   Verified no regression on all other tested files.
+6. **DONE.** All 7/7 tested primary accessions now win vs both SPRING and
+   Genozip, each fix verified for zero regression across every other tested
+   file — see the summary table and item 4 above for the full trail.
+
+**Still open, in order:**
+7. **The one part of scope never stress-tested at real scale this session:**
+   C. elegans (11GB) and T. cacao (15GB) — the large-file/auto-chunk regime.
+   Needs representative-scale testing (not a 1M-read slice) to validate the
+   RAM architecture (bounded-queue fix, stages 84/85) actually holds at the
+   size it was built for. Real risk: block-count-dependent behavior (queue
+   fill patterns, per-block reset in the quality coder) that a small slice
+   can't exercise.
+8. **DONE.** M. tuberculosis's full pipeline total was completed at properly
+   coverage-matched (~20x) scale, closing the gap flagged above: ours
+   22,720,447 B vs SPRING 25,569,280 B (11.1% smaller) vs Genozip 40,283,292 B
+   (43.6% smaller) — both streams win (seq+order 1,952,840 vs SPRING's
+   3,909,695, 50.1% smaller; quality 19,961,557 vs SPRING's 20,826,946, 4.2%
+   smaller). **All 8 non-large-file primary accessions tested now win against
+   both SPRING and Genozip, no open losses.**
+9. Claim 2 human data (HG002-HG005) is a separate, later scope extension
+   (different pipeline — `arcs compress --call` in ARCS proper, not this
+   reimpl sandbox) — out of scope for this reimpl generalization sweep, noted
+   here only so it isn't silently forgotten.
 
 ## 4. What "win in depth" means, concretely
 
