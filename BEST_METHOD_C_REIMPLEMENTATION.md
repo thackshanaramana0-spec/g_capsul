@@ -1,5 +1,15 @@
 # Best case: the method-c reimplementation
 
+**See [`LOCKED_SEQORDER_SCOPE.md`](LOCKED_SEQORDER_SCOPE.md) for the current,
+corrected, exact-scope comparison against PgRC2's real binary** — this file's
+own numbers below predate a real bug found later (N-containing reads were
+silently dropped with zero storage in every subsequent stage, 87 through 98)
+and an incomplete-scope mistake (an early re-check used only 3 of the 6 real
+cost layers "sequence + read order" actually needs, inflating the apparent
+win). The locked-scope doc has the fixed binary, all 6 real layers, and the
+honest, currently-verified numbers. Treat this file as historical record of
+how the coders were built, not as the current authoritative comparison.
+
 The canonical configuration and its measured result.
 
 The wins in this progression are spread across stages 16-45, each file being the
