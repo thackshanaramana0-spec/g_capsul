@@ -31,14 +31,25 @@ L1=$(ENCODE_ONLY=1 /tmp/seqpar literal.txt 12 12 2>&1 | grep -oP 'coded=\K[0-9]+
 L3=$([ -s mem_triples.bin ] && /tmp/refcoder mem_triples.bin "$PG_LEN" "$MAIN_END" 2>&1 | grep -oP 'this coder     \K[0-9]+' || echo 0)
 L4a=$(xz -9 -c pos_abs.bin 2>/dev/null | wc -c)
 L4b=$(xz -9 -c pos_strand.bin 2>/dev/null | wc -c)
+# L5 = mismatch SYMBOLS (ref+obs via mmcoder).
+# L5b/L5c: CORRECTION 2026-08-31 -- mm_pos.bin (WHERE each mismatch is) and
+# mm_count_per_read.bin (HOW MANY per read) are BOTH required by
+# decode_locked_seqorder.py to reconstruct a read, but were never counted in
+# LOCKED_SEQORDER_TOTAL. mmcoder only ever takes ref.bin+obs.bin (2 args).
+# Our totals were therefore understated -- the same omitted-stream error
+# caught on PgRC2's side, here on our own. PgRC2 pays for the equivalent
+# streams (mismatch positions across ~50 period-keyed coders, plus counts
+# and zero-flags), so a fair comparison must include ours.
 L5=$([ -s mm_ref.bin ] && /tmp/mmcoder mm_ref.bin mm_obs.bin 2>&1 | grep -oP 'coded=\K[0-9]+' || echo 0)
+L5b=$([ -s mm_pos.bin ] && xz -9 -c mm_pos.bin 2>/dev/null | wc -c || echo 0)
+L5c=$([ -s mm_count_per_read.bin ] && xz -9 -c mm_count_per_read.bin 2>/dev/null | wc -c || echo 0)
 L6a=$([ -s n_reads.txt ] && /tmp/seqpar n_reads.txt 1 1 2>&1 | grep -oP 'coded=\K[0-9]+' || echo 0)
 L6b=$([ -s n_indices.bin ] && xz -9 -c n_indices.bin 2>/dev/null | wc -c || echo 0)
 L7=$([ -s read_lengths.bin ] && xz -9 -c read_lengths.bin 2>/dev/null | wc -c || echo 0)
 L8=$([ -s orig2uid.bin ] && xz -9 -c orig2uid.bin 2>/dev/null | wc -c || echo 0)
 
-TOTAL=$((L1+L3+L4a+L4b+L5+L6a+L6b+L7+L8))
-echo "LAYER1_sequence=$L1 LAYER3_memref=$L3 LAYER4_pos=$((L4a+L4b)) LAYER5_mismatch=$L5 LAYER6_nreads=$((L6a+L6b)) LAYER7_lengths=$L7 LAYER8_orig2uid=$L8"
+TOTAL=$((L1+L3+L4a+L4b+L5+L5b+L5c+L6a+L6b+L7+L8))
+echo "LAYER1_sequence=$L1 LAYER3_memref=$L3 LAYER4_pos=$((L4a+L4b)) LAYER5_mmsym=$L5 LAYER5b_mmpos=$L5b LAYER5c_mmcnt=$L5c LAYER6_nreads=$((L6a+L6b)) LAYER7_lengths=$L7 LAYER8_orig2uid=$L8"
 echo "LOCKED_SEQORDER_TOTAL=$TOTAL"
 
 rm -rf "$WORK"

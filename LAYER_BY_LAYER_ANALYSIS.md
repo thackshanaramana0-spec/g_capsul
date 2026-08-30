@@ -485,3 +485,110 @@ the set is P. aeruginosa at −3.0%.
 
 **Methodology rule going forward: compare against the real archive size on
 disk, never against a hand-summed subset of the opponent's log.**
+
+## 3g. SECOND MAJOR CORRECTION (2026-08-31): our OWN totals omitted two
+## mandatory streams. All wins in 3f were invalid.
+
+**The bug.** `decode_locked_seqorder.py` requires FOUR mismatch streams to
+reconstruct a read: `mm_ref`, `mm_obs`, `mm_pos` (where each mismatch is) and
+`mm_count_per_read` (how many per read). But `mmcoder` only ever takes two
+arguments (`ref.bin obs.bin`), and `run_locked_seqorder.sh` only counted that.
+**`mm_pos.bin` and `mm_count_per_read.bin` were never in
+LOCKED_SEQORDER_TOTAL** despite being mandatory for decode.
+
+This is the same omitted-mandatory-stream error caught on PgRC2's side in 3f.
+I checked theirs and did not check ours. Fixed in `run_locked_seqorder.sh`
+(L5b/L5c).
+
+**Corrected real-full-file results (vs PgRC2's real archive):**
+
+| Dataset | 3f claimed | uncounted | corrected total | PgRC2 | real margin |
+|---|---|---|---|---|---|
+| E. coli | +16.6% | 2,510,732 | 9,905,845 | 8,864,420 | **−11.7%** |
+| P. aeruginosa | +4.1% | 1,239,068 | 9,908,025 | 9,043,181 | **−9.6%** |
+| S. aureus | +13.8% | 3,638,268 | 15,352,697 | 13,595,003 | **−12.9%** |
+| P. falciparum | +8.0% | 2,967,436 | 18,810,808 | 17,219,695 | **−9.2%** |
+| L. major | +2.5% | 3,037,812 | 30,612,464 | 28,272,652 | **−8.3%** |
+
+**Every win in 3f becomes a loss.** The uncounted streams are 1.2-3.6 MB per
+file, larger than every margin claimed. Also note: those full-file runs were
+never decode-verified -- byte-identical had only ever been checked on
+subsamples.
+
+### Root cause, predicted by our own Stage 27 comment
+
+Our mapper averages **16.19 mismatches per placed read** (E. coli); PgRC2
+averages **1.39**. The Stage 27 note in `100_locked_seqorder.cpp` called this
+exactly: *"Every mismatch we accept has to be STORED. This progression
+measures pg literal and order and never counted that stream, so stage 17's
+win could be partly borrowed against a cost that was never on the books."*
+It was.
+
+`MAXMAP = Lmax/3` (=50) copies ReadsMatchers.cpp:700, but with the streams
+counted the economics are: a mismatch costs ~0.88 B (position+count+symbol,
+measured) while a pg-literal base costs ~0.229 B (measured). Accepting a
+50-mismatch placement costs more than simply storing the read.
+
+### The fix: MAXMAP=12, swept against the CORRECTED total
+
+| MAXMAP | E. coli | yeast | P. aeruginosa |
+|---|---|---|---|
+| 50 (old default) | 6,681,130 | 7,300,474 | 2,059,342 |
+| 20 | 5,797,938 | 7,145,843 | 2,025,310 |
+| **12** | **5,786,089** | **7,138,680** | 2,019,367 |
+| 8 | 5,809,076 | 7,157,904 | 2,016,404 |
+| 2 | 5,987,241 | 7,381,503 | 2,014,307 |
+
+Convex with optimum at 12 on both 150bp datasets; P. aeruginosa is monotone
+but 12 is within 0.25% of its best. So **12 is optimal-or-near-optimal on all
+three -- a generalizing constant, not per-dataset tuning** (−13.4% / −2.2% /
+−1.9% vs the old 50). Shipped as the default, env-overridable for re-sweeping
+if coder costs change.
+
+Mean mismatches/read on E. coli drops 16.19 → 2.62, which is what collapses
+the mm_pos/mm_sym/mm_cnt streams.
+
+**Real-full-file validation with MAXMAP=12 AND byte-identical decode
+verification is the next step -- no margin from this section should be quoted
+until that lands.**
+
+### 3g-final. Validated result: MAXMAP=12 on real full files, byte-identical
+
+First run in this project's history that pairs a CORRECTED total (all decoder
+streams counted) with a BYTE-IDENTICAL decode check on the REAL full locked
+files -- not subsamples.
+
+| Dataset | before fix | after MAXMAP=12 | PgRC2 | margin | verify |
+|---|---|---|---|---|---|
+| E. coli | 9,905,845 | 8,322,815 | 8,864,420 | **+6.1%** | BYTE_IDENTICAL |
+| P. aeruginosa | 9,908,025 | 9,878,603 | 9,043,181 | −9.2% | BYTE_IDENTICAL |
+| S. aureus | 15,352,697 | 14,102,598 | 13,595,003 | −3.7% | BYTE_IDENTICAL |
+| P. falciparum | 18,810,808 | 17,663,096 | 17,219,695 | −2.6% | BYTE_IDENTICAL |
+| L. major | 30,612,464 | 30,368,493 | 28,272,652 | −7.4% | BYTE_IDENTICAL |
+
+**1 win / 4 losses.** The fix is real and helps everywhere (−16.0% on E. coli,
+−8.1% S. aureus, −6.1% P. falciparum, −0.8% L. major, −0.3% P. aeruginosa)
+but only flips E. coli. This is the honest, fully-accounted, fully-verified
+baseline: **we currently lose to PgRC2 on 4 of 5 real datasets.**
+
+Every headline in 3f (+15.7% to +24.5%, "5/6 wins") is withdrawn. Those
+numbers omitted mandatory streams on our side.
+
+**Where the remaining gap is.** MAXMAP helps least exactly where we lose most
+(P. aeruginosa −0.3%, L. major −0.8%), so the residual is not the mismatch
+ceiling. Candidates, in order of measured promise, none yet tested:
+1. **Mismatch position coding.** Ours is flat absolute positions + xz. PgRC2
+   uses reverse offsets, buckets by mismatch count, optional transpose, and a
+   per-bucket selector coder (`compressRlMisRevOffDest`,
+   SeparatedPseudoGenomePersistence.cpp:823-905). A quick prototype showed
+   reverse/delta offsets alone give −10.4% on that stream; bucketing and
+   transpose hurt at 100k-read scale but were not tried at full scale where
+   buckets are large enough to amortize.
+2. **Per-stream coder selection.** Measured per-layer bake-off (xz-9/-9e, xz
+   delta filters, zstd-19/-22, bzip2): zstd−22 wins `pos_strand` −16.2%,
+   `orig2uid` −13.7%, `read_lengths` −77.4%; bzip2 wins `mm_pos` −7.3%,
+   `mm_count` −14.6%; xz keeps `pos_abs`. Different coder per stream, chosen
+   by measured ratio -- PgRC2 does exactly this via `getSelectorCoderProps`.
+3. The 3-way pg split remains untested and is now re-motivated: their LQ pg
+   stores poorly-matching reads as sequence rather than as expensive mismatch
+   records, which is the same economics MAXMAP exploits, applied structurally.
