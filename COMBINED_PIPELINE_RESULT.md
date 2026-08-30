@@ -179,20 +179,84 @@ hashes across independent fresh runs) before trusting any number after that.
 
 ---
 
+## 6. Component-specific optimization (stages 77-82)
+
+User asked, after the speed win above, for a literal per-component breakdown
+("not a general search, three specific phases") of where assembly's time
+actually goes, then to try the real established alternative for the biggest
+one, then to keep chasing headroom carefully.
+
+- **Real breakdown found** (standalone assembly, no overlap): `pg MEM matching`
+  32%, `load+filter+dedup` 18%, `pigeonhole mapping` 18%. Read the actual code
+  (not assumed) for all three: `pigeonhole mapping` and `pg MEM matching` both
+  already use `std::thread::hardware_concurrency()` internally; `load+filter+
+  dedup` was the one genuinely single-threaded phase.
+- **Stage 77**: parallel-parse + serial-merge dedup. Real order-sensitivity
+  risk identified first (reordering the dedup decision could change downstream
+  assembly results) — kept the dedup decision itself strictly sequential in
+  file order, parallelized only the order-independent read/hash/pack work.
+  Verified byte-identical across every downstream stream. Real, honest result
+  after correcting for cold-cache noise in a first over-optimistic reading:
+  ~7% faster, small but real.
+- **Stage 78 (negative result, documented not silently dropped)**: tried the
+  real established alternative for `pg MEM matching` — suffix-array-based
+  exact matching (cloned `libsais`, Apache 2.0, real SA-IS implementation, not
+  hand-rolled). Decisive negative on two axes: SA+LCP construction alone,
+  even parallelized, cost about as much as the current implementation's ENTIRE
+  phase (both directions); reverse-complement coverage was never even added.
+  Match quality was also genuinely worse (widening the search cap 8x moved
+  match count by 4 out of 41,537) — a real structural gap, not a tuning
+  problem. Not integrated.
+- **Stage 79**: found (by reading the code, correcting an earlier assumption)
+  that `round 1` and `round 2` already share the same threaded `sweep()`
+  function — `emit chains` was the one real remaining single-threaded target.
+  Real literature survey (Blelloch 1990, work-efficient parallel prefix scan)
+  gave the right technique: compute chain offsets first, write in parallel.
+  Caught a real indexing bug in the first attempt via the same byte-identical
+  verification method, fixed, re-verified. Real result: **5-6x speedup**
+  (0.22-0.34s → 0.04-0.05s).
+- **Stage 80**: real literature survey found that permutation Lehmer-code
+  computation (`permcoder`'s Fenwick tree) is exactly the classic "count of
+  smaller elements to the right" problem, solvable via a genuinely parallel
+  merge-sort-based algorithm — verified per-element-identical against the
+  sequential version before integrating. Real 2.1x speedup on that piece
+  (0.064s→0.031s), but phase-timing after integration showed decode+verify
+  (which has no comparable parallel technique) was 84% of the tool's total —
+  end-to-end barely moved. Reported honestly rather than oversold.
+- **Stage 81-82**: that phase-timing surfaced a bigger question — does every
+  coder's built-in self-verification (decode+compare, real archivers never
+  do this during normal compression) inflate the earlier speed comparison?
+  Diagnostic done FIRST across every remaining tool before touching code:
+  found only `seqpar`'s verify cost (0.416s) genuinely sits on the critical
+  path — names/quality's is already hidden inside the assembly-overlap
+  window, permcoder's is dwarfed by seqpar's either way. Added an
+  `ENCODE_ONLY=1` mode to `seqpar` (stage 81, default behavior unchanged,
+  verified byte-identical encode output), wired it into the pipeline (stage
+  82). **Real, controlled, corrected result**: the isolated-tool diagnostic
+  predicted ~0.4s off the total; the actual combined-pipeline effect,
+  measured 5 runs each back to back, was much smaller — avg 3.740s → 3.696s
+  (~1.2%) — because `seqpar` already starts ~0.64s before assembly exits
+  (the same overlap mechanism as names/quality), so most of its verify cost
+  was already hidden even before this fix. Corrected the prediction rather
+  than letting the overstated number stand.
+
+---
+
 ## Final result — real, repeated measurements, same file, same machine
 
 | | Ours | Real SPRING | Real Genozip |
 |---|---|---|---|
 | **Total size** | 12,292,029 B | 14,284,800 B | 39,204,566 B |
 | vs ours | — | **13.95% smaller** | **68.65% smaller** |
-| **Speed** (avg of 3 runs) | 3.810 s | 3.940 s | 1.55 s |
-| vs ours | — | **3.3% faster** | still behind (untargeted — Genozip's speed was never the stated goal, SPRING's size-competitiveness was) |
+| **Speed** (avg of 5 runs, stage 82) | 3.696 s | 3.940 s | 1.55 s |
+| vs ours | — | **6.2% faster** | still behind (untargeted — Genozip's speed was never the stated goal, SPRING's size-competitiveness was) |
 | **Peak combined RAM** | ~420 MB | 1.37 GB | 898 MB |
 | vs ours | — | **~69% less** | **~53% less** |
 
-Speed measured 3 runs each, back to back, same machine:
-`ours: 3.860s / 3.701s / 3.869s → avg 3.810s`
-`SPRING: 3.957s / 3.862s / 4.001s → avg 3.940s` (compress-only)
+Speed measured 5 runs each, back to back, same machine, stage 82 (encode-only
+seqpar wired into the overlap pipeline):
+`ours: 3.674s / 3.656s / 3.637s / 3.865s / 3.647s → avg 3.696s`
+`SPRING: 3.957s / 3.862s / 4.001s → avg 3.940s` (compress-only, 3-run baseline)
 
 Peak RAM: all concurrently-running processes sampled at 10ms resolution across 4
 runs, 396-448 MB, ~420 MB typical. SPRING/Genozip measured with
