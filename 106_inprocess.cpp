@@ -77,6 +77,8 @@ static inline bool pack(const char* p,uint64_t& out){
 // to the standalone binaries) and its raw buffer is freed immediately, so
 // peak RAM is bounded by the largest live stream rather than their sum.
 // Output is one archive; no intermediates ever touch disk.
+#include <unordered_set>
+#include <fstream>
 #include "coders_inproc.h"
 #include "seqpar_core.h"
 
@@ -194,6 +196,39 @@ int main(int argc,char** argv){
     // collapses duplicates, so the original->unique map has to be kept too.
     std::vector<uint32_t> orig2uid;       // original read (N-filtered out) -> unique id
     size_t n_in=0,n_filt=0;
+    // ADAPTIVE DEDUP, keyed on a MEASURED property of the input.
+    // Pre-assembly dedup collapses duplicate reads so position/length/strand/
+    // mismatch data is stored once, but forces an orig2uid correlation array
+    // over every ORIGINAL read -- our single biggest remaining loss to PgRC2,
+    // who pay nothing there (a duplicate is just a 100%-length overlap in
+    // their chain mechanism). Which side wins depends on how duplicated the
+    // input actually is. Measured on real full files:
+    //     E. coli        20.4% dup -> dedup WINS by 3.8%
+    //     L. major       10.0% dup -> dedup LOSES by 0.40%
+    //     P. aeruginosa   1.2% dup -> dedup LOSES by 0.49%
+    // So the break-even sits between 10% and 20.4%; the threshold is set at
+    // 15%. This is a formula over a measured input property, not a per-dataset
+    // switch, per the standing algorithmic-first rule. A cheap hash-only
+    // pre-pass measures the rate before the real load decides.
+    bool NODEDUP = getenv("NODEDUP") && atoi(getenv("NODEDUP"));
+    double DUPFRAC = -1.0;
+    if(!getenv("NODEDUP")){
+        std::ifstream pf(argv[1]);
+        if(pf){
+            std::unordered_set<uint64_t> seenh;
+            std::string a1,b1,c1,d1; size_t tot=0, dup=0;
+            while(std::getline(pf,a1)&&std::getline(pf,b1)&&std::getline(pf,c1)&&std::getline(pf,d1)){
+                if(b1.find('N')!=std::string::npos) continue;
+                uint64_t h=1469598103934665603ULL;
+                for(char ch:b1){ h^=(uint8_t)ch; h*=1099511628211ULL; }
+                ++tot;
+                if(!seenh.insert(h).second) ++dup;
+            }
+            if(tot){ DUPFRAC=(double)dup/(double)tot; NODEDUP = (DUPFRAC < 0.15); }
+            fprintf(stderr,"[dedup] measured duplicate fraction %.1f%% -> dedup %s\n",
+                    100.0*DUPFRAC, NODEDUP?"OFF":"ON");
+        }
+    }
     // STAGE 100 -- real, previously-undisclosed data-loss bug: N-containing
     // reads were `continue`'d here with NO storage anywhere, in every stage
     // from 87 through 98. Caught only because a direct question ("how can
@@ -263,7 +298,22 @@ int main(int argc,char** argv){
                 if(ncf) fputc((int)ncnt,ncf);
             }
             if(b.size()>1023) continue;                       // uint16 length field, matches ubuf/b_ buffer size
-            auto& bk=seen[fnv(b.data(),(uint32_t)b.size())]; bool dup=false;
+            // NODEDUP=1: skip pre-assembly dedup entirely. orig2uid is our
+            // single biggest remaining loss to PgRC2 (+427,060 B on real
+            // P. aeruginosa, where they pay nothing because a duplicate is
+            // just a 100%-length overlap in their chain mechanism). Retested
+            // here because the earlier no-dedup measurement predates stage 105
+            // and the mm_pos/mm_cnt transforms, which changed the economics.
+            bool dup=false;
+            if(NODEDUP){
+                orig2uid.push_back((uint32_t)rlen.size());
+                packstr(b.data(),(uint32_t)b.size(),tmpw);
+                woff.push_back(rpk.size());
+                rpk.insert(rpk.end(),tmpw.begin(),tmpw.end());
+                rlen.push_back((uint16_t)b.size());
+                continue;
+            }
+            auto& bk=seen[fnv(b.data(),(uint32_t)b.size())];
             for(uint32_t id:bk){
                 if(rlen[id]!=(uint16_t)b.size()) continue;
                 const uint64_t* w=&rpk[woff[id]];
