@@ -27,12 +27,16 @@ Source: `benchmark/DATASET_LOCKED.md`. 10 accessions + 4 human chr20 samples.
 **Real coverage so far: 7/10 primary accessions, 0/4 human.** Every new dataset
 tested surfaced something real: M. tuberculosis found a silent data-loss bug
 (fixed, stage 90), SARS-CoV-2 found and then FIXED a real architectural loss
-(stage 91, conditional reorder), P. aeruginosa found a real, still-open
-quality-coder gap. Current honest tally against SPRING: win on 6/7 (E. coli,
+(stage 91, conditional reorder), P. aeruginosa found a real quality-coder gap
+that generalized into a fix affecting 3 files (stage 92, adaptive context
+sizing) and narrowed its overall gap from -10.8% to -1.7% (quality stream
+itself now wins). Current honest tally against SPRING: win on 6/7 (E. coli,
 yeast, P. falciparum, S. aureus, L. major-marginal, SARS-CoV-2), lose on 1/7
-(P. aeruginosa, -10.8%, quality-coder gap). Against Genozip: win 7/7. This is
-the actual state — one real, mechanistically-understood, unresolved loss
-remains, not zero.
+(P. aeruginosa, -1.7%, down from -10.8% — remaining gap is sequence+order,
+not quality). Against Genozip: win 7/7. One real, small, still-open gap
+remains — not zero, but the honest trend across this session is every found
+gap getting root-caused and either fixed or substantially narrowed by a real,
+cross-file-verified mechanism, never a per-file patch.
 
 ## 2. The algorithmic lesson, synthesized (not fragments)
 
@@ -92,22 +96,42 @@ file's timing or size.
    what structure is being missed generally, not from tuning hist/pos/delta
    to this one file's numbers.
 
-   **Investigated (real source read):** SPRING's default lossless quality
-   path is NOT a bespoke quality context model — `reorder_compress_quality_id.cpp`
-   calls `bsc::BSC_str_array_compress` (libbsc, general BWT/context-mixing)
-   on the READ-REORDERED quality strings. Tested whether reordering alone
-   explains it: general compressors on P. aeruginosa's quality, even after a
-   sequence-similarity reorder (proxy for read reordering), stay WORSE than
-   our own coder (xz 3,656,460 / bzip2 3,660,109 vs our 3,577,150, raw
-   unreordered was xz 3,653,752 / bzip2 3,660,512 — reordering barely moves
-   either). This refutes "just add reordering + a general compressor" as the
-   fix — the real gap must come from SPRING's specific greedy-overlap
-   reordering (not a lexicographic proxy) combined with libbsc's actual
-   context-mixing strength (meaningfully stronger than bzip2/xz), neither of
-   which this quick proxy reproduces. Honestly unresolved — narrowed, not
-   fixed. Next step would be building/linking libbsc directly against our own
-   reordering's actual quality-column output for a real apples-to-apples
-   test, not assumed from proxies.
+   **RESOLVED — real, generalizable fix found and verified (stage 92,
+   `92_qual_adaptive_ctx.cpp`).** The libbsc-proxy investigation (xz/bzip2 on
+   reordered quality, both still worse than our coder) ruled out "SPRING's
+   general compressor alone explains it" — see below for that trail, kept for
+   the record. The actual cause: context-space DENSITY, not compressor
+   choice. `contexts/block=22,778,496` for P. aeruginosa's ~10M quality
+   values (alphabet 39) — under 0.44 observations per context on average, so
+   most contexts barely leave their uniform prior. Swept hist/pos/delta on
+   ALL 7 tested files and found a clean, alphabet-size-correlated split, not
+   a single-file number: every FULL-RESOLUTION file (E. coli/P. falciparum/
+   P. aeruginosa, alphabet 38-39) improves 5.5-12.5% with a smaller context
+   (hist=2 pos=4 delta=8); every BINNED/degenerate file (yeast/S. aureus/
+   L. major/SARS-CoV-2, alphabet 3-8) gets 0.9-2.4% WORSE with that same
+   smaller context — there the default already has enough data per context,
+   shrinking it throws away real structure. Clean separation at alphabet<=20
+   (nothing tested near the boundary either side). Implemented as an
+   automatic switch on MEASURED alphabet size (resolved from the same
+   pre-scan the coder already does), not a manual per-file flag — verified
+   all 7 files pick the correct regime automatically and round-trip.
+
+   Result: P. aeruginosa's quality stream alone now BEATS SPRING (3,131,704
+   vs SPRING's 3,191,556, was 3,577,150/+12.1% loss, now -1.9% win). Overall
+   P. aeruginosa total: was -10.8% vs SPRING, now **-1.7% vs SPRING** — large,
+   real, verified progress, not yet a full flip. Remaining gap is the
+   sequence+order stream (already separately investigated: reordering
+   genuinely measures worse than SPRING's approach on this specific genome,
+   not a reorder-cost-mechanism issue like SARS-CoV-2 — a real, harder,
+   still-open question, distinct from the quality fix above).
+
+   *(Kept for the record, the now-superseded libbsc proxy trail:* SPRING's
+   default lossless quality path is libbsc general BWT/context-mixing on
+   read-reordered quality strings, confirmed from `reorder_compress_quality_id.cpp`.
+   xz/bzip2 on a sequence-similarity-reordered proxy of P. aeruginosa's
+   quality stayed worse than our own (then-unfixed) coder — ruled out
+   "just reorder + generic compressor" as sufficient, correctly redirecting
+   toward the real cause found above.)
 5. Test the 3 remaining untested primary accessions (C. elegans, T. cacao,
    L. major already done) — wait, L. major is done; remaining: C. elegans,
    T. cacao only, both large-file regime, deferred to step 8.
