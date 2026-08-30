@@ -33,6 +33,39 @@ static std::vector<uint8_t> xz_compress_vec(const std::vector<T>& v, uint32_t pr
     return xz_compress(v.data(), v.size()*sizeof(T), preset);
 }
 
+// LZMA with an explicit literal-context/literal-position/position-bit split.
+// PgRC2 codes its position stream with lc=8,lp=2,pb=2 rather than the xz
+// default lc=3,lp=0,pb=2 (SeparatedPseudoGenomePersistence.cpp:451-460,
+// getReadsPositionsCoderProps). lp=2 aligns the context model to a 4-byte
+// stride, which is exactly the shape of a uint32 position array. Measured on
+// real P. aeruginosa pos_abs: default 5,082,152 -> lc=2,lp=2,pb=2 5,021,990
+// (-1.2%).
+static std::vector<uint8_t> xz_compress_lzma(const void* data, size_t n,
+                                             uint32_t lc, uint32_t lp, uint32_t pb,
+                                             uint32_t preset=9){
+    if(!n) return {};
+    lzma_options_lzma opt;
+    if(lzma_lzma_preset(&opt, preset)) return {};
+    opt.lc=lc; opt.lp=lp; opt.pb=pb;
+    lzma_filter filters[2];
+    filters[0].id=LZMA_FILTER_LZMA2; filters[0].options=&opt;
+    filters[1].id=LZMA_VLI_UNKNOWN;  filters[1].options=nullptr;
+    size_t cap=lzma_stream_buffer_bound(n)+128;
+    std::vector<uint8_t> out(cap); size_t pos=0;
+    if(lzma_stream_buffer_encode(filters, LZMA_CHECK_CRC64, nullptr,
+                                 (const uint8_t*)data, n, out.data(), &pos, cap) != LZMA_OK)
+        return {};
+    out.resize(pos);
+    return out;
+}
+// Try the tuned parameters and the default, keep whichever is smaller. Same
+// "measure, do not assume" discipline used for every other transform here.
+static std::vector<uint8_t> xz_best_for_u32(const void* data, size_t n){
+    auto a = xz_compress(data,n);
+    auto b = xz_compress_lzma(data,n,2,2,2);
+    return (!b.empty() && b.size()<a.size()) ? b : a;
+}
+
 // ---------- mismatch symbol coder (from 50_mismatch_coder_real.cpp) ----------
 namespace mmc {
 #include <cstdio>

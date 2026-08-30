@@ -1822,7 +1822,7 @@ int main(int argc,char** argv){
         { auto v=STR.mem_triples.bytes(); STR.mem_triples.release();
           ar.put("mem_triples", refc::encode(v,pg.size(),main_pg_end)); }
         // L4 position + strand
-        { auto v=STR.pos_abs.bytes();      STR.pos_abs.release();      ar.put("pos_abs",     xz_compress(v.data(),v.size())); }
+        { auto v=STR.pos_abs.bytes();      STR.pos_abs.release();      ar.put("pos_abs",     xz_best_for_u32(v.data(),v.size())); }
         { auto v=STR.pos_strand.bytes();   STR.pos_strand.release();   ar.put("pos_strand",  xz_compress(v.data(),v.size())); }
         // L5 mismatch symbols / positions / counts
         { auto r=STR.mm_ref.bytes(), o=STR.mm_obs.bytes();
@@ -1861,11 +1861,11 @@ int main(int argc,char** argv){
           } }
         // L6 N restoration
         { auto v=STR.n_pos.bytes();        STR.n_pos.release();        ar.put("n_pos",       xz_compress(v.data(),v.size())); }
-        { auto v=STR.n_indices.bytes();    STR.n_indices.release();    ar.put("n_indices",   xz_compress(v.data(),v.size())); }
+        { auto v=STR.n_indices.bytes();    STR.n_indices.release();    ar.put("n_indices",   xz_best_for_u32(v.data(),v.size())); }
         { auto v=STR.n_cnt.bytes();        STR.n_cnt.release();        ar.put("n_cnt",       xz_compress(v.data(),v.size())); }
         // L7 lengths, L8 orig2uid
         { auto v=STR.read_lengths.bytes(); STR.read_lengths.release(); ar.put("read_lengths",xz_compress(v.data(),v.size())); }
-        { auto v=STR.orig2uid.bytes();     STR.orig2uid.release();     ar.put("orig2uid",    xz_compress(v.data(),v.size())); }
+        { auto v=STR.orig2uid.bytes();     STR.orig2uid.release();     ar.put("orig2uid",    xz_best_for_u32(v.data(),v.size())); }
 
         ar.finish();
         fprintf(stderr,"[archive] rss before coding %zu MB, after %zu MB\n",rss_before,rss_mb());
