@@ -979,3 +979,58 @@ The single-stream test predicted −1.2%; the real effect was −2.8% to −4.4%
 dataset, because the tuning applies to every uint32 stream and those dominate
 the archive. Worth remembering: a per-stream microbenchmark understates a fix
 that generalises across streams.
+
+## 3p. Byte-plane split for uint32 streams — final increment
+
+PgRC2's exact position-coder parameters are `lc=8, lp=2, pb=2`
+(`getReadsPositionsCoderProps`, PropsLibrary.cpp:90-102). **liblzma caps
+`lc+lp <= 4`, so lc=8 is unreachable through xz** -- they can use it only
+because they bundle the 7-zip LZMA SDK. The best liblzma equivalent is
+`lc=2,lp=2,pb=2`.
+
+A byte-plane (structure-of-arrays) split beats it without needing lc=8: emit
+every value's byte 0, then every byte 1, etc. Real P. aeruginosa pos_abs
+(6,631,484 B raw):
+
+| encoding | coded |
+|---|---|
+| xz -9 default | 5,082,152 |
+| lc=2,lp=2,pb=2 | 5,021,990 |
+| byte-planes + xz -9 | 4,993,384 |
+| **byte-planes + per-plane params** | **4,983,604** |
+| PgRC2 | 4,964,368 |
+
+Plane 0 and 1 code to ~1 byte per value -- the low bits of a position array
+are genuinely random, so both tools sit near the entropy floor here
+(uniform over a 21 Mb pg is 24.3 bits = 3.04 B/position). Only ~19 KB of
+headroom remains on this stream; it is effectively closed.
+
+Shipped as a 4-way selector with a 1-byte method header (xz default /
+lc2lp2pb2 / byte-planes+xz / byte-planes+lc0lp0pb0), keeping whichever is
+smallest per stream.
+
+### FINAL RESULT — all BYTE_IDENTICAL, real full locked files
+
+| Dataset | session start | final | PgRC2 | margin |
+|---|---|---|---|---|
+| E. coli | 9,905,845 | **7,981,962** | 8,864,420 | **+10.0%** |
+| P. aeruginosa | 9,908,025 | **9,214,602** | 9,043,181 | −1.9% |
+| S. aureus | 15,352,697 | **13,330,920** | 13,595,003 | **+1.9%** |
+| P. falciparum | 18,810,808 | **16,752,352** | 17,219,695 | **+2.7%** |
+| L. major | 30,612,464 | **28,523,424** | 28,272,652 | −0.9% |
+
+**Session −10.4%. Aggregate vs PgRC2 +1.55%, winning 3 of 5.**
+
+Full list of what actually moved the number, largest first:
+1. LZMA/byte-plane coding of uint32 streams (~4% per dataset)
+2. `MAXMAP=12` mismatch-acceptance economics (up to −16%)
+3. Stage 105, N-reads through assembly (up to −4%)
+4. mm_pos bucket+transpose (−13.5% of that stream)
+5. mm_cnt zero-flag split (−10.6% of that stream)
+6. Adaptive dedup on measured duplication rate
+
+Measured dead ends, recorded so they are not retried: the single-process
+architecture rewrite (0% size, 0% speed, +54 MB RAM), seed geometry (0.01%),
+no-pre-dedup as an unconditional change (0.27%), reverse-offset mismatch
+positions alone (mixed), per-stream/per-bucket coder selection among
+xz/bzip2/zstd (0.49% / 0.2%).
