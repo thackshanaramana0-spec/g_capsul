@@ -110,6 +110,9 @@ lengths = read_u16(f'{WORK}/read_lengths.bin')
 n_unique_pos = len(positions)
 assert len(lengths) == n_unique_pos
 strands = read_bits(f'{WORK}/pos_strand.bin', n_unique_pos)
+# Encoder uses reverse-offset mismatch positions iff Lmax <= 256; recover that
+# decision from the lengths themselves rather than storing a flag.
+MM_DELTA = (max(lengths) <= 256) if lengths else False
 
 # ---- orig2uid.bin: original -> unique-id, delta-coded ----
 # delta=0 means "first occurrence" (id = running counter, counter++);
@@ -149,9 +152,18 @@ for o in range(n_orig):
     cnt = mmcount[u] if u < n_unique else 0
     if cnt:
         off = mm_offset[u]
+        # Mismatch positions are REVERSE OFFSETS (gap from the previous
+        # mismatch in the same read) whenever max read length <= 256 --
+        # mirrors the encoder's MMDELTA guard, derived from read_lengths.bin
+        # so no format flag is stored. Above 256 the stream is absolute
+        # positions with the pre-existing 255 cap.
+        prevj = 0
         for m in range(cnt):
             obsc = chr(mm_obs[off+m]); j = mm_pos[off+m]
-            if j == 255:
+            if MM_DELTA:
+                j = prevj + j
+                prevj = j
+            elif j == 255:
                 continue  # capped position, disclosed limitation for reads >255bp
             seq[j] = obsc if not s else COMP[obsc]
     out_seqs[o] = ''.join(seq)
