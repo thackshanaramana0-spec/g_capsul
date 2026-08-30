@@ -1071,3 +1071,45 @@ provably near its entropy floor.** Both remaining losses reduce to one thing
 -- their pseudogenome is smaller than ours for the same input (L. major
 8,509,123 vs our 9,379,560 coded). That is assembly structure (their HQ/LQ
 division), not stream coding, and it is the only avenue left.
+
+## 3r. MINOV re-swept: the assembly-side lever that closes most of the gap
+
+Section 3q concluded the remaining losses were assembly-side (their pg is
+smaller than ours for the same input). `MINOV` -- the minimum overlap length
+accepted during chain building -- is exactly that lever, and it had never been
+re-swept since the stream coding was fixed. It was defaulted to 40, copied
+from PgRC2's CODER_LEVEL_NORMAL.
+
+Real P. aeruginosa, full file:
+
+| MINOV | total | pg_len |
+|---|---|---|
+| 40 (old default) | 9,214,602 | 22,354,430 |
+| 32 | 9,159,157 | 22,049,293 |
+| 24 | 9,115,452 | 21,859,912 |
+| 20 | 9,097,124 | 21,794,304 |
+| **16** | **9,083,594** | **21,738,890** |
+| 12, 10 | 9,083,594 | 21,738,890 (identical) |
+
+It floors at 16 because `SEEDW=16` -- overlaps shorter than the seed cannot be
+found at all, so lower values change nothing. Lowering MINOV collapses more of
+the pseudogenome, and now that stream coding is efficient the shorter pg is
+worth far more than the extra chain links cost. Under the OLD coders this
+trade looked unattractive, which is why the value sat at 40.
+
+### Full validation, MINOV=16, all BYTE_IDENTICAL
+
+| Dataset | MINOV=40 | MINOV=16 | PgRC2 | margin |
+|---|---|---|---|---|
+| E. coli | 7,981,962 | **7,974,367** | 8,864,420 | **+10.0%** |
+| P. aeruginosa | 9,214,602 | **9,083,594** | 9,043,181 | −0.4% |
+| S. aureus | 13,330,920 | 13,498,413 | 13,595,003 | **+0.7%** |
+| P. falciparum | 16,752,352 | **16,448,646** | 17,219,695 | **+4.5%** |
+| L. major | 28,523,424 | **27,765,787** | 28,272,652 | **+1.8%** |
+
+**Aggregate vs PgRC2 +1.55% -> +2.89%; wins 3/5 -> 4/5.** L. major flips from
+−0.9% to +1.8%. MINOV=24 was also validated (+2.55%, worse). S. aureus is the
+one dataset preferring a higher MINOV (+1.9% at 40 vs +0.7% at 16), but the
+aggregate strongly favours 16 and it remains a win either way.
+
+Only P. aeruginosa still loses, at −0.4%.

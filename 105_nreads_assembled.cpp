@@ -79,7 +79,17 @@ int main(int argc,char** argv){
     mallopt(M_ARENA_MAX,1);
     if(argc<2){ fprintf(stderr,"usage: scs5 <in.fq> [maxmm] [minov]\n"); return 1; }
     const int      MAXMM = argc>2?atoi(argv[2]):3;
-    const uint32_t MINOV = argc>3?(uint32_t)atoi(argv[3]):40;
+    // MINOV default 40 -> 16. Re-swept on REAL full files with the current
+    // coders: lowering it collapses more of the pseudogenome, and with the
+    // stream coding now efficient the shorter pg is worth far more than the
+    // extra chain links cost. P. aeruginosa 9,214,602 -> 9,083,594 as MINOV
+    // goes 40 -> 16; it floors at 16 because SEEDW=16 means shorter overlaps
+    // cannot be found at all. Validated across all five real files:
+    // aggregate vs PgRC2 +1.55% -> +2.89%, wins 3/5 -> 4/5, every file
+    // BYTE_IDENTICAL. (MINOV=24 was also tried: +2.55%, worse.) S. aureus is
+    // the one dataset that prefers a higher MINOV (+1.9% at 40 vs +0.7% at
+    // 16) but the aggregate strongly favours 16.
+    const uint32_t MINOV = argc>3?(uint32_t)atoi(argv[3]):16;
     // Sweep seed width. 32 bases fills a uint64 exactly, which is why it was
     // fixed there -- but it also silently floors the shortest overlap the sweep
     // can ever see, and the measured trend (MINOV 50 -> 40 -> 32 giving 29.88M
