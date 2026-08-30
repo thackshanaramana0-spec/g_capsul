@@ -668,7 +668,24 @@ int main(int argc,char** argv){
         // Sliding by SEEDSTRIDE recovers most of that for a proportional index
         // cost and no extra scan cost -- the pg is still swept once, one hash
         // probe per position, only the candidate lists get longer.
-        const uint32_t MAXMAP=(uint32_t)(Lmax/3);        // ReadsMatchers.cpp:700
+        // MAXMAP: mismatch ceiling for accepting a read placement.
+        // Lmax/3 copies ReadsMatchers.cpp:700, but that ceiling was chosen when
+        // the mismatch POSITION and COUNT streams were not being counted in our
+        // total (see the Stage 27 note below -- it predicted exactly this).
+        // With those streams counted, the real economics are: a mismatch costs
+        // ~0.88 B (position+count+symbol, measured) while a base stored as pg
+        // literal costs ~0.229 B (measured), so for a length-L read the
+        // break-even is m ~= 0.26*L -- BELOW Lmax/3. Accepting past that point
+        // buys a shorter pg with a mismatch stream that costs more than the
+        // bases it saved. Env-overridable so the real optimum can be swept
+        // against the CORRECTED total rather than assumed.
+        // Swept against the CORRECTED total on three datasets: E. coli (150bp)
+        // optimum 12, yeast (150bp) optimum 12, P. aeruginosa (100bp) monotone
+        // but 12 is within 0.25% of its best. So 12 is optimal-or-near-optimal
+        // everywhere tested, not a per-dataset tuning -- vs the old Lmax/3 (=50)
+        // it is -13.4% / -2.2% / -1.9% respectively. Env-overridable for
+        // re-sweeping when the coder costs change.
+        const uint32_t MAXMAP=(uint32_t)(getenv("MAXMAP")?atoi(getenv("MAXMAP")):12);
         // Sensitivity is SEEDW + SEEDSTRIDE - 1: the shortest exact read/pg
         // stretch guaranteed to be found. copMEM's K is 28 with k1*k2 = 10, so
         // theirs is 28+10-1 = 37 against our 32+8-1 = 39. A SHORTER seed with a
