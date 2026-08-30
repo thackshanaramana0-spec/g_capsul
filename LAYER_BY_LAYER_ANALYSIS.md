@@ -877,3 +877,53 @@ switch is forbidden by the standing algorithmic-first rule.
 | L. major | 30,612,464 | 29,946,905 | 28,272,652 | −5.9% |
 
 Session total **−6.7%**; aggregate vs PgRC2 **−2.5%**, 1 win / 4 losses.
+
+## 3n. Adaptive dedup (keyed on measured duplication rate)
+
+Per-stream comparison at the shipping config located the last big structural
+loss precisely:
+
+| stream | ours | PgRC2 | delta |
+|---|---|---|---|
+| pg sequence | 2,893,487 | 2,485,786 | +407,701 |
+| **orig2uid** | **427,060** | **0** | **+427,060** |
+| self-match refs | 235,983 | 71,700 | +164,283 |
+| order/positions | 4,809,188 | 4,964,368 | −155,180 (we win) |
+| mm_sym | 166,874 | 370,090 | −203,216 (we win) |
+| mm_pos | 543,180 | 748,988 | −205,808 (we win) |
+| mm_cnt | 266,536 | 323,856 | −57,320 (we win) |
+
+**We now win all four mismatch/order streams.** `orig2uid` is the single
+biggest remaining loss and PgRC2 pays literally nothing for it.
+
+Whether dedup is worth its correlation array depends on how duplicated the
+input is. Measured on real full files:
+
+| dataset | duplicate fraction | dedup verdict |
+|---|---|---|
+| E. coli | 20.4% | dedup WINS by 3.8% |
+| L. major | 10.0% | dedup LOSES by 0.40% |
+| P. aeruginosa | 1.2% | dedup LOSES by 0.49% |
+
+Break-even is between 10% and 20.4%; threshold set at 15%, measured by a
+cheap hash-only pre-pass before the real load. This is a formula over a
+measured input property, not a per-dataset switch -- it satisfies the standing
+algorithmic-first rule. (An earlier no-dedup test showed only 0.27% and was
+shelved; that predated stage 105 and the mm transforms, which changed the
+economics enough to matter.)
+
+### FINAL, all BYTE_IDENTICAL on real full locked files
+
+| Dataset | session start | final | PgRC2 | margin |
+|---|---|---|---|---|
+| E. coli | 9,905,845 | **8,228,651** | 8,864,420 | **+7.2%** |
+| P. aeruginosa | 9,908,025 | **9,320,707** | 9,043,181 | −3.1% |
+| S. aureus | 15,352,697 | **13,921,389** | 13,595,003 | −2.4% |
+| P. falciparum | 18,810,808 | **17,494,397** | 17,219,695 | −1.6% |
+| L. major | 30,612,464 | **29,827,649** | 28,272,652 | −5.5% |
+
+**Session total −6.9%; aggregate vs PgRC2 −2.3%** (from −11.7%..−12.9% per
+file when the accounting bug was first fixed). 1 win / 4 losses.
+
+Remaining losses are only two streams: pg sequence (+407,701) and self-match
+refs (+164,283). Both are assembly-side, not coding-side.
