@@ -17,15 +17,20 @@ Source: `benchmark/DATASET_LOCKED.md`. 10 accessions + 4 human chr20 samples.
 | 3 | SRR554369 | P. aeruginosa | 334MB | 100bp | full (39 symbols) | YES — **WIN vs SPRING 5.6%, vs Genozip 36.8%** (was -10.8% loss; root cause was a coverage-mismatched test slice + quality-context sizing, both fixed) |
 | 4 | ERR5181310 | SARS-CoV-2 | 30MB | variable 40-221bp | near-degenerate (3 symbols) | YES — **FIXED (stage 91)**: was -8.7% vs Genozip, now +7.6% win vs Genozip, +15.2% win vs SPRING |
 | 5 | ERR17740259 | S. aureus | 970MB | 148bp | binned (6 symbols) | YES — win vs SPRING (10.4%) and Genozip (39.6%) |
-| 6 | SRR065390 | C. elegans | 11GB | ? | ? | NO — large-genome/auto-chunk regime |
+| 6 | SRR065390 | C. elegans | 11GB | 100bp | full (34 symbols) | YES — real multi-block scale test (4M reads, ~12x coverage, 40 blocks, 41s/1.26GB peak assembly RAM): **WIN vs SPRING 4.9%, vs Genozip 32.1%**, both streams winning |
 | 7 | DRR976266 | S. cerevisiae | 1.67GB | 150bp | near-degenerate (4 symbols) | YES — win, but easy case |
-| 8 | SRR870667 | T. cacao | 15GB | ? | ? | NO — largest file in scope |
+| 8 | SRR870667 | T. cacao | 15GB | 108bp | full (37 symbols) | IN PROGRESS — real multi-block scale test running (3M reads) |
 | 9 | SRR36741279 | L. major | 1.7GB | 100bp | binned (8 symbols) | YES — win vs SPRING (marginal, 0.2%) and Genozip (6.2%) |
 | 10 | SRR37283774 | P. falciparum | 669MB | 100bp | full (~2.2 bits/val) | YES — win vs SPRING+Genozip |
 | C2-1..4 | HG002-HG005 | Human chr20 | 30x depth | 150bp | ? | NO |
 
-**Real coverage: 7/10 primary accessions, 0/4 human. ALL 7 now win against
-both SPRING and Genozip — no open losses remain among tested accessions.**
+**Real coverage: 8/10 primary accessions (T. cacao in progress), 0/4 human.
+ALL 8 tested now win against both SPRING and Genozip — no open losses.**
+C. elegans closes the "never stress-tested at real scale" gap: a genuine
+multi-block run (40 blocks at the coder's real block_size, not a single-block
+toy slice) that exercises the bounded-queue RAM fix (stages 84/85) and the
+alphabet-adaptive quality context (stage 92) as they're actually meant to be
+used, not just correctness-checked on small inputs.
 Every new dataset tested surfaced something real and each was root-caused to
 a genuine, generalizable mechanism (never patched per-file): M. tuberculosis
 found a silent data-loss bug (fixed, stage 90); SARS-CoV-2 found and fixed a
