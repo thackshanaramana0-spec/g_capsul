@@ -166,27 +166,27 @@ int main(int argc,char** argv){
                 continue;
             }
             if(b.size()>1023) continue;                       // uint16 length field, matches ubuf/b_ buffer size
-            auto& bk=seen[fnv(b.data(),(uint32_t)b.size())]; bool dup=false;
-            for(uint32_t id:bk){
-                if(rlen[id]!=(uint16_t)b.size()) continue;
-                const uint64_t* w=&rpk[woff[id]];
-                const uint32_t nw=((uint32_t)rlen[id]+31)/32;
-                for(uint32_t t=0;t<nw;++t){
-                    for(uint32_t j=0;j<32;++j){
-                        const uint32_t idx=t*32+j;
-                        ubuf[idx]="ACGT"[(w[t]>>(2*(31-j)))&3ULL];
-                    }
-                }
-                if(memcmp(ubuf,b.data(),b.size())==0){ dup=true; orig2uid.push_back(id); break; }
-            }
-            if(!dup){
-                orig2uid.push_back((uint32_t)rlen.size());
-                bk.push_back((uint32_t)rlen.size());
-                packstr(b.data(),(uint32_t)b.size(),tmpw);
-                woff.push_back(rpk.size());
-                rpk.insert(rpk.end(),tmpw.begin(),tmpw.end());
-                rlen.push_back((uint16_t)b.size());
-            }
+            // STRUCTURAL REWRITE (103): PgRC2's real source (GreedySwiping...
+            // cpp:110-115) never splits duplicates out before assembly -- an
+            // exact-duplicate read is just a 100%-length overlap match,
+            // absorbed by the SAME overlap-chain mechanism as everything
+            // else (setReadSuccessor, readsLeft--), placed "for free" with
+            // 0 mismatches since it's an exact match, no separate
+            // correlation array needed anywhere. Our old pre-assembly dedup
+            // (removed here) required orig2uid to map back afterward -- that
+            // correlation array is the real, measured, recurring loss driver
+            // (archaea -36.8%/-16.95%, disproven to be about position-
+            // scheme choice or coverage; see LAYER_BY_LAYER_ANALYSIS.md
+            // #3d/#3e). Every original read now becomes its own entry;
+            // orig2uid becomes the trivial identity map (kept only so
+            // downstream mismatch-correlation code doesn't need touching --
+            // measure whether it's cheap enough to keep or worth removing
+            // outright once this is verified byte-identical).
+            orig2uid.push_back((uint32_t)rlen.size());
+            packstr(b.data(),(uint32_t)b.size(),tmpw);
+            woff.push_back(rpk.size());
+            rpk.insert(rpk.end(),tmpw.begin(),tmpw.end());
+            rlen.push_back((uint16_t)b.size());
         }
         rpk.shrink_to_fit(); woff.shrink_to_fit(); rlen.shrink_to_fit();
     }

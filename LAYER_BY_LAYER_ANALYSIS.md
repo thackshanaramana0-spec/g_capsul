@@ -158,6 +158,30 @@ single-dataset overfit risk the standing "algorithmic, not per-dataset"
 rule exists to catch — found here specifically because a second dataset
 was checked, not assumed from the first.
 
+**Follow-up (kingdom-factor pass): the assembly side is NOT the problem on
+this file — measured, not assumed.** Overlap density was swept against real
+coverage on the true locked file (`SRR554369_1.fq`, genome 6.264 Mb):
+
+| Coverage | both-sides-overlapped | MEM main removal |
+|---|---|---|
+| 1.6x (the old 100k regression slice) | 14.5% | 6.7% |
+| 6.4x | 51.7% | 27.0% |
+| 16.0x | 67.7% | 42.3% |
+| 27.9x (real full file) | **67.7%** | **45.2%** |
+
+At real depth P. aeruginosa reaches 67.7% overlap — the same regime as yeast
+(67.4%) and E. coli (70.8%), both of which win — and 45.2% MEM removal, which
+matches PgRC2's own reference figure of 45.8% printed in our diagnostics. So
+the 14.5%/6.7% figures from the small slice were a **subsampling artifact**
+(17.5x under-sampled), not a property of the organism.
+
+**This does not flip the loss, and must not be reported as if it did** — the
+-6.1% at proper coverage above still stands. The correct conclusion is
+narrower: P. aeruginosa's deficit is **not** an assembly/overlap failure and
+**not** a bacteria/kingdom property; it is isolated to the order/position
+encoding (L4+L8 = 5,108,668 B vs their 4,188,183 B), which is orthogonal to
+coverage and to kingdom.
+
 **Not yet resolved:** why P. aeruginosa's permutation structure favors raw
 LZMA over our scheme specifically — real next question, not answered this
 pass (analysis only, per instruction).
@@ -315,3 +339,80 @@ partial win already banked here.
   S. aureus, L. major, P. falciparum, yeast) — this is one dataset, and
   per the standing generalization rule, no conclusion here should be
   treated as proven until checked on more than one file.
+
+## 3d. Real, generalizing fix: orig2uid delta-coding (2026-08-31)
+
+Found while testing the new novel-kingdom expansion (H. salinarum, archaea,
+54x coverage): our order-layer loses to PgRC2's raw-permutation+lzma on
+low-duplication files, reproducing the same unresolved P. aeruginosa
+mechanism on a second, unrelated organism. One concrete, bounded piece of
+that gap was real and fixable: `orig2uid.bin` was raw uint32, xz'd generically.
+At low dup-rate, orig2uid[i] equals the running "next new id" counter for
+the vast majority of entries (a self-describing delta=0), only deviating on
+an actual duplicate. Delta-coded against that running counter (fully
+reversible, no ambiguity) and verified:
+
+| File | old L8 (xz) | new L8 (xz) | reduction |
+|---|---|---|---|
+| E. coli | 890,332 | 525,596 | -41.0% |
+| P. aeruginosa | 28,804 | 2,656 | -90.8% |
+| yeast | 623,756 | 328,380 | -47.4% |
+| P. falciparum | 715,440 | 467,740 | -34.6% |
+| H. salinarum (archaea, new) | 199,432 | 74,264 | -62.8% |
+
+Strictly smaller on every file tested -- mathematically cannot regress
+anything else (only L8 changed). Byte-identical re-verified on E. coli
+after the change (0-diff vs true original).
+
+H. salinarum vs real PgRC2 (same file, `-o -q 1000` for order-preserving
+comparison): 43.4% loss -> 36.8% loss. Real progress, not yet a flip --
+PgRC2's single raw-permutation array (1,291,767 B) is still cheaper than
+our combined pos_abs+orig2uid (now 1,491,080 B combined, down from
+1,616,248). Gap narrowed, not closed.
+
+## 3e. Novel-kingdom expansion — real results, 2026-08-31
+
+Real PgRC2 comparisons attempted on the 7 new accessions from
+`DATASET_LOCKED.md`'s Extended Set. Honest status, not spun:
+
+| Dataset | Our total | PgRC2 (real, `-o`) | Result | Notes |
+|---|---|---|---|---|
+| H. salinarum (archaea) | 2,588,038 | 1,892,053 | LOSE -36.8% | after orig2uid fix (was -43.4%) |
+| S. acidocaldarius (archaea) | 2,333,376 | 2,010,887 | LOSE -16.95% | |
+| A. fumigatus, 300bp (SRR39257532) | n/a | crash | **blocked** | PgRC2 real binary: double-free/heap corruption, reproducible, not scale-related (crashes on 1M-read subsample too) |
+| A. fumigatus, 150bp (SRR39796114) | 52,654,761 | rejected | **blocked** | PgRC2: "Unsupported variable length reads" |
+| H. pylori (SRR40271341) | 3,145,918 | crash | **blocked** | PgRC2: "stack smashing detected" |
+| C. jejuni (SRR40402583) | 5,125,011 | rejected | **blocked** | PgRC2: variable length, same as A. fumigatus 150bp |
+| D. melanogaster (SRR40104876) | running (background, large file) | not yet attempted | pending | |
+
+**Real, notable finding in its own right**: PgRC2's real official binary
+fails outright (crash or format rejection) on 3 of 4 attempted new-format
+comparisons this pass -- not scale-related (confirmed via subsampling),
+tied to variable-length reads or specific fixed-length inputs their
+implementation doesn't handle robustly. Worth citing as a real robustness
+gap if the paper discusses tool comparisons, separate from the
+compression-ratio question.
+
+**Root cause investigation for the two real (non-blocked) losses**:
+neither "coverage regime" (both archaea sit in the coverage band that
+predicts wins for E.coli/yeast/C.elegans/T.cacao, yet lose) nor
+"duplication rate" (no monotonic relationship -- P.falciparum has HIGH
+31% dup and still loses, P.aeruginosa has the LOWEST 1.2% dup and also
+loses) explain the pattern. Real, position-scheme A/B test (direct-per-
+original vs our unique-indexed+orig2uid) shows OUR scheme already wins on
+5/6 files tested, including both archaea -- disproving the "PgRC2's
+simpler design must be cheaper" hypothesis directly.
+
+**Most promising lead, not yet fixed**: isolating layers shows the real
+archaea gap concentrates in L5 (mismatch coding, 19.9% of our total vs an
+implied ~0% distinct stream in PgRC2's -- their equivalent may be folded
+into the sequence-mapping stream). Correlates with the fraction of reads
+that fall through to lenient pigeonhole leftover-matching rather than
+chaining via exact overlap (E.coli 22.8% leftover vs archaea 37.6%
+leftover). A rough bits/mismatch-vs-bits/literal crossover estimate
+(~0.195 B/mismatch vs ~0.1 B/base, crossover ~77 mismatches for a 150bp
+read) suggests our current 33-mismatch acceptance cap is NOT the problem
+(well under the cheaper-than-literal crossover) -- so the fix is not
+simply "tighten the cap." Real cause of the leftover-fraction gap itself
+(why archaea chains fewer reads via exact overlap despite 54x coverage)
+remains open.
