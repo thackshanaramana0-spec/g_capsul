@@ -195,11 +195,33 @@ small test files. Speed remains a real, unaddressed, worsening-at-scale gap
 resolved round1/round2 scan-blowup problem found earlier this session on
 T. cacao (a much larger, more repeat-dense genome than C. elegans).
 
-**Real next step, not yet done:** the RAM cap needs to scale further for
-large chunks too (e.g., raise `MMBITS_MAX` conditionally, or make the cap
-itself a function of available system memory divided by thread count,
-rather than a fixed compile-time ceiling) — same "measured property, not
-constant" principle, just needs to be applied at a second scale tier.
+**Investigated further, real correction to the above hypothesis:** measured
+assembly ALONE (no seqpar/coders at all) at C. elegans scale — 1,300,968 KB,
+essentially IDENTICAL to the full pipeline's 1,300,516 KB peak. **`mmtab` is
+NOT the RAM driver at this scale — assembly itself is.** The `MMBITS_MAX`
+theory above was wrong for this regime; real measurement overturned it
+before any fix was attempted, per the standing "verify before assuming"
+discipline.
+
+Localized further: assembly's own internal RSS checkpoints top out at 861MB
+(printed after the trim-on-overlap/literal/mismatch/position dumps all
+complete), but the measured PEAK is 1.27GB — meaning the real spike is
+TRANSIENT, inside the trim-on-overlap phase specifically. Real, concrete
+suspect: `allrefs` (the raw, pre-trim match list) and `cleanRefs` (the
+built, trimmed result) briefly coexist in memory during the trim loop —
+the old `allrefs` is only freed via `swap()` at the very end, after
+`cleanRefs` has already been fully built alongside it. At C. elegans scale
+(real match counts far larger than the small/medium files tested earlier),
+this transient double-holding is the likely driver.
+
+**Not fixed this pass, deliberately.** A correct fix (streaming/incremental
+trim instead of build-both-then-swap) needs several more expensive
+(~1 minute each) C. elegans-scale verification runs to get right without
+risking the byte-identical correctness this session fought hard to
+establish — rushing a patch through without full re-verification at this
+scale would be exactly the kind of unverified claim this project keeps
+correcting itself for. Documented precisely here as the concrete next
+target instead.
 
 ## 4. What this pass did NOT do (explicitly, per instruction — analysis only)
 
