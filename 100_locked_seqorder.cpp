@@ -1178,6 +1178,7 @@ int main(int argc,char** argv){
         // of a key are adjacent after the sort, so a lookup is one probe plus a
         // forward scan. This is the same exact-size-CSR fix already carried into
         // ARCS from this progression.
+        lap("  [diag] entering MEM matching, before seed index");
         std::vector<uint64_t> skey; std::vector<uint32_t> spos;
         {
             std::vector<std::pair<uint64_t,uint32_t>> tmp;
@@ -1204,6 +1205,7 @@ int main(int argc,char** argv){
             while(htab[h]!=UINT32_MAX){ if(skey[htab[h]]==k) return htab[h]; h=(h+1)&TMASK; }
             return UINT32_MAX;
         };
+        lap("  [diag] seed index built");
 
         enum Mode { CROSS, SELF_FWD, SELF_RC };
         // Greedy left-to-right parse over ONE slice of the destination. Matches
@@ -1384,12 +1386,28 @@ int main(int argc,char** argv){
         // that literal.txt's mark positions and the emitted (dst,src,len,
         // is_rc) triples describe the EXACT same non-overlapping partition
         // of `pg` -- nothing to reconstruct or get out of sync later.
-        std::vector<uint8_t> c(main_pg_end,0), cr(main_pg_end,0);
-        if(FWD_SELF) nm_main =run(pg.data(),main_pg_end,SELF_FWD,c);
-        { std::string R(pg,0,main_pg_end); rc_inplace(R);
-          nm_main+=run(R.data(),main_pg_end,SELF_RC,cr,true); }
-        for(size_t i=0;i<main_pg_end;++i) if(cr[i]) c[main_pg_end-1-i]=1;
-        for(size_t i=0;i<main_pg_end;++i) if(c[i]) ++rem_main;
+        // RAM FIX (round 2, C. elegans scale) -- found by bracketing the
+        // MEM-matching phase with fine-grained RSS checkpoints: internal
+        // checkpoints never exceeded 926MB, yet the kernel-tracked peak
+        // (/usr/bin/time -v) was consistently 1.27-1.30GB -- a transient
+        // spike DURING this block, invisible to before/after sampling.
+        // Concrete, measured overlap found: `c`/`cr` (main-pg coverage
+        // bitmaps, main_pg_end bytes each -- 135MB combined at C. elegans
+        // scale) were never freed after their last real use (the rem_main
+        // tally just below) -- they stayed allocated for the ENTIRE rest
+        // of the function, fully overlapping the second pass's own `c2`/
+        // `cr2`/`Q`/`R` allocations (qlen bytes/chars each -- another
+        // ~360MB at this scale). Fixed by scoping `c`/`cr` so they free
+        // before the second pass begins, same principle as the earlier
+        // allrefs/cleanRefs fix: don't hold data alive past its last use.
+        {
+            std::vector<uint8_t> c(main_pg_end,0), cr(main_pg_end,0);
+            if(FWD_SELF) nm_main =run(pg.data(),main_pg_end,SELF_FWD,c);
+            { std::string R(pg,0,main_pg_end); rc_inplace(R);
+              nm_main+=run(R.data(),main_pg_end,SELF_RC,cr,true); }
+            for(size_t i=0;i<main_pg_end;++i) if(cr[i]) c[main_pg_end-1-i]=1;
+            for(size_t i=0;i<main_pg_end;++i) if(c[i]) ++rem_main;
+        }   // c, cr freed here -- before the second pass allocates its own bitmaps/strings
         {
             const size_t qlen=pg.size()-main_pg_end;
             if(qlen>=MINMEM){
@@ -1402,15 +1420,29 @@ int main(int argc,char** argv){
                 for(size_t i=0;i<qlen;++i) if(c2[i]) ++rem_second;
             }
         }
+        lap("  [diag] both run() passes done, allrefs built");
 
         // Trim-on-overlap pass, exactly mirroring SimplePgMatcher.cpp:99-131.
+        //
+        // RAM FIX -- found at C. elegans scale (LAYER_BY_LAYER_ANALYSIS.md
+        // section 3c): the original version built a SEPARATE `cleanRefs`
+        // vector while the raw, pre-trim `allrefs` was still fully alive,
+        // only freeing it via swap() at the very end -- a real, measured
+        // transient double-holding (assembly's peak RSS, 1.27GB, was far
+        // above its own post-phase checkpoint of 861MB, localizing the
+        // spike to exactly this window). Fixed via in-place compaction:
+        // the scan is strictly sequential and every kept element's write
+        // position is always <= its read position (nothing is ever
+        // reordered or duplicated), so it's safe to write the trimmed
+        // result back into `allrefs` itself as we go, then resize() down
+        // -- zero second allocation, not a bigger or smarter one.
         std::sort(allrefs.begin(),allrefs.end(),[](const Ref&a,const Ref&b){ return a.dst<b.dst; });
         const size_t rawRefCount=allrefs.size();
-        std::vector<Ref> cleanRefs; cleanRefs.reserve(allrefs.size());
         FILE* litf = getenv("DUMP_LIT") ? fopen("literal.txt","wb") : nullptr;
         {
-            uint64_t pos=0;
-            for(Ref m:allrefs){
+            uint64_t pos=0; size_t w=0;
+            for(size_t r=0;r<allrefs.size();++r){
+                Ref m=allrefs[r];   // copy: safe even though allrefs[w] may alias allrefs[r] when w==r
                 if(m.dst<pos){
                     const uint64_t overflow=pos-m.dst;
                     if(overflow>=m.len) continue;             // fully swallowed by an earlier match
@@ -1420,13 +1452,15 @@ int main(int argc,char** argv){
                 }
                 if(m.len<MINMEM) continue;                    // too short to be worth keeping once trimmed
                 if(litf) for(uint64_t p=pos;p<m.dst;++p) fputc(pg[p],litf);   // literal gap before this match
-                cleanRefs.push_back(m);
+                allrefs[w++]=m;
                 pos=(uint64_t)m.dst+m.len;
             }
             if(litf) for(uint64_t p=pos;p<pg.size();++p) fputc(pg[p],litf);  // trailing literal
+            allrefs.resize(w);
+            allrefs.shrink_to_fit();   // actually release the now-unused tail, not just logically shrink
         }
-        allrefs.swap(cleanRefs);
         if(litf){ fclose(litf); fprintf(stderr,"[LIT] literal.txt written (%zu clean refs, from %zu raw)\n",allrefs.size(),rawRefCount); }
+        lap("  [diag] trim-on-overlap + literal.txt done");
     }
     lap("pg MEM matching");
 
