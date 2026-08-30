@@ -785,3 +785,42 @@ asserted; falls back to the flat stream if it ever fails).
 Real full P. aeruginosa at the shipping MAXMAP=12, BYTE_IDENTICAL verified:
 mm_pos 627,976 -> 543,180 (**−13.5%**), archive 9,483,072 -> **9,398,276**
 (−0.89%), gap to PgRC2 −4.9% -> **−3.9%**.
+
+## 3l. mm_cnt zero-flag split + full 5-dataset validation
+
+PgRC2 splits the per-read mismatch counts into two streams ("Mismatches counts
+(zero flags)" / "(non-zero values)"), visible in their own stderr. Most reads
+have zero mismatches, so a 1-bit flag per read plus a dense uint8 array for
+the rest beats a sparse uint16 array. Implemented with the same round-trip
+self-check and a size guard (falls back to flat if it does not win).
+Real P. aeruginosa: 298,188 -> 266,536 (**-10.6%**).
+
+### Full validation, all 5 real locked files, all BYTE_IDENTICAL
+
+| Dataset | session start | +stage105 | +106 transforms | PgRC2 | margin |
+|---|---|---|---|---|---|
+| E. coli | 9,905,845 | 8,297,531 | **8,228,651** | 8,864,420 | **+7.2%** |
+| P. aeruginosa | 9,908,025 | 9,482,924 | **9,366,624** | 9,043,181 | −3.6% |
+| S. aureus | 15,352,697 | 14,044,361 | **13,921,389** | 13,595,003 | −2.4% |
+| P. falciparum | 18,810,808 | 17,634,117 | **17,494,397** | 17,219,695 | −1.6% |
+| L. major | 30,612,464 | 30,185,565 | **29,946,905** | 28,272,652 | −5.9% |
+
+**Total reduction this session: −6.7%.** Aggregate vs PgRC2 improved from
+−3.4% to **−2.5%**. Still 1 win / 4 losses, but every dataset improved and
+none regressed at any step.
+
+Cumulative real wins, in order of size:
+1. `MAXMAP=12` (mismatch acceptance economics) -- the largest, up to −16%
+2. Stage 105 (N-reads through assembly) -- up to −4%
+3. mm_pos bucket+transpose -- −13.5% of that stream
+4. mm_cnt zero-flag split -- −10.6% of that stream
+
+Dead ends, all measured and documented so they are not re-attempted:
+single-process architecture (0% size, +54 MB RAM, 0% time), seed geometry
+(0.01%), no-pre-dedup (0.27%), reverse-offset positions alone (mixed),
+per-stream/per-bucket coder selection (0.49% / 0.2%).
+
+**Remaining gap is match quality**, unchanged by any of the above: PgRC2 maps
+91.7% of its leftover reads at mean 1.39 mismatches; we map 82.5% at 4.70.
+Closing it means replacing the pigeonhole mapper with a MEM-anchored one
+(their copMEM, seed 38). That is the only remaining lever of any size.
