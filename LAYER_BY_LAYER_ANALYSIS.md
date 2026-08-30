@@ -162,6 +162,45 @@ was checked, not assumed from the first.
 LZMA over our scheme specifically — real next question, not answered this
 pass (analysis only, per instruction).
 
+## 3c. Large-scale generalization test (C. elegans, 4M reads) — real,
+mixed result, not skewed to the small/medium regime
+
+Per direct instruction not to conclude generalization from only 6
+small/medium datasets, tested the full byte-identical pipeline (both
+today's fixes: adaptive seqpar RAM, fixed-width position encoding) at real
+large scale for the first time.
+
+| | Ours | PgRC2 | Result |
+|---|---|---|---|
+| Size | 50,129,636 B | 52,042,122 B | **WIN 3.7%** |
+| Speed | 62.0s | 39.9s | LOSE 1.56x |
+| RAM | 1,300,516 KB | 641,316 KB | **LOSE 2.0x** |
+| Byte-identical | ✓ (0-diff, all 4,000,000 reads) | — | Correctness holds at scale |
+
+**Real, honest finding: the RAM win does NOT generalize to large scale.**
+Confirmed the predicted mechanism directly: `mmbitsFor(n)` caps at
+`MMBITS_MAX=24` (the ORIGINAL fixed ceiling), so once a chunk's natural
+data volume exceeds what a 2^24-slot table would size for anyway, the
+adaptive formula stops helping — every large chunk hits the same cap the
+small-file fix was built to eliminate. The RAM fix is real and correctly
+scoped to the regime it was built for (small/medium chunks); it was never
+tested at this scale before, and claiming a blanket "we now beat PgRC2 on
+RAM" from the small-file result alone would have been exactly the kind of
+overclaim this project has repeatedly corrected itself for this session.
+
+Size DOES generalize (3.7% win, real, holds at scale) — the fixed-width
+position encoding and overall architecture advantage is not an artifact of
+small test files. Speed remains a real, unaddressed, worsening-at-scale gap
+(1.56x here vs sub-2x on smaller files) — consistent with the never-fully-
+resolved round1/round2 scan-blowup problem found earlier this session on
+T. cacao (a much larger, more repeat-dense genome than C. elegans).
+
+**Real next step, not yet done:** the RAM cap needs to scale further for
+large chunks too (e.g., raise `MMBITS_MAX` conditionally, or make the cap
+itself a function of available system memory divided by thread count,
+rather than a fixed compile-time ceiling) — same "measured property, not
+constant" principle, just needs to be applied at a second scale tier.
+
 ## 4. What this pass did NOT do (explicitly, per instruction — analysis only)
 
 - Did not modify any code.
