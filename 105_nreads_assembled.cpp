@@ -139,8 +139,12 @@ int main(int argc,char** argv){
     // splice them back into the right position on decode) in n_indices.bin
     // as raw LE uint32 -- gated on DUMP_LIT since this is a literal-sequence
     // sibling stream, following the project's existing DUMP_* convention.
-    FILE* nrf = getenv("DUMP_LIT") ? fopen("n_reads.txt.tmp","wb") : nullptr;
+    // n_pos.bin: byte position of each N within its read (concatenated)
+    // n_indices.bin: original index of each N-containing read
+    // n_cnt.bin: how many Ns in each N-containing read
+    FILE* nrf = getenv("DUMP_LIT") ? fopen("n_pos.bin.tmp","wb") : nullptr;
     FILE* nif = getenv("DUMP_LIT") ? fopen("n_indices.bin.tmp","wb") : nullptr;
+    FILE* ncf = getenv("DUMP_LIT") ? fopen("n_cnt.bin.tmp","wb") : nullptr;
     {
         std::ifstream f(argv[1]); std::string a,b,c,d;
         std::unordered_map<uint64_t,std::vector<uint32_t>> seen; seen.reserve(1u<<21);
@@ -159,11 +163,32 @@ int main(int argc,char** argv){
         };
         while(std::getline(f,a)&&std::getline(f,b)&&std::getline(f,c)&&std::getline(f,d)){
             ++n_in;
+            // STAGE 105 -- STRUCTURAL: N-containing reads used to bypass
+            // assembly entirely and get dumped as raw text. Measured on real
+            // P. aeruginosa that cost 586,364 B (567,140 seqpar + 19,224
+            // indices) for 24,350 reads -- 70% of our whole gap to PgRC2 on
+            // that file -- and it is NOT a coder problem (seqpar 1 1 already
+            // beats xz 567,140 vs 644,304). The reads themselves are fine:
+            // mean 1.23 N characters each, max 8, none all-N. They were being
+            // excluded from overlap assembly over one or two ambiguous bases.
+            // PgRC2 gives them a dedicated nPg so they still get assembled
+            // (pgrc-encoder.cpp:184-204, runNPgGeneration). Here they are
+            // substituted N->A and sent through the SAME pipeline as every
+            // other read, with the N positions kept in a small side stream --
+            // same goal as their nPg, without a second pseudogenome, and the
+            // substituted base is simply corrected on the way out.
             if(b.find('N')!=std::string::npos){
                 ++n_filt;
-                if(nrf){ fwrite(b.data(),1,b.size(),nrf); fputc('\n',nrf); }
                 if(nif){ const uint32_t idx=(uint32_t)(n_in-1); fwrite(&idx,4,1,nif); }
-                continue;
+                uint8_t ncnt=0;
+                for(uint32_t j=0;j<b.size();++j){
+                    if(b[j]=='N'){
+                        if(nrf){ fputc((int)(j>255?255:j),nrf); }
+                        b[j]='A';
+                        if(ncnt<255) ++ncnt;
+                    }
+                }
+                if(ncf) fputc((int)ncnt,ncf);
             }
             if(b.size()>1023) continue;                       // uint16 length field, matches ubuf/b_ buffer size
             auto& bk=seen[fnv(b.data(),(uint32_t)b.size())]; bool dup=false;
@@ -190,8 +215,9 @@ int main(int argc,char** argv){
         }
         rpk.shrink_to_fit(); woff.shrink_to_fit(); rlen.shrink_to_fit();
     }
-    if(nrf){ fclose(nrf); rename("n_reads.txt.tmp","n_reads.txt"); }
+    if(nrf){ fclose(nrf); rename("n_pos.bin.tmp","n_pos.bin"); }
     if(nif){ fclose(nif); rename("n_indices.bin.tmp","n_indices.bin"); }
+    if(ncf){ fclose(ncf); rename("n_cnt.bin.tmp","n_cnt.bin"); }
     const uint32_t n=(uint32_t)rlen.size();
 
     uint32_t Lmax=0; for(uint32_t i=0;i<n;++i) Lmax=std::max(Lmax,(uint32_t)rlen[i]);

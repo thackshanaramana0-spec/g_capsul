@@ -168,32 +168,30 @@ for o in range(n_orig):
             seq[j] = obsc if not s else COMP[obsc]
     out_seqs[o] = ''.join(seq)
 
-# ---- layer 6: N-reads ----
-with open(f'{WORK}/n_reads.txt') as f:
-    n_reads = [l.rstrip('\n') for l in f]
+# ---- layer 6: N restoration (STAGE 105) ----
+# N-reads are no longer stored verbatim. They went through the SAME pipeline
+# as every other read with each N substituted by 'A', so out_seqs already
+# holds them in the correct place and in original order -- all that remains is
+# to put the N characters back at the recorded positions.
 n_indices = read_u32(f'{WORK}/n_indices.bin')
-assert len(n_reads) == len(n_indices)
-n_by_index = dict(zip(n_indices, n_reads))
+with open(f'{WORK}/n_cnt.bin','rb') as f: n_cnt = f.read()
+with open(f'{WORK}/n_pos.bin','rb') as f: n_pos = f.read()
+assert len(n_cnt) == len(n_indices), f"{len(n_cnt)} vs {len(n_indices)}"
 
-# ---- final: walk original file order ----
-# out_seqs[o] is indexed by NON-N-READ ENCOUNTER ORDER (o=0..n_orig-1), not
-# the true original file index -- N-reads were skipped entirely during that
-# numbering. The true original index for the o-th non-N read is recoverable
-# as the sorted complement of n_indices (N-read positions) within the full
-# range.
-n_total = n_orig + len(n_indices)
-n_index_set = set(n_indices)
-non_n_true_indices = [i for i in range(n_total) if i not in n_index_set]
-assert len(non_n_true_indices) == n_orig, f"{len(non_n_true_indices)} vs {n_orig}"
-
-out = [None]*n_total
-for o in range(n_orig):
-    out[non_n_true_indices[o]] = out_seqs[o]
-for idx, seq in n_by_index.items():
-    out[idx] = seq
+out = out_seqs                      # already indexed by true original order
+n_total = len(out)
+k = 0
+for r, orig_i in enumerate(n_indices):
+    c = n_cnt[r]
+    seq = list(out[orig_i])
+    for m in range(c):
+        seq[n_pos[k+m]] = 'N'
+    k += c
+    out[orig_i] = ''.join(seq)
+assert k == len(n_pos), f"n_pos not fully consumed: {k} vs {len(n_pos)}"
 
 missing = sum(1 for x in out if x is None)
-print(f"[decode] total reads={n_total} missing={missing}", file=sys.stderr)
+print(f"[decode] total reads={n_total} n_reads_restored={len(n_indices)} missing={missing}", file=sys.stderr)
 
 with open(OUT,'w') as f:
     for x in out:

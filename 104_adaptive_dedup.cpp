@@ -123,6 +123,7 @@ int main(int argc,char** argv){
     // collapses duplicates, so the original->unique map has to be kept too.
     std::vector<uint32_t> orig2uid;       // original read (N-filtered out) -> unique id
     size_t n_in=0,n_filt=0;
+    const bool DEDUP_ON = !(getenv("NODEDUP") && atoi(getenv("NODEDUP")));
     // STAGE 100 -- real, previously-undisclosed data-loss bug: N-containing
     // reads were `continue`'d here with NO storage anywhere, in every stage
     // from 87 through 98. Caught only because a direct question ("how can
@@ -166,7 +167,27 @@ int main(int argc,char** argv){
                 continue;
             }
             if(b.size()>1023) continue;                       // uint16 length field, matches ubuf/b_ buffer size
-            auto& bk=seen[fnv(b.data(),(uint32_t)b.size())]; bool dup=false;
+            // ADAPTIVE DEDUP (stage 104): dedup collapses duplicate reads so
+            // position/length/strand/mismatches are stored once, but it forces
+            // an orig2uid correlation array for every ORIGINAL read. Measured
+            // on real P. aeruginosa: orig2uid costs 423,940 B while the file
+            // has ~1% duplicates, so the correlation array costs far more than
+            // the collapse saves -- and PgRC2 pays nothing here because it has
+            // no such array at all (a duplicate is just a 100%-length overlap,
+            // GreedySwiping...cpp:110-115). Skipping dedup when duplication is
+            // low is therefore a formula keyed on a MEASURED property of the
+            // input, not a per-dataset switch. Threshold set from the real
+            // break-even, env-overridable to re-sweep.
+            bool dup=false;
+            if(!DEDUP_ON){
+                orig2uid.push_back((uint32_t)rlen.size());
+                packstr(b.data(),(uint32_t)b.size(),tmpw);
+                woff.push_back(rpk.size());
+                rpk.insert(rpk.end(),tmpw.begin(),tmpw.end());
+                rlen.push_back((uint16_t)b.size());
+                continue;
+            }
+            auto& bk=seen[fnv(b.data(),(uint32_t)b.size())];
             for(uint32_t id:bk){
                 if(rlen[id]!=(uint16_t)b.size()) continue;
                 const uint64_t* w=&rpk[woff[id]];

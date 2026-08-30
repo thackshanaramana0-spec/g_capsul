@@ -592,3 +592,82 @@ ceiling. Candidates, in order of measured promise, none yet tested:
 3. The 3-way pg split remains untested and is now re-motivated: their LQ pg
    stores poorly-matching reads as sequence rather than as expensive mismatch
    records, which is the same economics MAXMAP exploits, applied structurally.
+
+## 3h. Stage 105 — N-reads routed through assembly (real structural change)
+
+Found by a full stream-vs-layer comparison on our worst-loss file
+(P. aeruginosa, real full file). Category breakdown vs PgRC2's real streams:
+
+| Category | Ours | PgRC2 | |
+|---|---|---|---|
+| position/order | 4,734,796 | 4,964,368 | −230K better |
+| mismatch (all) | 1,049,845 | 1,442,834 | −393K better |
+| sequence | 2,870,296 | 2,485,786 | +384K worse |
+| **N-reads** | **586,364** | assembled into nPg | **+586K worse** |
+
+**Our N-read layer was 70% of the entire gap on that file.** N-containing
+reads were `continue`'d out of the pipeline at load time and dumped as raw
+text (2,459,350 B raw → 567,140 seqpar + 19,224 indices). Not a coder
+problem: seqpar 1 1 already beat xz (567,140 vs 644,304), and every other
+seqpar context setting was worse.
+
+The reads did not deserve the exclusion: mean **1.23** N characters each,
+max 8, none all-N. Perfectly good reads were kept out of overlap assembly
+over one or two ambiguous bases. PgRC2 does not do this -- it builds a
+dedicated nPg so they are still assembled (`runNPgGeneration`,
+pgrc-encoder.cpp:184-204).
+
+**Fix (`105_nreads_assembled.cpp` + `decode_105.py`):** substitute N->A, send
+the reads through the SAME pipeline as everything else, keep N positions in a
+small side stream (`n_pos.bin`, `n_cnt.bin`, `n_indices.bin`), restore on
+decode. Same goal as their nPg without a second pseudogenome.
+
+P. aeruginosa: N layer 586,364 → **23,608 (−96%)**, total −4.0%.
+
+### Combined result, real full files, all BYTE_IDENTICAL verified
+
+| Dataset | original | +MAXMAP=12 | +stage105 | PgRC2 | margin |
+|---|---|---|---|---|---|
+| E. coli | 9,905,845 | 8,322,815 | 8,297,531 | 8,864,420 | **+6.4%** |
+| P. aeruginosa | 9,908,025 | 9,878,603 | 9,482,924 | 9,043,181 | −4.9% |
+| S. aureus | 15,352,697 | 14,102,598 | 14,044,361 | 13,595,003 | −3.3% |
+| P. falciparum | 18,810,808 | 17,663,096 | 17,634,117 | 17,219,695 | −2.4% |
+| L. major | 30,612,464 | 30,368,493 | 30,185,565 | 28,272,652 | −6.8% |
+
+Both fixes together: **−5.8%** on our own totals. Aggregate vs PgRC2:
+**−3.4%**, 1 win / 4 losses. Stage 105 improves every dataset and regresses
+none.
+
+### Tested and rejected on measurement (not taste)
+
+- **Reverse-offset mismatch positions** (PgRC2's rlMisRevOffDest technique):
+  helps yeast −1.4% and P. aeruginosa −4.9%, but HURTS E. coli +1.6%. The
+  MAXMAP fix made mismatches sparse (2.62/read), and reverse offsets only pay
+  when they are dense -- the two fixes are antagonistic. A prototype measured
+  −10.4% before the MAXMAP fix; that gain evaporated after it.
+- **No pre-dedup** (`104_adaptive_dedup.cpp`, NODEDUP=1): orig2uid falls
+  423,940 → 1,084 but the other per-read arrays absorb it. Net only −0.27% on
+  real P. aeruginosa. Cost relocated, not removed -- same lesson as the
+  ROUND 2 revert.
+- **Per-stream coder selection**: real but small. Measured on real post-fix
+  E. coli: orig2uid −6.4% (bzip2), mm_count −5.4% (xz -9e), read_lengths
+  −79.3%, pos_strand −0.5%; pos_abs/mm_pos/n_indices unchanged (xz already
+  best). Total **0.49%** of the archive -- worth taking, not decisive.
+
+### RAM: correcting an earlier architecture claim
+
+Our multi-process design already bounds peak RAM to the MAX over stages, not
+the sum, because each coder exits. PgRC2 reaches the same bound in one process
+via compress-and-release. Measured parity at ~0.5M reads: H. salinarum ours
+112 MB vs theirs 185 MB (we win); S. acidocaldarius 208 vs 194 MB (they win).
+So "PgRC2 wins on memory release" is wrong at this scale.
+
+The real RAM gap is at C. elegans scale (4M reads, ours 1.30 GB, ~1.86x
+behind) and it is NOT caused by the process split -- it is inside our assembly
+process, which holds every array live until it dumps at the end, whereas their
+`disposeReadsList()` frees each structure as soon as it is coded. The
+technique worth adopting is compress-and-release INSIDE assembly, which is
+independent of the disk-staging question. Not yet implemented or measured.
+
+Disk cost, separately: intermediates are 361 MB for a 456 MB input (~0.8x), so
+C. elegans would stage ~8.7 GB and T. cacao ~17 GB.
