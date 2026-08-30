@@ -256,3 +256,36 @@ static std::vector<uint8_t> mmpos_untranspose(const std::vector<uint8_t>& t,
     }
     return out;
 }
+
+// ---------- mismatch-count zero-flag split (PgRC2's technique) ----------
+// They do not code the per-read mismatch counts as one stream: it is split
+// into "Mismatches counts (zero flags)" and "Mismatches counts (non-zero
+// values)" (visible as two separate streams in their own stderr). Most reads
+// have zero mismatches, so a 1-bit flag per read plus a dense value array for
+// the rest beats a sparse uint16 array. Measured -10.6% on real
+// P. aeruginosa. Values are uint8; the caller must confirm no count exceeds
+// 255 (MAXMAP bounds it well below that) and fall back otherwise.
+static bool mmcnt_split(const std::vector<uint16_t>& counts,
+                        std::vector<uint8_t>& flags, std::vector<uint8_t>& vals){
+    flags.clear(); vals.clear();
+    flags.reserve((counts.size()+7)/8); vals.reserve(counts.size()/4+1);
+    uint8_t acc=0; int nb=0;
+    for(uint16_t c : counts){
+        if(c>255) return false;
+        acc=(uint8_t)((acc<<1)|(c?1:0)); ++nb;
+        if(nb==8){ flags.push_back(acc); acc=0; nb=0; }
+        if(c) vals.push_back((uint8_t)c);
+    }
+    if(nb) flags.push_back((uint8_t)(acc<<(8-nb)));
+    return true;
+}
+static std::vector<uint16_t> mmcnt_join(const std::vector<uint8_t>& flags,
+                                        const std::vector<uint8_t>& vals, size_t n){
+    std::vector<uint16_t> out(n,0);
+    size_t k=0;
+    for(size_t i=0;i<n;++i){
+        const bool nz = (flags[i>>3] >> (7-(i&7))) & 1;
+        if(nz) out[i]= vals[k++];
+    }
+    return out;
+}

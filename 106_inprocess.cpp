@@ -1779,7 +1779,16 @@ int main(int argc,char** argv){
           mmcounts.resize(v.size()/2);
           if(!mmcounts.empty()) memcpy(mmcounts.data(), v.data(), mmcounts.size()*2);
           STR.mm_count.release();
-          ar.put("mm_count", xz_compress(v.data(),v.size())); }
+          std::vector<uint8_t> cf, cv;
+          if(mmcnt_split(mmcounts, cf, cv) && mmcnt_join(cf,cv,mmcounts.size())==mmcounts){
+              auto a=xz_compress(cf.data(),cf.size()), b=xz_compress(cv.data(),cv.size());
+              const size_t flat=xz_compress(v.data(),v.size()).size();
+              if(a.size()+b.size() < flat){
+                  fprintf(stderr,"[mm_cnt] zero-flag split %zu vs flat %zu (%+.1f%%)\n",
+                          a.size()+b.size(), flat, 100.0*((double)(a.size()+b.size())-flat)/(flat?flat:1));
+                  ar.put("mm_cnt_flags", a); ar.put("mm_cnt_vals", b);
+              } else ar.put("mm_count", xz_compress(v.data(),v.size()));
+          } else ar.put("mm_count", xz_compress(v.data(),v.size())); }
         { auto v=STR.mm_pos.bytes();       STR.mm_pos.release();
           auto t = mmpos_bucket_transpose(v, mmcounts);
           // invertibility is a correctness claim, so prove it here rather
