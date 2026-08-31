@@ -118,6 +118,7 @@ struct Archive {
     std::vector<std::pair<const char*,size_t>> parts;
     explicit Archive(const char* path){ out=fopen(path,"wb"); }
     void put(const char* name, const std::vector<uint8_t>& coded){
+        // (timing is recorded by the caller via tput)
         uint64_t n=coded.size();
         fwrite(&n,8,1,out);
         if(n) fwrite(coded.data(),1,n,out);
@@ -1796,6 +1797,13 @@ int main(int argc,char** argv){
     {
         const char* apath = getenv("ARCHIVE") ? getenv("ARCHIVE") : "out.arcs2";
         Archive ar(apath);
+        auto __t0 = std::chrono::steady_clock::now();
+        auto CODED = [&](const char* nm){
+            auto n = std::chrono::steady_clock::now();
+            fprintf(stderr,"  [codetime] %-14s %6.2f s\n", nm,
+                    std::chrono::duration<double>(n-__t0).count());
+            __t0 = n;
+        };
         const size_t rss_before = rss_mb();
         // VERIFY_DUMP: also write the RAW (pre-coding) streams to files purely
         // so decode_105.py can prove the in-memory pipeline produces exactly
@@ -1826,18 +1834,18 @@ int main(int argc,char** argv){
             }
             STR.literal.release();                       // raw literal gone before coding peaks
             unsigned T=std::thread::hardware_concurrency(); if(!T) T=12;
-            ar.put("literal", seq_encode_mem(sym,T,T));
+            ar.put("literal", seq_encode_mem(sym,T,T)); CODED("literal");
         }
         // L3 MEM references
         { auto v=STR.mem_triples.bytes(); STR.mem_triples.release();
-          ar.put("mem_triples", refc::encode(v,pg.size(),main_pg_end)); }
+          ar.put("mem_triples", refc::encode(v,pg.size(),main_pg_end)); CODED("mem_triples"); }
         // L4 position + strand
-        { auto v=STR.pos_abs.bytes();      STR.pos_abs.release();      ar.put("pos_abs", best_encode(v.data(),v.size(),true)); }
-        { auto v=STR.pos_strand.bytes();   STR.pos_strand.release();   ar.put("pos_strand",  best_encode(v.data(),v.size(),false)); }
+        { auto v=STR.pos_abs.bytes();      STR.pos_abs.release();      ar.put("pos_abs", best_encode(v.data(),v.size(),true)); CODED("pos_abs"); }
+        { auto v=STR.pos_strand.bytes();   STR.pos_strand.release();   ar.put("pos_strand",  best_encode(v.data(),v.size(),false)); CODED("pos_strand"); }
         // L5 mismatch symbols / positions / counts
         { auto r=STR.mm_ref.bytes(), o=STR.mm_obs.bytes();
           STR.mm_ref.release(); STR.mm_obs.release();
-          ar.put("mm_sym", mmc::encode(r,o)); }
+          ar.put("mm_sym", mmc::encode(r,o)); CODED("mm_sym"); }
         // mm_count first: its values drive the mm_pos bucketing, and the
         // decoder gets it the same way.
         std::vector<uint16_t> mmcounts;
@@ -1852,7 +1860,7 @@ int main(int argc,char** argv){
               if(a.size()+b.size() < flat){
                   fprintf(stderr,"[mm_cnt] zero-flag split %zu vs flat %zu (%+.1f%%)\n",
                           a.size()+b.size(), flat, 100.0*((double)(a.size()+b.size())-flat)/(flat?flat:1));
-                  ar.put("mm_cnt_flags", a); ar.put("mm_cnt_vals", b);
+                  ar.put("mm_cnt_flags", a); ar.put("mm_cnt_vals", b); CODED("mm_cnt");
               } else ar.put("mm_count", best_encode(v.data(),v.size()));
           } else ar.put("mm_count", best_encode(v.data(),v.size())); }
         { auto v=STR.mm_pos.bytes();       STR.mm_pos.release();
@@ -1861,15 +1869,15 @@ int main(int argc,char** argv){
           if(!buck.empty() && buck.size()<flat.size()){
               fprintf(stderr,"[mm_pos] per-bucket real coders %zu vs flat %zu (%+.1f%%)\n",
                       buck.size(), flat.size(), 100.0*((double)buck.size()-flat.size())/flat.size());
-              ar.put("mm_pos", buck);
+              ar.put("mm_pos", buck); CODED("mm_pos");
           } else ar.put("mm_pos", flat); }
         // L6 N restoration
-        { auto v=STR.n_pos.bytes();        STR.n_pos.release();        ar.put("n_pos", best_encode(v.data(),v.size(),false)); }
-        { auto v=STR.n_indices.bytes();    STR.n_indices.release();    ar.put("n_indices",   best_encode(v.data(),v.size(),true)); }
-        { auto v=STR.n_cnt.bytes();        STR.n_cnt.release();        ar.put("n_cnt", best_encode(v.data(),v.size(),false)); }
+        { auto v=STR.n_pos.bytes();        STR.n_pos.release();        ar.put("n_pos", best_encode(v.data(),v.size(),false)); CODED("n_pos"); }
+        { auto v=STR.n_indices.bytes();    STR.n_indices.release();    ar.put("n_indices",   best_encode(v.data(),v.size(),true)); CODED("n_indices"); }
+        { auto v=STR.n_cnt.bytes();        STR.n_cnt.release();        ar.put("n_cnt", best_encode(v.data(),v.size(),false)); CODED("n_cnt"); }
         // L7 lengths, L8 orig2uid
-        { auto v=STR.read_lengths.bytes(); STR.read_lengths.release(); ar.put("read_lengths",best_encode(v.data(),v.size(),false)); }
-        { auto v=STR.orig2uid.bytes();     STR.orig2uid.release();     ar.put("orig2uid", best_encode(v.data(),v.size(),true)); }
+        { auto v=STR.read_lengths.bytes(); STR.read_lengths.release(); ar.put("read_lengths",best_encode(v.data(),v.size(),false)); CODED("read_lengths"); }
+        { auto v=STR.orig2uid.bytes();     STR.orig2uid.release();     ar.put("orig2uid", best_encode(v.data(),v.size(),true)); CODED("orig2uid"); }
 
         ar.finish();
         fprintf(stderr,"[archive] rss before coding %zu MB, after %zu MB\n",rss_before,rss_mb());

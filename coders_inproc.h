@@ -14,14 +14,40 @@
 #include <cmath>
 #include <lzma.h>
 #include <map>
+#include <thread>
 #include "coders_pgrc.h"
 
 // ---------- xz (liblzma), equivalent to `xz -9 -c` ----------
+// Multi-threaded LZMA. PgRC2 passes a thread count to every LzmaCoderProps
+// (PropsLibrary.cpp: noOfThreads = numberOfThreads>1 ? 2 : 1); we were calling
+// the single-threaded lzma_easy_buffer_encode, which is a large part of why we
+// measured 145% CPU against their 515% on a 12-core box. Falls back to the
+// single-threaded path for small inputs, where MT block-splitting costs bytes
+// and buys no time.
 static std::vector<uint8_t> xz_compress(const void* data, size_t n, uint32_t preset=9){
     if(!n) return {};
     size_t cap = lzma_stream_buffer_bound(n) + 128;
     std::vector<uint8_t> out(cap);
     size_t pos = 0;
+    const size_t MT_MIN = 1u<<21;                 // 2 MB: below this MT is a loss
+    if(n >= MT_MIN){
+        unsigned hw = std::thread::hardware_concurrency(); if(!hw) hw = 1;
+        lzma_mt mt{};
+        mt.threads      = hw > 8 ? 8 : hw;
+        mt.block_size   = 0;                      // let liblzma choose
+        mt.check        = LZMA_CHECK_CRC64;
+        mt.preset       = preset;
+        lzma_stream strm = LZMA_STREAM_INIT;
+        if(lzma_stream_encoder_mt(&strm, &mt) == LZMA_OK){
+            strm.next_in = (const uint8_t*)data; strm.avail_in = n;
+            strm.next_out = out.data();          strm.avail_out = cap;
+            lzma_ret r = lzma_code(&strm, LZMA_FINISH);
+            pos = cap - strm.avail_out;
+            lzma_end(&strm);
+            if(r == LZMA_STREAM_END){ out.resize(pos); return out; }
+        }
+        pos = 0;                                  // MT failed; fall through
+    }
     lzma_ret r = lzma_easy_buffer_encode(preset, LZMA_CHECK_CRC64, nullptr,
                                          (const uint8_t*)data, n,
                                          out.data(), &pos, cap);
@@ -359,24 +385,62 @@ static std::vector<uint16_t> mmcnt_join(const std::vector<uint8_t>& flags,
 // id so it stays decodable.
 //   0 xz default | 1 xz lc2lp2pb2 | 2 ppmd5 | 3 fse | 4 range(period=1)
 //   5 byteplanes+xz | 6 byteplanes+lzma(0,0,0)
+static std::vector<uint8_t> encode_method(const uint8_t* d, size_t n, int m){
+    switch(m){
+        case 0: return xz_compress(d,n);
+        case 1: return xz_compress_lzma(d,n,2,2,2);
+        case 2: return pgc::ppmd_encode(d,n,5,32);
+        case 3: return pgc::fse_encode(d,n);
+        case 4: return pgc::range_encode(d,n,1);
+        case 5: { auto bp=u32_byteplanes(d,n); return xz_compress(bp.data(),bp.size()); }
+        case 6: { auto bp=u32_byteplanes(d,n); return xz_compress_lzma(bp.data(),bp.size(),0,0,0); }
+    }
+    return {};
+}
+// PgRC2 does NOT run every candidate over the whole stream -- SelectorCoderProps
+// takes a probeFraction with a 64 KB floor (CodersLib.h:216-236,
+// getSelectorCoderProps(..., 0.2, ...)), picks a winner on the probe, then
+// encodes the full stream ONCE. Running all candidates at full length was
+// costing 10.0 s of an 18.7 s run, 6.69 s of it on pos_abs alone.
+static const size_t PROBE_MIN   = 1u<<16;   // 64 KB, their DEFAULT_MIN_PROBE_SIZE
+static const double PROBE_FRAC  = 0.20;     // their probeFraction
+
 static std::vector<uint8_t> best_encode(const uint8_t* d, size_t n, bool u32shaped=false){
     if(!n) return {};
-    std::vector<std::pair<int,std::vector<uint8_t>>> c;
-    c.emplace_back(0, xz_compress(d,n));
-    c.emplace_back(1, xz_compress_lzma(d,n,2,2,2));
-    c.emplace_back(2, pgc::ppmd_encode(d,n,5,32));
-    c.emplace_back(3, pgc::fse_encode(d,n));
-    c.emplace_back(4, pgc::range_encode(d,n,1));
-    if(u32shaped && n>=4 && n%4==0){
-        auto bp = u32_byteplanes(d,n);
-        c.emplace_back(5, xz_compress(bp.data(),bp.size()));
-        c.emplace_back(6, xz_compress_lzma(bp.data(),bp.size(),0,0,0));
+    std::vector<int> methods = {0,1,2,3,4};
+    if(u32shaped && n>=4 && n%4==0){ methods.push_back(5); methods.push_back(6); }
+
+    size_t probe = (size_t)(n*PROBE_FRAC);
+    if(probe < PROBE_MIN) probe = PROBE_MIN;
+    if(probe > n) probe = n;
+    if(u32shaped) probe &= ~(size_t)3;          // keep the 4-byte stride intact
+    if(probe < 4) probe = n;
+
+    int best = 0;
+    if(probe < n){
+        size_t bs = SIZE_MAX;
+        for(int m : methods){
+            auto c = encode_method(d, probe, m);
+            if(!c.empty() && c.size() < bs){ bs = c.size(); best = m; }
+        }
+    } else {
+        // stream is small enough that probing saves nothing -- decide exactly
+        size_t bs = SIZE_MAX;
+        std::vector<uint8_t> keep; int km = 0;
+        for(int m : methods){
+            auto c = encode_method(d, n, m);
+            if(!c.empty() && c.size() < bs){ bs = c.size(); keep = std::move(c); km = m; }
+        }
+        std::vector<uint8_t> out; out.reserve(bs+1);
+        out.push_back((uint8_t)km);
+        out.insert(out.end(), keep.begin(), keep.end());
+        return out;
     }
-    int bi=0; size_t bs=SIZE_MAX;
-    for(auto& p:c) if(!p.second.empty() && p.second.size()<bs){ bs=p.second.size(); bi=p.first; }
-    std::vector<uint8_t> out; out.reserve(bs+1);
-    out.push_back((uint8_t)bi);
-    for(auto& p:c) if(p.first==bi){ out.insert(out.end(),p.second.begin(),p.second.end()); break; }
+    auto coded = encode_method(d, n, best);
+    if(coded.empty()) coded = xz_compress(d,n), best = 0;
+    std::vector<uint8_t> out; out.reserve(coded.size()+1);
+    out.push_back((uint8_t)best);
+    out.insert(out.end(), coded.begin(), coded.end());
     return out;
 }
 

@@ -1219,3 +1219,64 @@ PgRC2 +3.14%, 4 of 5 wins.** P. aeruginosa is now −0.08% — a statistical tie
 Per-stream highlights on P. aeruginosa: pos_strand 74,272 -> 60,094 (−19%),
 n_indices 19,228 -> 11,245 (−42%), orig2uid 1,108 -> 2, mm_pos −14.9%,
 mm_cnt −14.6%.
+
+## 3u. WHY WE ARE SLOW — it is parallelism, not algorithmic cost
+
+First real speed comparison against PgRC2 (earlier "12.8s vs 12.8s" was
+ours-old vs ours-new, never against them). Real full P. aeruginosa, machine
+idle, runs sequential:
+
+| | wall | user CPU | utilisation | archive |
+|---|---|---|---|---|
+| **Ours** | **13.9 s** | 19.7 s | **145%** (1.45 of 12 cores) | 9,050,617 |
+| **PgRC2** | **3.14 s** | 16.0 s | **515%** (5.2 cores) | 9,043,170 |
+
+**We do only ~23% more actual computation** (19.7 s vs 16.0 s of CPU). The
+4.4x wall gap is almost entirely that we run it on 1.45 cores while they use
+5.2. At their utilisation our own workload would finish in ~3.8 s — parity.
+
+### Where the 13.9 s goes
+
+| phase | time | share |
+|---|---|---|
+| **assembly** | **8.67 s** | **62%** |
+| — round 1 (division) | 3.92 s | 28% |
+| — round 2 (assembly) | 1.51 s | 11% |
+| — MEM matching | 1.17 s | 8% |
+| — load+filter+dedup | 1.05 s | 8% |
+| — pigeonhole mapping | 0.49 s | 4% |
+| — emit chains | 0.42 s | 3% |
+| **stream coding** | **4.88 s** | **35%** |
+| — pos_abs | 2.33 s | 17% |
+| — mm_cnt | 1.40 s | 10% |
+| — mm_pos | 0.61 s | 4% |
+| — all others | 0.54 s | 4% |
+
+Derived utilisation per stage: **coding runs at ~100% (fully serial)** — xz,
+PPMd, FSE and the range coder are all single-threaded; **assembly at ~171%**
+(1.7 cores) despite having threads, because the per-level sweep parallelises
+the candidate search but commits serially in original tail order.
+
+### One self-inflicted cost, already fixed
+
+`best_encode` originally ran all 7 candidate coders over the FULL stream:
+10.0 s of an 18.7 s run, 6.69 s on pos_abs alone. PgRC2 never does this —
+`SelectorCoderProps` probes a fraction (`getSelectorCoderProps(..., 0.2, ...)`,
+64 KB floor, CodersLib.h:216-236) then encodes once with the winner.
+Implemented the same way: **pos_abs 6.69 s → 2.33 s, wall 18.7 s → 13.9 s
+(−29%), at a cost of +187 bytes (0.002%)**, still BYTE_IDENTICAL.
+
+### What would close the rest, in order of size
+
+1. **Parallelise stream coding** (4.88 s, fully serial). The streams are
+   independent — coding them concurrently is embarrassingly parallel and needs
+   no algorithmic change. Alone this is worth ~4 s of wall.
+2. **Raise assembly utilisation** from 171%. round 1 at 3.92 s is the single
+   biggest item; its serial commit phase is the bottleneck.
+3. Multi-threaded LZMA was added (`lzma_stream_encoder_mt`, ≥2 MB inputs) but
+   is **inert on this file** — pos_abs wins via the byte-plane + custom-params
+   path, which routes through `xz_compress_lzma`, not the MT function.
+   Harmless, and will apply where plain xz wins on a large stream.
+
+**Bottom line: we are not doing more work, we are doing it serially.** The
+size result (+3.14% aggregate, 4/5 wins) stands independently of this.
