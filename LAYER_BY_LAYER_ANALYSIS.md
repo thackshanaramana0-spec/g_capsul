@@ -1280,3 +1280,82 @@ Implemented the same way: **pos_abs 6.69 s → 2.33 s, wall 18.7 s → 13.9 s
 
 **Bottom line: we are not doing more work, we are doing it serially.** The
 size result (+3.14% aggregate, 4/5 wins) stands independently of this.
+
+## 3v. Archaea layer-by-layer: identifying WHY sulfo loses and halo wins
+
+Two archaea, one win one loss, same kingdom -- the most informative contrast
+available. Every number below is measured from both tools on the same file,
+not assumed.
+
+### Layer table (ours vs PgRC2's real streams)
+
+| layer | SULFO ours | SULFO PgRC2 | delta | HALO ours | HALO PgRC2 | delta |
+|---|---|---|---|---|---|---|
+| literal | 814,938 | 595,834 | **+219,104** | 665,856 | 579,465 | **+86,391** |
+| mem_triples | 175,723 | 16,444 | **+159,279** | 472,066 | 20,673 | **+451,393** |
+| pos_abs | 1,482,345 | 1,398,530 | +83,815 | 1,269,209 | 1,291,734 | −22,525 |
+| mm_sym | 87,042 | 208,234 | −121,192 | 52,524 | 513,055 | **−460,531** |
+| mm_pos | 621,159 | 721,906 | −100,747 | 93,052 | 479,845 | **−386,793** |
+| mm_cnt | 147,185 | 163,068 | −15,883 | 57,632 | 151,467 | −93,835 |
+| **TOTAL** | **3,341,008** | **3,113,979** | **+227,029** | **2,619,493** | **3,049,295** | **−429,802** |
+
+**The same three layers lose on BOTH files** (literal, mem_triples, pos_abs).
+Nothing about sulfo makes our coders worse. What differs is how much the
+mismatch layers win by: on halo they are ~941 KB cheaper than PgRC2's, easily
+covering the ~538 KB lost elsewhere; on sulfo only ~238 KB, which cannot cover
+462 KB.
+
+### Root cause: it is not our mismatch coder, it is PgRC2's mismatch VOLUME
+
+Raw mismatch symbols produced, both tools, same files:
+
+| | ours | PgRC2 |
+|---|---|---|
+| sulfo | 777,182 | 1,096,906 |
+| halo | 284,039 | **2,682,318** |
+
+**We emit fewer mismatches than PgRC2 on both files.** Our coder is not the
+variable. PgRC2 emits 2.4x more on halo than on sulfo, which is why our
+mismatch-layer advantage collapses on sulfo -- their number came down, ours
+did not go up. Our mean mismatches per placed read is identical on the two
+files (2.94 and 2.94).
+
+### The structural difference: where the leftover reads go
+
+| | leftovers | mapped | appended | second pg | MEM second removal |
+|---|---|---|---|---|---|
+| sulfo | 273,046 | **264,702 (96.9%)** | 8,344 | 2,088,887 B | 50.3%, 28,918 matches |
+| halo | 185,825 | 96,564 (52.0%) | **89,261 (48.0%)** | 13,286,869 B | **93.1%, 254,750 matches** |
+
+This is the real mechanism, and it runs opposite to intuition:
+
+- **sulfo maps 96.9% of leftovers onto the pg.** Mapped reads are cheap in
+  sequence but every one carries mismatch records -- hence 777,182 mismatch
+  symbols and a 621,159 B mm_pos.
+- **halo appends 48% of leftovers as raw sequence** into a second pg of
+  13.3 MB. That second pg is then 93.1% removed by MEM matching (254,750
+  matches), so the bases nearly vanish while generating almost no mismatches
+  -- 284,039 symbols and a 93,052 B mm_pos.
+
+So halo wins because its leftovers are **highly self-similar**: appending them
+and letting MEM matching collapse the result is far cheaper than mapping them
+with mismatches. Sulfo's are not, so mapping is the only option and the
+mismatch cost is unavoidable.
+
+### What this identifies (no change made yet)
+
+The choice between "map this read with mismatches" and "append it and let MEM
+matching collapse it" is currently made per read by the mapper, with no
+knowledge of which is cheaper downstream. On halo the append path wins by a
+large margin and we take it only 48% of the time; on sulfo the map path is
+right and we take it 96.9% of the time -- both by accident of the acceptance
+threshold, not by design.
+
+`mem_triples` is worth noting as measured, not a defect: 22.2 bits/match on
+halo and 17.8 on sulfo, both close to the log2(pg_len) floor. It is large on
+halo purely because halo finds 169,968 matches against sulfo's 79,149. Those
+matches pay for themselves -- they remove 12.4 MB of sequence for 472 KB.
+
+**Not yet identified:** why literal and pos_abs lose on both files. Those are
+the two layers where PgRC2 is genuinely ahead of us regardless of dataset, and
+they are the honest remaining target.
