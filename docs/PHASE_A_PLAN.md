@@ -119,3 +119,61 @@ Coding's Amdahl floor (longest job 4.76 s vs PgRC2's 352 ms, 13 jobs vs their
 82) is the largest single cost at 38.4%, but every fix for it either changes
 the archive (block splitting) or costs RAM (uncapped probe parallelism), so it
 belongs to Phase B and is gated on size, not attempted here.
+
+---
+
+# Phase B — B1: skip provably incompressible byte planes
+
+## What PgRC2 actually does, and what we were doing instead
+
+Their position stream is not probed at all. `getReadsPositionsCoderProps`
+returns a single LZMA coder, and the context stride comes from the width the
+values require -- `SimplePgMatcher.cpp:233` picks DATAPERIOD 32 vs 64 from
+whether the pg length is standard. Selectors appear only on small, uncertain
+streams, and `SelectorCoderProps` holds exactly TWO candidates.
+
+We probed seven coders on the two largest streams. That is not a tuning
+difference: their coder is a consequence of what the data is, ours was a search
+because we had no model of the stream.
+
+## A hypothesis that failed, recorded
+
+Per-byte-plane entropy was tested as a predictor of which coder wins. It is
+not: `pos_abs` has essentially the same plane profile on every file
+([8.00, 8.00, ~7.1, ~0]) yet the winner differs (method 6 on E. coli and
+H. salinarum, method 1 on S. acidocaldarius). Nothing was built on it.
+
+## A check that stopped a wasted effort
+
+`pos_abs` is already at its information floor. Encoding the position SET plus
+the permutation that puts it in read order costs 3,870,084 B on E. coli and we
+pay 3,651,560 -- **0.94x the naive bound**, because the coder already exploits
+the correlation between read order and pg position. Halo 0.92x, sulfo 0.99x.
+There is no size to win in that stream, so B1 targets only wasted work.
+
+## What was built
+
+Planes 0 and 1 of `pos_abs` compress to ratio exactly 1.000 on every file --
+larger than raw -- and they are half the stream. Shannon bounds this: a plane
+whose order-0 entropy is 8.00 bits/byte cannot be coded below its raw size, and
+the histogram is one O(n) pass. Such planes are now stored verbatim and the
+remaining planes coded TOGETHER, which preserves the shared LZMA model.
+
+Coding the planes independently was measured first and rejected: it costs
++1,485 to +24,218 B because each plane then pays for its own model.
+
+The rule is conditional on the data, never fixed. `orig2uid`'s low planes have
+entropy 2.36, and storing those raw would cost +2,141,527 B; the criterion
+leaves them coded. A plane with H0 = 8 but higher-order structure (a counter
+mod 256) is caught by confirming on a bounded 64 KB prefix before skipping.
+
+## Result, 7 files
+
+Size is strictly non-negative: E. coli -299, P. aeruginosa -441, S. aureus
+-253, H. salinarum -34, three unchanged, **-1,027 B total, no file worse**.
+Coding pool wall 50.52 s -> 48.17 s (-4.7%). Lossless verified.
+
+The speed gain is modest because the saving only applies when the byte-plane
+coder wins the probe. Removing the probe itself still requires a model of the
+stream that we do not yet have -- that is the open item, not a smaller
+candidate list.
