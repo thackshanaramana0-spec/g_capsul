@@ -1,0 +1,8 @@
+ecoli wall=0:16.62 cpu=191% maxrss_kb=439768
+paeru wall=0:14.79 cpu=170% maxrss_kb=440748
+halo wall=0:04.17 cpu=191% maxrss_kb=203216
+sulfo wall=0:07.52 cpu=195% maxrss_kb=292868
+pfalc wall=0:57.02 cpu=290% maxrss_kb=610912
+saureus wall=0:46.07 cpu=197% maxrss_kb=1192868
+lmajor wall=1:37.59 cpu=229% maxrss_kb=1420960
+MEASURE_DONE

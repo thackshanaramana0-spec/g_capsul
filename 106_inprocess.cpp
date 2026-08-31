@@ -31,6 +31,8 @@
 #include <thread>
 #include <omp.h>
 #include <unistd.h>
+#include <sys/wait.h>
+#include <sys/stat.h>
 #if defined(__GLIBC__)
 #include <malloc.h>
 #endif
@@ -182,9 +184,15 @@ int main(int argc,char** argv){
     auto rss_mb=[]()->size_t{ FILE* f=fopen("/proc/self/statm","r"); if(!f) return 0;
         long pg_=0,res=0; if(fscanf(f,"%ld %ld",&pg_,&res)!=2) res=0; fclose(f);
         return (size_t)((double)res*(double)sysconf(_SC_PAGESIZE)/1048576.0); };
+    // statm gives CURRENT rss, which misses a transient peak inside a stage.
+    // VmHWM is the kernel's high-water mark -- the number a RAM claim needs.
+    auto hwm_mb=[]()->size_t{ FILE* f=fopen("/proc/self/status","r"); if(!f) return 0;
+        char ln[256]; size_t kb=0;
+        while(fgets(ln,sizeof ln,f)) if(!strncmp(ln,"VmHWM:",6)){ sscanf(ln+6,"%zu",&kb); break; }
+        fclose(f); return kb/1024; };
     auto lap=[&](const char* w){ auto t=std::chrono::steady_clock::now();
-        fprintf(stderr,"  %-26s %6.2f s   rss=%zu MB\n",w,
-                std::chrono::duration<double>(t-T0).count(),rss_mb()); T0=t; };
+        fprintf(stderr,"  [stage] %-26s %6.2f s   rss=%zu MB  peak=%zu MB\n",w,
+                std::chrono::duration<double>(t-T0).count(),rss_mb(),hwm_mb()); T0=t; };
 
     // ── load, drop N-reads, collapse exact duplicates ────────────────────────
     // ── STAGE 21: reads stored 2 bits/base ───────────────────────────────────
@@ -598,7 +606,21 @@ int main(int argc,char** argv){
     const uint32_t CCAP=8;               // candidates retained per tail per level
     std::vector<uint32_t> cand; std::vector<uint8_t> ccnt;
     unsigned NT=std::thread::hardware_concurrency(); if(!NT) NT=1;
+    // A1: one team for the whole sweep, not one per overlap level.
+    // The level loop runs 134 times in round 1 and 110 in round 2, and sweep()
+    // is called three times, so entering the parallel region inside the loop
+    // paid ~600 fork/joins. perf attributed 21.3% of all cycles to libgomp and
+    // 16.0% to the kernel (against PgRC2's 1.7% kernel) -- that is team setup
+    // and the IPIs it triggers, not compression. Hoisting keeps every write
+    // disjoint exactly as before: the search is per-tail independent and the
+    // commit below still walks i in order.
+    bool sweep_done=false;
+    size_t pr_total=0;
+    #pragma omp parallel
+    {
     for(uint32_t L=Lmax-1; L>=sweep_minov && L>=SW; --L){
+        #pragma omp single
+        {
         // compact to tails still open and still long enough at this L
         size_t w=0;
         for(uint32_t a:tails){
@@ -609,7 +631,17 @@ int main(int argc,char** argv){
             tails[w++]=a;                                    // still open: keep
         }
         tails.resize(w);
-        if(tails.empty()) break;
+        // `break` cannot leave an OpenMP structured block, so the exit
+        // condition becomes a shared flag tested after the implicit barrier.
+        if(tails.empty()) sweep_done=true;
+        else {
+            if(cand.size()<w*CCAP) cand.resize(w*CCAP);
+            ccnt.assign(w,0);
+            pr_total=0;
+        }
+        }   // end single (implicit barrier: every thread now sees tails/cand)
+        if(sweep_done) break;
+        const size_t w = tails.size();
 
         // ── parallel: roll each seed, probe, keep candidates passing the
         //    static tests, in bucket order ──────────────────────────────────
@@ -638,12 +670,11 @@ int main(int argc,char** argv){
         //
         // The output is unchanged by construction -- the search is per-tail
         // independent and the serial commit below still walks i in order.
-        if(cand.size()<w*CCAP) cand.resize(w*CCAP);
-        ccnt.assign(w,0);
         {
-            const unsigned T=(w<4096)?1u:NT;
-            size_t pr_total=0;
-            #pragma omp parallel for schedule(static) num_threads(T) reduction(+:pr_total)
+            // num_threads(T) with T=(w<4096?1:NT) existed only to dodge fork
+            // cost on small levels; with the team already open there is no
+            // fork to dodge, and the writes were disjoint either way.
+            #pragma omp for schedule(static) reduction(+:pr_total)
             for(long long ii=0;ii<(long long)w;++ii){
                 const size_t i=(size_t)ii;
                 const uint32_t a=tails[i];
@@ -668,7 +699,8 @@ int main(int argc,char** argv){
                 }
                 ccnt[i]=c;
             }
-            probes+=pr_total;
+            #pragma omp single
+            { probes+=pr_total; }
         }
 
         // ── serial: same order, same first survivor ───────────────────────
@@ -679,6 +711,8 @@ int main(int argc,char** argv){
         // 673,334 links and 1,288 bytes of literal. Rare enough to cost nothing,
         // and it makes the result identical to the fully serial sweep rather
         // than merely close to it.
+        #pragma omp single
+        {
         for(size_t i=0;i<w;++i){
             const uint32_t a=tails[i];
             bool done=false;
@@ -708,7 +742,9 @@ int main(int argc,char** argv){
                 break;
             }
         }
-    }
+        }   // end single (commit)
+    }       // end level loop
+    }       // end parallel (one team for the whole sweep)
     };
 
     // ── round 1: label, do not build ────────────────────────────────────────
@@ -741,8 +777,76 @@ int main(int argc,char** argv){
             links,both_sides,100.0*(double)both_sides/(double)n);
     lap("round 1 (division)");
 
+    // ── A3: run every adaptive candidate off ONE shared prefix ──────────────
+    // encode_adaptive.sh encodes the whole file once per (MAXMAP, MINOV) pair,
+    // four times. But MINOV first takes effect at the round-2 sweep below, and
+    // MAXMAP not until the mapping stage, so everything up to here -- load,
+    // seed index, round 1 -- is identical for all four. Measured, that prefix
+    // is 33.23 s of 133.94 s (24.8%), so four independent encodes repeat 100 s
+    // of work that has exactly one answer.
+    //
+    // The candidates are run by forking here rather than by refactoring the
+    // suffix into a re-runnable function. fork() gives each candidate an exact
+    // copy-on-write snapshot of the post-prefix state, so no variable can leak
+    // between candidates and the code path is bit-for-bit the one that runs
+    // today -- the output is identical by construction rather than by review.
+    // Children run one at a time, so peak RSS is unchanged.
+    if(const char* cl = getenv("CANDIDATES")){
+        std::vector<std::pair<uint32_t,uint32_t>> cands;   // (MAXMAP, MINOV)
+        { const char* q=cl;
+          while(*q){ unsigned a=0,b=0; if(sscanf(q,"%u:%u",&a,&b)==2) cands.push_back({a,b});
+                     while(*q && *q!=',') ++q; if(*q==',') ++q; } }
+        if(!cands.empty()){
+            // fork() in a process that has live OpenMP threads deadlocks the
+            // child: libgomp's internal locks are copied in whatever state they
+            // held, and the child's first parallel region then waits forever on
+            // threads that do not exist in it. POSIX only guarantees fork() in a
+            // threaded program when the child execs. Measured here as a child
+            // hung at 0.0% CPU. Tearing the runtime down first makes the process
+            // genuinely single-threaded, so the snapshot is safe; the team is
+            // rebuilt on demand inside each child.
+            omp_pause_resource_all(omp_pause_hard);
+            const std::string base = getenv("ARCHIVE") ? getenv("ARCHIVE") : "out.arcs2";
+            bool child=false; size_t mine=0;
+            for(size_t ci=0; ci<cands.size(); ++ci){
+                pid_t pid = fork();
+                if(pid < 0){ perror("fork"); return 1; }
+                if(pid == 0){ child=true; mine=ci; break; }
+                int st=0; waitpid(pid,&st,0);
+                if(!WIFEXITED(st) || WEXITSTATUS(st)!=0)
+                    fprintf(stderr,"  [a3] candidate %zu failed (status %d)\n",ci,st);
+            }
+            if(!child){
+                // parent: every candidate is finished; keep the smallest.
+                size_t bestsz=SIZE_MAX, bi=0;
+                for(size_t ci=0; ci<cands.size(); ++ci){
+                    std::string f = base + ".cand" + std::to_string(ci);
+                    struct stat sb;
+                    if(stat(f.c_str(),&sb)==0 && (size_t)sb.st_size < bestsz){
+                        bestsz=(size_t)sb.st_size; bi=ci; }
+                }
+                if(bestsz==SIZE_MAX){ fprintf(stderr,"[a3] all candidates failed\n"); return 1; }
+                for(size_t ci=0; ci<cands.size(); ++ci){
+                    std::string f = base + ".cand" + std::to_string(ci);
+                    if(ci==bi) rename(f.c_str(), base.c_str()); else remove(f.c_str());
+                }
+                fprintf(stderr,"  [a3] chose MAXMAP=%u MINOV=%u -> %zu B (one shared prefix)\n",
+                        cands[bi].first, cands[bi].second, bestsz);
+                fprintf(stderr,"ARCHIVE_TOTAL=%zu\n",bestsz);
+                printf("ARCHIVE_TOTAL=%zu\n",bestsz);
+                return 0;
+            }
+            // child: adopt this candidate and fall through to the suffix.
+            setenv("MAXMAP", std::to_string(cands[mine].first).c_str(), 1);
+            setenv("MINOV",  std::to_string(cands[mine].second).c_str(), 1);
+            setenv("ARCHIVE", (base + ".cand" + std::to_string(mine)).c_str(), 1);
+            sweep_minov = cands[mine].second;
+        }
+    }
+
     // ── round 2: build over the well-overlapped reads only ──────────────────
     sweep_minov=MINOV;                // builder: caller's floor
+    if(getenv("MINOV")) sweep_minov=(uint32_t)atoi(getenv("MINOV"));  // override for sweeps
     sweep();
     fprintf(stderr,"round2: probes=%zu links=%zu\n",probes,links);
     lap("round 2 (assembly)");
@@ -1066,6 +1170,24 @@ int main(int argc,char** argv){
                 size_t hi=std::min(text.size(),lo+chunk);
                 if(lo>=hi) break;
                 th.emplace_back([&,t,lo,hi]{
+                    // A4. Keep only this thread's BEST placement per read instead
+                    // of every accepted one. Measured on S. aureus: 59,187,817
+                    // accepted hits for 1,705,714 reads -- 34.7 per read -- held
+                    // as 1152 MB of hit/hmm capacity, which is the entire +877 MB
+                    // that stage adds to peak RSS. The seed index is only 39.7 MB.
+                    //
+                    // Output is unchanged. The serial merge below applies hits in
+                    // (thread, insertion) order and takes only strict improvements,
+                    // so a read's final value is the minimum mismatch count and its
+                    // final position is the FIRST hit achieving that minimum.
+                    // Collapsing to the first strict minimum within each thread
+                    // yields that identical pair, because a later equal-or-worse
+                    // hit could never have displaced it in the merge either.
+                    //
+                    // Cost is one uint32 slot per read per thread, freed when the
+                    // thread exits -- and it replaces a structure that grew with
+                    // coverage depth rather than with the number of reads.
+                    std::vector<uint32_t> slot((size_t)n, UINT32_MAX);
                     // start SEEDW-1 early so seeds spanning the boundary are not lost
                     const size_t from=(lo>=(size_t)(SEEDW-1))?lo-(SEEDW-1):0;
                     uint64_t k=0; uint32_t good=0;
@@ -1116,12 +1238,31 @@ int main(int argc,char** argv){
                                 mm+=(uint32_t)__builtin_popcountll(d);
                                 if(mm>lim) break;
                             }
-                            if(mm<=lim){ hit[t].push_back({rid,(uint32_t)st}); hmm[t].push_back(mm); }
+                            if(mm<=lim){
+                                uint32_t& sl = slot[rid];
+                                if(sl==UINT32_MAX){
+                                    sl=(uint32_t)hit[t].size();
+                                    hit[t].push_back({rid,(uint32_t)st}); hmm[t].push_back(mm);
+                                } else if(mm < hmm[t][sl]){      // strict: keeps the first minimum
+                                    hit[t][sl].second=(uint32_t)st; hmm[t][sl]=mm;
+                                }
+                            }
                         }
                     }
                 });
             }
             for(auto& x:th) x.join();
+            {   // A4 diagnostic: is the +877 MB the candidate vectors, or the index?
+                size_t hb=0,hn=0;
+                for(size_t t=0;t<hit.size();++t){
+                    hn+=hit[t].size();
+                    hb+=hit[t].capacity()*sizeof(std::pair<uint32_t,uint32_t>)
+                       +hmm[t].capacity()*sizeof(uint32_t);
+                }
+                fprintf(stderr,"  [a4] accepted hits=%zu  hit/hmm capacity=%.1f MB"
+                               "  seedindex=%.1f MB  reads=%zu\n",
+                        hn, hb/1048576.0, ment.size()*8.0/1048576.0, (size_t)n);
+            }
             // Keep the fewest-mismatch placement per read. Threads may each
             // have found a different one; the merge is serial and authoritative,
             // so the readMM they raced on was only ever a bound hint.
@@ -1878,6 +2019,10 @@ int main(int argc,char** argv){
         const bool VDUMP = getenv("VERIFY_DUMP") && atoi(getenv("VERIFY_DUMP"));
         auto vdump=[&](const char* fn, const MemStream& m){
             if(!VDUMP) return;
+            // open_memstream only publishes buf/len on flush. Without this the
+            // still-buffered streams (mm_*, orig2uid) dumped as 0 bytes and the
+            // decoder silently verified against empty input.
+            if(m.f) fflush(m.f);
             FILE* g=fopen(fn,"wb"); if(!g) return;
             if(m.len) fwrite(m.buf,1,m.len,g);
             fclose(g);
@@ -1987,12 +2132,34 @@ int main(int argc,char** argv){
         {
             std::atomic<size_t> next{0};
             unsigned NT = HW; if(NT > jobs.size()) NT = (unsigned)jobs.size();
+            std::vector<double> jsec(jobs.size(),0.0);
+            auto POOL0 = std::chrono::steady_clock::now();
             std::vector<std::thread> pool;
             for(unsigned t=0;t<NT;++t) pool.emplace_back([&]{
                 for(;;){ size_t i = next++; if(i >= jobs.size()) break;
-                         results[i] = jobs[i].fn(); }
+                         auto a=std::chrono::steady_clock::now();
+                         results[i] = jobs[i].fn();
+                         jsec[i]=std::chrono::duration<double>(
+                                    std::chrono::steady_clock::now()-a).count(); }
             });
             for(auto& th : pool) th.join();
+            double pool_wall=std::chrono::duration<double>(
+                                std::chrono::steady_clock::now()-POOL0).count();
+            double sum=0,mx=0; const char* mxn="";
+            for(size_t i=0;i<jobs.size();++i){ sum+=jsec[i];
+                if(jsec[i]>mx){ mx=jsec[i]; mxn=jobs[i].name; } }
+            std::vector<size_t> ord(jobs.size());
+            for(size_t i=0;i<ord.size();++i) ord[i]=i;
+            std::sort(ord.begin(),ord.end(),
+                      [&](size_t a,size_t b){ return jsec[a]>jsec[b]; });
+            for(size_t k=0;k<ord.size();++k)
+                fprintf(stderr,"  [job] %-14s %6.2f s\n",
+                        jobs[ord[k]].name, jsec[ord[k]]);
+            // wall cannot fall below the longest single job; that ratio is the
+            // ceiling on any further threading of this phase.
+            fprintf(stderr,"  [pool] wall %.2f s  cpu-sum %.2f s  longest=%s %.2f s"
+                           "  speedup %.2fx  amdahl-floor %.2f s\n",
+                    pool_wall,sum,mxn,mx,sum/(pool_wall>0?pool_wall:1),mx);
         }
         // Write in fixed job order -- deterministic regardless of scheduling.
         for(size_t i=0;i<jobs.size();++i){
@@ -2005,7 +2172,9 @@ int main(int argc,char** argv){
         }
 
         ar.finish();
-        fprintf(stderr,"[archive] rss before coding %zu MB, after %zu MB\n",rss_before,rss_mb());
+        lap("stream coding");
+        fprintf(stderr,"[archive] rss before coding %zu MB, after %zu MB, peak %zu MB\n",
+                rss_before,rss_mb(),hwm_mb());
     }
     return 0;
 }

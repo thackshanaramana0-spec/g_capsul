@@ -1,0 +1,8 @@
+ecoli wall=0:10.28 cpu=379% maxrss_kb=441416 archive=IDENTICAL
+paeru wall=0:09.08 cpu=371% maxrss_kb=457708 archive=IDENTICAL
+halo wall=0:02.92 cpu=432% maxrss_kb=209968 archive=IDENTICAL
+sulfo wall=0:05.01 cpu=388% maxrss_kb=291028 archive=IDENTICAL
+pfalc wall=0:31.53 cpu=585% maxrss_kb=610540 archive=IDENTICAL
+saureus wall=0:24.65 cpu=432% maxrss_kb=1215400 archive=IDENTICAL
+lmajor wall=0:50.60 cpu=499% maxrss_kb=1390144 archive=IDENTICAL
+OMP_DONE

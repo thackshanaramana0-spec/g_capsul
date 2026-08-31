@@ -1,0 +1,8 @@
+ecoli rc=0 wall=0:03.75 cpu=586% maxrss_kb=204792 bytes=8876624
+paeru rc=0 wall=0:03.24 cpu=546% maxrss_kb=239424 bytes=9043189
+halo rc=0 wall=0:01.48 cpu=703% maxrss_kb=190136 bytes=3050707
+sulfo rc=0 wall=0:02.41 cpu=784% maxrss_kb=194244 bytes=3114802
+pfalc rc=0 wall=0:08.39 cpu=637% maxrss_kb=288248 bytes=17219367
+saureus rc=0 wall=0:08.84 cpu=667% maxrss_kb=323016 bytes=13616404
+lmajor rc=0 wall=0:13.90 cpu=699% maxrss_kb=376516 bytes=28270638
+PGRC_DONE

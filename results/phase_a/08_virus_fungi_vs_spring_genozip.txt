@@ -1,0 +1,4 @@
+sars raw=414024610 ours=838654 spring=FAIL genozip=976083 pgrc2=Unsupported variable length reads. (virus, variable length <=221)
+asperg raw=1248641552 ours=34526106 spring=FAIL genozip=147388530 pgrc2=invalid next size (fungi, constant 150bp)
+yeast raw=1593799144 ours=21787190 spring=FAIL genozip=162404291 pgrc2=21841286 (fungi, constant)
+DONE3
