@@ -1,0 +1,30 @@
+# Compiled encoders (regenerate: scripts/build106.sh)
+best*
+*.o
+*.so
+
+# Regenerable stream dumps, written to the CWD the encoder runs in
+mem_*.bin
+mm_*.bin
+orig2uid.bin
+pos_abs.bin
+pos_strand.bin
+read_lengths.bin
+n_indices.bin
+n_pos.bin
+n_cnt.bin
+n_reads.txt
+literal.txt
+literal.2bit
+perm.u32
+pg_full.txt
+
+# Data and archives -- never committed
+*.fq
+*.fastq
+*.fa
+*.arc
+*.arcs
+*.spring
+*.genozip
+*.log
