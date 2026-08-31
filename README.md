@@ -27,6 +27,21 @@ scripts/build106.sh /tmp/best106
 INPUT=reads.fq ARCHIVE=out.arc BEST=/tmp/best106 bash scripts/encode_adaptive.sh
 ```
 
+## Verify losslessness
+
+One command: encodes, decodes the streams back, and compares against the
+original file's sequence column. Not a coder-level round trip -- the reference
+is the input FASTQ itself.
+
+```bash
+scripts/verify_lossless.sh reads.fq
+# LOSSLESS  archive=2618332 bytes  input=reads.fq
+```
+
+Confirmed on H. salinarum (2,618,332), S. acidocaldarius (3,192,790),
+E. coli (7,965,683) and SARS-CoV-2 (838,654) -- the last being variable-length,
+which PgRC2 declines outright.
+
 ## Current standing
 
 Size, against PgRC2's own binary on the same inputs — **+3.19% aggregate, 7 of

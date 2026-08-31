@@ -33,6 +33,7 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
+#include <dirent.h>
 #if defined(__GLIBC__)
 #include <malloc.h>
 #endif
@@ -826,9 +827,27 @@ int main(int argc,char** argv){
                         bestsz=(size_t)sb.st_size; bi=ci; }
                 }
                 if(bestsz==SIZE_MAX){ fprintf(stderr,"[a3] all candidates failed\n"); return 1; }
+                // Promote the winner's dumps into this directory, then drop
+                // every candidate's scratch dir, so what remains on disk is the
+                // archive AND the streams that actually produced it.
+                char pcwd[4096]; if(!getcwd(pcwd,sizeof pcwd)) pcwd[0]='\0';
+                const std::string pabs =
+                    (!base.empty() && base[0]=='/') ? base
+                                                    : (std::string(pcwd) + "/" + base);
                 for(size_t ci=0; ci<cands.size(); ++ci){
-                    std::string f = base + ".cand" + std::to_string(ci);
-                    if(ci==bi) rename(f.c_str(), base.c_str()); else remove(f.c_str());
+                    std::string f = pabs + ".cand" + std::to_string(ci);
+                    if(ci==bi) rename(f.c_str(), pabs.c_str()); else remove(f.c_str());
+                    std::string d = f + ".d";
+                    if(DIR* dp = opendir(d.c_str())){
+                        while(struct dirent* de = readdir(dp)){
+                            if(de->d_name[0]=='.') continue;
+                            std::string src = d + "/" + de->d_name;
+                            if(ci==bi) rename(src.c_str(),
+                                              (std::string(pcwd) + "/" + de->d_name).c_str());
+                            else remove(src.c_str());
+                        }
+                        closedir(dp); rmdir(d.c_str());
+                    }
                 }
                 fprintf(stderr,"  [a3] chose MAXMAP=%u MINOV=%u -> %zu B (one shared prefix)\n",
                         cands[bi].first, cands[bi].second, bestsz);
@@ -837,9 +856,26 @@ int main(int argc,char** argv){
                 return 0;
             }
             // child: adopt this candidate and fall through to the suffix.
+            //
+            // Each child must also get its OWN directory for the VERIFY_DUMP
+            // stream files. They are written to the process CWD, so with every
+            // child sharing one directory the surviving dumps belonged to
+            // whichever child ran LAST -- not to the winner. Measured: 12/12
+            // dumps matched the losing candidate and only 5/12 the winner (the
+            // 5 being the shared-prefix streams). The archive was always the
+            // winner's, so sizes were never wrong, but decoding those dumps
+            // reconstructed a different encoding than the one shipped.
+            char cwdbuf[4096];
+            if(!getcwd(cwdbuf,sizeof cwdbuf)) cwdbuf[0]='\0';
+            const std::string absbase =
+                (!base.empty() && base[0]=='/') ? base
+                                                : (std::string(cwdbuf) + "/" + base);
+            const std::string ddir = absbase + ".cand" + std::to_string(mine) + ".d";
+            mkdir(ddir.c_str(), 0755);
             setenv("MAXMAP", std::to_string(cands[mine].first).c_str(), 1);
             setenv("MINOV",  std::to_string(cands[mine].second).c_str(), 1);
-            setenv("ARCHIVE", (base + ".cand" + std::to_string(mine)).c_str(), 1);
+            setenv("ARCHIVE", (absbase + ".cand" + std::to_string(mine)).c_str(), 1);
+            if(chdir(ddir.c_str())!=0) perror("chdir");
             sweep_minov = cands[mine].second;
         }
     }
@@ -2034,6 +2070,16 @@ int main(int argc,char** argv){
         vdump("n_pos.bin",STR.n_pos);           vdump("n_indices.bin",STR.n_indices);
         vdump("n_cnt.bin",STR.n_cnt);           vdump("read_lengths.bin",STR.read_lengths);
         vdump("orig2uid.bin",STR.orig2uid);
+        // The decoder needs pg length and the main/second split point, which
+        // were previously only recoverable by hand-reading the MEM main/second
+        // lines out of stderr. Writing them beside the dumps makes the lossless
+        // check reproducible instead of a manual step.
+        if(VDUMP){
+            if(FILE* pf=fopen("pg_params.txt","w")){
+                fprintf(pf,"%zu %zu\n", pg.size(), main_pg_end);
+                fclose(pf);
+            }
+        }
 
         // ---------------- PARALLEL STREAM CODING ----------------
         // The streams are independent, so coding them concurrently is
