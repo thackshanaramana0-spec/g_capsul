@@ -1359,3 +1359,76 @@ matches pay for themselves -- they remove 12.4 MB of sequence for 472 KB.
 **Not yet identified:** why literal and pos_abs lose on both files. Those are
 the two layers where PgRC2 is genuinely ahead of us regardless of dataset, and
 they are the honest remaining target.
+
+## 3w. Completing the identification: literal and pos_abs are ONE root cause
+
+§3v left two layers unidentified. Both are now measured, and both reduce to
+the same thing -- neither is a coder defect.
+
+### literal: our CODER IS BETTER, the VOLUME is worse
+
+| | our raw bases | our coded | our rate | their pg bases | their coded | their rate |
+|---|---|---|---|---|---|---|
+| sulfo | 3,418,901 | 814,938 | 1.9069 b/base | 2,546,069 | 595,834 | 1.8722 b/base |
+| halo | 3,239,294 | 665,856 | **1.6444 b/base** | 2,554,328 | 579,465 | 1.8148 b/base |
+
+Our sequence coder **beats** theirs on halo (1.6444 vs 1.8148) and is 1.9%
+behind on sulfo. Counterfactual, coding THEIR base count at OUR rate:
+
+| | we would code | they code | verdict |
+|---|---|---|---|
+| sulfo | 606,888 | 595,834 | +1.9% |
+| halo | 525,057 | 579,465 | **−9.4%, we would win** |
+
+**The literal loss is entirely volume**: our final pg carries 27-34% more
+bases than theirs.
+
+### pos_abs: we are BELOW the entropy floor; the span is the cost
+
+| | entries | our pg span | bits/entry | uniform floor | vs floor |
+|---|---|---|---|---|---|
+| sulfo | 516,904 | 13,391,488 | 22.94 | 23.67 | **−3.1%** |
+| halo | 460,501 | 18,251,548 | 22.05 | 24.12 | **−8.6%** |
+
+We already code positions *below* the uniform-random floor for that span --
+there is no meaningful coder gain available. The cost is `N x log2(pg_span)`,
+and we lose only because our span is larger:
+
+| | our span | their span | ratio | extra bits/read | extra cost |
+|---|---|---|---|---|---|
+| sulfo | 13,391,488 | 2,546,069 | 5.3x | 2.39 | 154,746 B |
+| halo | 18,251,548 | 2,554,328 | 7.1x | 2.84 | 163,305 B |
+
+### THE SINGLE ROOT CAUSE
+
+All three losing layers -- literal, pos_abs, and mem_triples -- are consequences
+of **one fact: our pseudogenome is 5-7x larger in span and ~30% larger in
+surviving bases than PgRC2's.**
+
+- literal: more bases to code (coder is fine, better on halo)
+- pos_abs: wider span, so every position costs 2.4-2.8 more bits (coder is
+  already below the entropy floor)
+- mem_triples: a larger pg needs more self-match references to collapse
+  (17.8-22.2 bits/match, at the log2 floor)
+
+**Why their pg is smaller:** they split reads into hq/lq/n pseudogenomes and
+build each separately (`Final size of Pg` prints three pieces: sulfo
+95,666 + 0 + 2,450,403; halo 205,065 + 0 + 2,349,263). Each piece is
+independently assembled and self-matched, so positions index into a ~2.5 MB
+span rather than one 13-18 MB span. We build a single pg plus an appended
+second region, and never compact the result.
+
+This is the same 3-way split noted in `PGRC2_DISK_ARCHITECTURE.md` §5 and
+dismissed there because the mismatch-layer reasoning that motivated it was
+based on a measurement error. **It is now re-identified from the opposite
+direction -- span and volume, not mismatches -- and this time the evidence is
+direct: three independent layers all scale with pg size, and pg size is where
+we differ by 5-7x.**
+
+### Verified NOT the problem (do not re-investigate)
+
+- our sequence coder (better than theirs on halo, 1.9% behind on sulfo)
+- our position coder (below the uniform entropy floor on both)
+- our reference coder (at the log2(pg_len) floor on both)
+- our mismatch coder or mismatch volume (we emit FEWER than they do on both
+  files -- §3v)
