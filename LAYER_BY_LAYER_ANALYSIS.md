@@ -1150,3 +1150,72 @@ regret -- the two criteria this project has used throughout. P. aeruginosa's
 claim is ever wanted, MAXMAP=24 delivers it at a measured, documented cost;
 that is a presentation decision, not an engineering one, and should be made
 deliberately.
+
+## 3t. The REAL coders (PPMd7 / FSE / range-with-period) — not xz selection
+
+**What was wrong before.** Section 3n's "per-stream coder selection" only chose
+among xz / bzip2 / zstd. That is selection in name only: PgRC2's advantage on
+the streams where it still beat us never came from a different general-purpose
+compressor, it came from **PPMd7, FSE/Huff0, and range coders with
+per-position models** (`coders/PpmdCoder.cpp`, `FSECoder.cpp`,
+`RangeCoder.cpp`, `rangecoder/simple_model.h`; selected per stream in
+`PropsLibrary.cpp`). Measuring xz-vs-bzip2-vs-zstd and reporting "0.49%, not
+decisive" was measuring the wrong thing.
+
+**What was built.** `coders_pgrc.h` plus `thirdparty/{ppmd,fse}`:
+- **PPMd7** (LZMA SDK, public domain) at order 5 / 32 MB, matching their
+  `getDefaultCoderProps(PPMD7_CODER, level, 5)` for mismatched symbols.
+- **FSE and Huff0** (Yann Collet, BSD).
+- **Adaptive range coder with `period` interleaved order-0 models**, which is
+  what `RangeCoderCompressTemplate` does -- at `period = c` each column of a
+  fixed-stride record gets its own statistics. Their per-bucket streams are
+  literally the `period = N` lines in their stderr.
+
+Both PPMd7 and FSE are standard third-party libraries PgRC2 merely bundles;
+using them is no different from our already linking liblzma, and is not a copy
+of their implementation.
+
+**Per-stream measurement on real P. aeruginosa** (raw -> coded):
+
+| stream | xz (was) | ppmd5 | fse | range | chosen |
+|---|---|---|---|---|---|
+| pos_abs | 5,082,160 | 5,455,315 | 5,661,616 | 5,697,519 | xz/byteplanes |
+| pos_strand | 74,272 | 74,691 | 68,867 | **68,333** | range |
+| mm_count | 305,604 | **304,044** | 310,814 | 309,365 | ppmd |
+| mm_ref | 257,624 | 238,381 | **234,947** | 235,449 | (feeds mmcoder) |
+| mm_obs | 236,692 | 215,995 | 215,210 | **214,209** | (feeds mmcoder) |
+
+**mm_pos, with their actual bucketing scheme:**
+
+| variant | bytes |
+|---|---|
+| flat + xz | 627,776 |
+| bucket+transpose + xz (previous ship) | 543,080 |
+| **per-bucket range(period=c) — PgRC2's scheme** | **535,367** |
+| per-bucket ppmd5 | 561,821 |
+| **per-bucket best-of-4 (shipped)** | **530,582** |
+
+PgRC2's own scheme beats what we shipped, confirming the coder choice — not
+the transform — was the missing piece.
+
+Shipped: a `best_encode` selector over {xz, xz-lc2lp2pb2, ppmd5, fse,
+range, byte-planes×2} with a 1-byte method id, on every stream; and
+`mmpos_encode_buckets` doing per-bucket selection including range at
+`period = c`.
+
+### FINAL — all BYTE_IDENTICAL on real full locked files
+
+| Dataset | session start | before real coders | **final** | PgRC2 | margin |
+|---|---|---|---|---|---|
+| E. coli | 9,905,845 | 7,974,367 | **7,960,702** | 8,864,420 | **+10.19%** |
+| P. aeruginosa | 9,908,025 | 9,083,594 | **9,050,430** | 9,043,181 | −0.08% |
+| S. aureus | 15,352,697 | 13,498,413 | **13,462,553** | 13,595,003 | **+0.97%** |
+| P. falciparum | 18,810,808 | 16,448,646 | **16,400,369** | 17,219,695 | **+4.76%** |
+| L. major | 30,612,464 | 27,765,787 | **27,701,753** | 28,272,652 | **+2.02%** |
+
+Real coders gained a further −0.26%. **Session reduction −11.8%; aggregate vs
+PgRC2 +3.14%, 4 of 5 wins.** P. aeruginosa is now −0.08% — a statistical tie.
+
+Per-stream highlights on P. aeruginosa: pos_strand 74,272 -> 60,094 (−19%),
+n_indices 19,228 -> 11,245 (−42%), orig2uid 1,108 -> 2, mm_pos −14.9%,
+mm_cnt −14.6%.

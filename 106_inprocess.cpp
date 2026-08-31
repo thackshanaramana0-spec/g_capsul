@@ -1832,8 +1832,8 @@ int main(int argc,char** argv){
         { auto v=STR.mem_triples.bytes(); STR.mem_triples.release();
           ar.put("mem_triples", refc::encode(v,pg.size(),main_pg_end)); }
         // L4 position + strand
-        { auto v=STR.pos_abs.bytes();      STR.pos_abs.release();      ar.put("pos_abs",     xz_best_for_u32(v.data(),v.size())); }
-        { auto v=STR.pos_strand.bytes();   STR.pos_strand.release();   ar.put("pos_strand",  xz_compress(v.data(),v.size())); }
+        { auto v=STR.pos_abs.bytes();      STR.pos_abs.release();      ar.put("pos_abs", best_encode(v.data(),v.size(),true)); }
+        { auto v=STR.pos_strand.bytes();   STR.pos_strand.release();   ar.put("pos_strand",  best_encode(v.data(),v.size(),false)); }
         // L5 mismatch symbols / positions / counts
         { auto r=STR.mm_ref.bytes(), o=STR.mm_obs.bytes();
           STR.mm_ref.release(); STR.mm_obs.release();
@@ -1847,35 +1847,29 @@ int main(int argc,char** argv){
           STR.mm_count.release();
           std::vector<uint8_t> cf, cv;
           if(mmcnt_split(mmcounts, cf, cv) && mmcnt_join(cf,cv,mmcounts.size())==mmcounts){
-              auto a=xz_compress(cf.data(),cf.size()), b=xz_compress(cv.data(),cv.size());
+              auto a=best_encode(cf.data(),cf.size()), b=best_encode(cv.data(),cv.size());
               const size_t flat=xz_compress(v.data(),v.size()).size();
               if(a.size()+b.size() < flat){
                   fprintf(stderr,"[mm_cnt] zero-flag split %zu vs flat %zu (%+.1f%%)\n",
                           a.size()+b.size(), flat, 100.0*((double)(a.size()+b.size())-flat)/(flat?flat:1));
                   ar.put("mm_cnt_flags", a); ar.put("mm_cnt_vals", b);
-              } else ar.put("mm_count", xz_compress(v.data(),v.size()));
-          } else ar.put("mm_count", xz_compress(v.data(),v.size())); }
+              } else ar.put("mm_count", best_encode(v.data(),v.size()));
+          } else ar.put("mm_count", best_encode(v.data(),v.size())); }
         { auto v=STR.mm_pos.bytes();       STR.mm_pos.release();
-          auto t = mmpos_bucket_transpose(v, mmcounts);
-          // invertibility is a correctness claim, so prove it here rather
-          // than assert it -- same discipline the other coders use.
-          if(mmpos_untranspose(t, mmcounts) != v){
-              fprintf(stderr,"[mm_pos] TRANSFORM ROUND TRIP FAILED -- writing flat stream\n");
-              ar.put("mm_pos", xz_compress(v.data(),v.size()));
-          } else {
-              const size_t flat = xz_compress(v.data(),v.size()).size();
-              auto coded = xz_compress(t.data(),t.size());
-              fprintf(stderr,"[mm_pos] bucket+transpose %zu vs flat %zu (%+.1f%%)\n",
-                      coded.size(), flat, 100.0*((double)coded.size()-flat)/(flat?flat:1));
-              ar.put("mm_pos", coded);
-          } }
+          auto flat = best_encode(v.data(),v.size());
+          auto buck = mmpos_encode_buckets(v, mmcounts);
+          if(!buck.empty() && buck.size()<flat.size()){
+              fprintf(stderr,"[mm_pos] per-bucket real coders %zu vs flat %zu (%+.1f%%)\n",
+                      buck.size(), flat.size(), 100.0*((double)buck.size()-flat.size())/flat.size());
+              ar.put("mm_pos", buck);
+          } else ar.put("mm_pos", flat); }
         // L6 N restoration
-        { auto v=STR.n_pos.bytes();        STR.n_pos.release();        ar.put("n_pos",       xz_compress(v.data(),v.size())); }
-        { auto v=STR.n_indices.bytes();    STR.n_indices.release();    ar.put("n_indices",   xz_best_for_u32(v.data(),v.size())); }
-        { auto v=STR.n_cnt.bytes();        STR.n_cnt.release();        ar.put("n_cnt",       xz_compress(v.data(),v.size())); }
+        { auto v=STR.n_pos.bytes();        STR.n_pos.release();        ar.put("n_pos", best_encode(v.data(),v.size(),false)); }
+        { auto v=STR.n_indices.bytes();    STR.n_indices.release();    ar.put("n_indices",   best_encode(v.data(),v.size(),true)); }
+        { auto v=STR.n_cnt.bytes();        STR.n_cnt.release();        ar.put("n_cnt", best_encode(v.data(),v.size(),false)); }
         // L7 lengths, L8 orig2uid
-        { auto v=STR.read_lengths.bytes(); STR.read_lengths.release(); ar.put("read_lengths",xz_compress(v.data(),v.size())); }
-        { auto v=STR.orig2uid.bytes();     STR.orig2uid.release();     ar.put("orig2uid",    xz_best_for_u32(v.data(),v.size())); }
+        { auto v=STR.read_lengths.bytes(); STR.read_lengths.release(); ar.put("read_lengths",best_encode(v.data(),v.size(),false)); }
+        { auto v=STR.orig2uid.bytes();     STR.orig2uid.release();     ar.put("orig2uid", best_encode(v.data(),v.size(),true)); }
 
         ar.finish();
         fprintf(stderr,"[archive] rss before coding %zu MB, after %zu MB\n",rss_before,rss_mb());

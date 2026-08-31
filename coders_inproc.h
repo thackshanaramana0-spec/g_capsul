@@ -14,6 +14,7 @@
 #include <cmath>
 #include <lzma.h>
 #include <map>
+#include "coders_pgrc.h"
 
 // ---------- xz (liblzma), equivalent to `xz -9 -c` ----------
 static std::vector<uint8_t> xz_compress(const void* data, size_t n, uint32_t preset=9){
@@ -346,6 +347,64 @@ static std::vector<uint16_t> mmcnt_join(const std::vector<uint8_t>& flags,
     for(size_t i=0;i<n;++i){
         const bool nz = (flags[i>>3] >> (7-(i&7))) & 1;
         if(nz) out[i]= vals[k++];
+    }
+    return out;
+}
+
+// ---------- universal per-stream selector over the REAL coder set ----------
+// Until now "per-stream selection" only chose among xz/bzip2/zstd, which is
+// selection in name only. PgRC2 selects among PPMd, FSE/Huff0 and range
+// coders with per-position models (PropsLibrary.cpp getSelectorCoderProps).
+// This tries the same real set and keeps the smallest, with a 1-byte method
+// id so it stays decodable.
+//   0 xz default | 1 xz lc2lp2pb2 | 2 ppmd5 | 3 fse | 4 range(period=1)
+//   5 byteplanes+xz | 6 byteplanes+lzma(0,0,0)
+static std::vector<uint8_t> best_encode(const uint8_t* d, size_t n, bool u32shaped=false){
+    if(!n) return {};
+    std::vector<std::pair<int,std::vector<uint8_t>>> c;
+    c.emplace_back(0, xz_compress(d,n));
+    c.emplace_back(1, xz_compress_lzma(d,n,2,2,2));
+    c.emplace_back(2, pgc::ppmd_encode(d,n,5,32));
+    c.emplace_back(3, pgc::fse_encode(d,n));
+    c.emplace_back(4, pgc::range_encode(d,n,1));
+    if(u32shaped && n>=4 && n%4==0){
+        auto bp = u32_byteplanes(d,n);
+        c.emplace_back(5, xz_compress(bp.data(),bp.size()));
+        c.emplace_back(6, xz_compress_lzma(bp.data(),bp.size(),0,0,0));
+    }
+    int bi=0; size_t bs=SIZE_MAX;
+    for(auto& p:c) if(!p.second.empty() && p.second.size()<bs){ bs=p.second.size(); bi=p.first; }
+    std::vector<uint8_t> out; out.reserve(bs+1);
+    out.push_back((uint8_t)bi);
+    for(auto& p:c) if(p.first==bi){ out.insert(out.end(),p.second.begin(),p.second.end()); break; }
+    return out;
+}
+
+// mm_pos: bucket by mismatch count, then code each bucket with the best real
+// coder -- including the range coder at period = that bucket's count, which is
+// exactly PgRC2's compressRlMisRevOffDest scheme (their per-bucket streams are
+// the "period = N" lines in its stderr).
+static std::vector<uint8_t> mmpos_encode_buckets(const std::vector<uint8_t>& pos,
+                                                 const std::vector<uint16_t>& counts){
+    if(pos.empty()) return {};
+    std::map<uint16_t,std::vector<uint8_t>> b;
+    size_t off=0;
+    for(uint16_t c : counts){
+        if(c){ auto& v=b[c]; v.insert(v.end(), pos.begin()+off, pos.begin()+off+c); }
+        off += c;
+    }
+    std::vector<uint8_t> out;
+    for(auto& kv : b){
+        const uint16_t c=kv.first; auto& v=kv.second;
+        std::vector<std::pair<int,std::vector<uint8_t>>> cand;
+        cand.emplace_back(0, xz_compress(v.data(),v.size()));
+        cand.emplace_back(2, pgc::ppmd_encode(v.data(),v.size(),5,32));
+        cand.emplace_back(3, pgc::fse_encode(v.data(),v.size()));
+        cand.emplace_back(4, pgc::range_encode(v.data(),v.size(),c));
+        int bi=0; size_t bs=SIZE_MAX;
+        for(auto& p:cand) if(!p.second.empty() && p.second.size()<bs){ bs=p.second.size(); bi=p.first; }
+        out.push_back((uint8_t)bi);
+        for(auto& p:cand) if(p.first==bi){ out.insert(out.end(),p.second.begin(),p.second.end()); break; }
     }
     return out;
 }
