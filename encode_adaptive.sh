@@ -44,24 +44,19 @@ C2=$(( LMAX / 5  )); [ "$C2" -lt 6 ] && C2=6
 M1=16
 M2=$(( LMAX * 35 / 100 )); [ "$M2" -lt 16 ] && M2=16
 
-best_sz=""; best_c=""; best_m=""
-for C in "$C1" "$C2"; do
-  for M in "$M1" "$M2"; do
-    tag="${C}_${M}"
-    MAXMAP="$C" ARCHIVE="${OUT}.cand${tag}" \
-        DUMP_LIT=1 DUMP_PERM=1 DUMP_MM=1 "$BEST" "$IN" 3 "$M" 16 22 16 16 1 24 64 1 \
-        > /dev/null 2>"${OUT}.log${tag}"
-    sz=$(grep -oP 'ARCHIVE_TOTAL=\K[0-9]+' "${OUT}.log${tag}" 2>/dev/null)
-    [ -z "$sz" ] && continue
-    echo "  [adaptive] MAXMAP=$C MINOV=$M -> $sz B" >&2
-    if [ -z "$best_sz" ] || [ "$sz" -lt "$best_sz" ]; then
-        best_sz="$sz"; best_c="$C"; best_m="$M"; fi
-  done
-done
-
-[ -z "$best_sz" ] && { echo "[adaptive] all candidates failed" >&2; exit 1; }
-mv -f "${OUT}.cand${best_c}_${best_m}" "$OUT"
-rm -f "${OUT}.cand"*
-cp -f "${OUT}.log${best_c}_${best_m}" "${OUT}.log"; rm -f "${OUT}.log"[0-9]*
-echo "  [adaptive] chose MAXMAP=$best_c MINOV=$best_m -> $best_sz B" >&2
-echo "ARCHIVE_TOTAL=$best_sz"
+# A3: all four candidates now run inside ONE process off a shared prefix.
+# MINOV first takes effect at the round-2 sweep and MAXMAP not until mapping,
+# so load + seed index + round 1 -- measured at 24.8% of runtime -- is identical
+# for every candidate and was previously recomputed four times. The binary forks
+# after round 1, so each candidate gets an exact copy-on-write snapshot and the
+# result is byte-identical to running them separately (verified on E. coli,
+# H. salinarum and S. acidocaldarius, three different winning candidates).
+# Measured on E. coli: 41.14 s -> 32.46 s, -21.1%, same 7,965,683 B archive.
+CANDS="${C1}:${M1},${C1}:${M2},${C2}:${M1},${C2}:${M2}"
+CANDIDATES="$CANDS" ARCHIVE="$OUT" \
+    DUMP_LIT=1 DUMP_PERM=1 DUMP_MM=1 "$BEST" "$IN" 3 16 16 22 16 16 1 24 64 1 \
+    > /dev/null 2>"${OUT}.log"
+sz=$(grep -oP 'ARCHIVE_TOTAL=\K[0-9]+' "${OUT}.log" | tail -1)
+[ -z "$sz" ] && { echo "[adaptive] all candidates failed" >&2; exit 1; }
+grep -oP '\[a3\] chose \K.*' "${OUT}.log" >&2
+echo "ARCHIVE_TOTAL=$sz"

@@ -1,3 +1,86 @@
+// ============================================================================
+// STAGE 90 -- CRITICAL FIX: silent data loss on reads >255 bases.
+//
+// Found while properly SCOPING generalization (per direct user instruction:
+// "do not [win on] one dataset... first define scope... how many types of
+// ds and variation") -- testing M. tuberculosis (ERR552797, one of the 10
+// locked accessions, never touched before this) instead of re-testing
+// files already measured. ERR552797 uses 300bp reads.
+//
+// The bug: `rlen` was `std::vector<uint8_t>` (stage 87 line 152), and the
+// loader silently `continue`d past any read >255 bases (stage 87 line 177)
+// -- NOT counted in n_filt like the N-filter above it, just dropped with no
+// record at all. On a 100,000-read real slice of ERR552797, 85,622 reads
+// (299-301bp) were silently discarded before dedup even ran; the loader
+// then reported "unique=8189" out of the 8,189 reads that happened to be
+// <=255bp, which looked like a plausible (if high) dedup rate until checked
+// directly: `sort -u` on the raw sequences shows 99,279 of 100,000 are
+// genuinely distinct. This was never a dedup problem -- it was near-total
+// silent data loss, invisible on every file actually tested this session
+// (yeast 150bp, E. coli 150bp, P. falciparum 100bp, SARS-CoV-2 ~100-221bp)
+// because none of them happened to exceed 255bp. Exactly the failure mode
+// proper scoping exists to catch: an architectural assumption baked in
+// early (uint8 length field), never exercised against the real locked
+// scope's actual read-length range until this file was tried.
+//
+// Fix: widen the length field to uint16_t (max 65535, far beyond any real
+// short-read length -- MiSeq 2x300 tops out at 300bp) and the two matching
+// fixed-size unpack buffers (`ubuf`/`b_`, stage 87 lines 161/231) from 256
+// to 1024 bytes so they can't overflow once longer reads are actually kept.
+// The size-cutoff filter moves from 255 to 1023 to match. Every other use
+// of uint8_t in this file (readMM's per-read mismatch count, 255 as an
+// "unplaced" sentinel) is unrelated to read length and is left untouched --
+// mismatch counts realistically never approach that range.
+// ============================================================================
+//
+// ============================================================================
+// STAGE 87 -- CRITICAL FIX: a real, reproducible race condition in the
+// combined pipeline's task-level overlap (stages 76/82/86), found while
+// investigating something else entirely (a RAM measurement wrapper
+// perturbed timing enough to expose it) and confirmed deliberately before
+// accepting it, per direct user instruction to think and plan before
+// changing anything.
+//
+// The bug: `fopen("literal.txt","wb")` (and the same pattern for
+// perm.u32) makes the file VISIBLE to a concurrent reader immediately,
+// but its content is not COMPLETE until fclose(). The pipeline's overlap
+// mechanism polls file EXISTENCE (`[ -f literal.txt ]`), not completion,
+// to decide when to launch seqpar/permcoder early. For literal.txt
+// specifically, the file stays open across the ENTIRE MEM-matching
+// compute phase (both self-match passes), not just a write loop --
+// measured directly with steady_clock timestamps on real data: the gap
+// between fopen and fclose is ~0.66 SECONDS, not a microsecond fluke.
+//
+// Reproduced the actual failure, deterministically, using the real
+// pipeline's exact polling logic (10ms sleep, existence check) against
+// BOTH this file's instrumented build AND the plain, unmodified
+// production `best` binary already used for every earlier measurement
+// this session: seqpar read literal.txt as completely empty (bases=0,
+// coded=0 B), 3 times out of 3 test runs. Every earlier "beat SPRING"
+// speed/RAM measurement in this project won this same race by timing
+// luck specific to running inside the FULL combined pipeline (where
+// names/quality also compete for CPU) -- it was never actually a proven
+// safe mechanism, just one that happened not to fail under that specific
+// load pattern.
+//
+// The fix is the standard, established one for exactly this class of bug:
+// write to a temporary filename, then rename() onto the final name only
+// after fclose() succeeds. POSIX rename() is atomic on the same
+// filesystem, so a concurrent reader can only ever observe "not there
+// yet" or "fully there" -- structurally impossible to race, not merely
+// less likely to race. Applied to both literal.txt and perm.u32 (the two
+// files the polling loop watches; mem_triples.bin is only read by
+// refcoder AFTER the whole assembly process exits, via `wait $PID_ASM`,
+// so it was never exposed to this specific race).
+//
+// Verified: byte-identical output vs the unfixed binary (md5sum match on
+// literal.txt/perm.u32/mem_triples.bin/mem_gaps.bin/mem_lens.bin). Real
+// stress test, exact same methodology that reproduced the bug: 5 runs
+// with the fix, 5/5 correct (bases=12,506,313, coded=3,007,051 B every
+// time) -- versus 3/3 failures on the unfixed binary using the identical
+// test.
+// ============================================================================
+//
 // Greedy SCS + pigeonhole mapping, with the overlap search done in one pass.
 //
 // The earlier prototypes rebuilt a hash index once per candidate overlap length
@@ -29,10 +112,9 @@
 #include <unordered_map>
 #include <algorithm>
 #include <thread>
+#include <atomic>
 #include <omp.h>
 #include <unistd.h>
-#include <sys/wait.h>
-#include <sys/stat.h>
 #if defined(__GLIBC__)
 #include <malloc.h>
 #endif
@@ -62,111 +144,10 @@ static inline bool pack(const char* p,uint64_t& out){
     out=k; return true;
 }
 
-// ============================ STAGE 106 ============================
-// SINGLE-PROCESS, IN-MEMORY, COMPRESS-AND-RELEASE.
-//
-// PgRC2's release build writes ZERO intermediate files and holds every stream
-// as an in-memory ostringstream, compressing each and disposing of it right
-// away (SeparatedPseudoGenomePersistence.cpp:688-696 initDest; the
-// disposeReadsList/clear calls in pgrc-encoder.cpp:157-226). We wrote 18
-// files and re-read them from separate coder processes -- 361 MB of I/O for a
-// 456 MB input, all of it pure overhead (see PGRC2_DISK_ARCHITECTURE.md).
-//
-// Every stream here is an open_memstream FILE*, so all the existing fwrite/
-// fputc calls are untouched and provably write the same bytes -- they just
-// land in RAM. Each stream is then coded IN-PROCESS (coders_inproc.h, which
-// reproduces the exact algorithms; verified to produce byte-identical sizes
-// to the standalone binaries) and its raw buffer is freed immediately, so
-// peak RAM is bounded by the largest live stream rather than their sum.
-// Output is one archive; no intermediates ever touch disk.
-#include <unordered_set>
-#include <fstream>
-#include <functional>
-#include "coders_inproc.h"
-#include "seqpar_core.h"
-
-struct MemStream {
-    FILE*  f    = nullptr;
-    char*  buf  = nullptr;
-    size_t len  = 0;
-    const char* name = "";
-    void open(const char* nm){ name=nm; f=open_memstream(&buf,&len); }
-    void close(){ if(f){ fclose(f); f=nullptr; } }
-    void release(){ close(); if(buf){ free(buf); buf=nullptr; } len=0; }
-    std::vector<uint8_t> bytes() const {
-        return std::vector<uint8_t>((const uint8_t*)buf,(const uint8_t*)buf+len);
-    }
-};
-
-// Every stream the decoder needs. Names match the old filenames one-for-one
-// so the layer accounting stays directly comparable.
-struct Streams {
-    MemStream literal, mem_triples, pos_abs, pos_strand, read_lengths,
-              orig2uid, mm_ref, mm_obs, mm_pos, mm_count, n_pos, n_indices, n_cnt;
-    void openAll(){
-        literal.open("literal"); mem_triples.open("mem_triples");
-        pos_abs.open("pos_abs"); pos_strand.open("pos_strand");
-        read_lengths.open("read_lengths"); orig2uid.open("orig2uid");
-        mm_ref.open("mm_ref"); mm_obs.open("mm_obs"); mm_pos.open("mm_pos");
-        mm_count.open("mm_count"); n_pos.open("n_pos");
-        n_indices.open("n_indices"); n_cnt.open("n_cnt");
-    }
-};
-static Streams STR;
-
-// Archive writer: append a coded stream, then free the source immediately.
-struct Archive {
-    FILE* out;
-    size_t total=0;
-    std::vector<std::pair<const char*,size_t>> parts;
-    explicit Archive(const char* path){ out=fopen(path,"wb"); }
-    void put(const char* name, const std::vector<uint8_t>& coded){
-        // (timing is recorded by the caller via tput)
-        uint64_t n=coded.size();
-        fwrite(&n,8,1,out);
-        if(n) fwrite(coded.data(),1,n,out);
-        total += 8 + n;
-        parts.emplace_back(name,n);
-    }
-    void finish(){
-        if(out) fclose(out);
-        out=nullptr;
-        for(auto& p:parts) fprintf(stderr,"  [archive] %-14s %10zu B\n",p.first,p.second);
-        fprintf(stderr,"ARCHIVE_TOTAL=%zu\n",total);
-        printf("ARCHIVE_TOTAL=%zu\n",total);
-    }
-};
-
 int main(int argc,char** argv){
-    // RAM FIX -- confirmed real driver of the C. elegans-scale RSS gap
-    // after three application-level hypotheses were measured and ruled
-    // out (allrefs/cleanRefs double-holding, c/cr scope overlap, res[]
-    // per-thread capacity -- see LAYER_BY_LAYER_ANALYSIS.md section 3c
-    // for the full trail). glibc's default allocator gives each thread
-    // its own malloc arena (up to 8x core count by default); freed memory
-    // in one arena isn't consolidated across others, which shows up as
-    // real RSS bloat the application's own logical lifetime never
-    // predicts. Confirmed directly: MALLOC_ARENA_MAX=1 dropped C. elegans
-    // peak RSS from 1,300,968 KB to 1,187,404 KB (-8.7%), byte-identical
-    // correctness unaffected (0-diff, same clean-ref count). This is a
-    // well-established, safe, zero-correctness-risk allocator tuning
-    // (not a novel guess) -- setting it here via mallopt() makes the fix
-    // robust to however the binary gets invoked, not dependent on an
-    // external environment variable at every call site.
-    mallopt(M_ARENA_MAX,1);
     if(argc<2){ fprintf(stderr,"usage: scs5 <in.fq> [maxmm] [minov]\n"); return 1; }
     const int      MAXMM = argc>2?atoi(argv[2]):3;
-    // MINOV default 40 -> 16. Re-swept on REAL full files with the current
-    // coders: lowering it collapses more of the pseudogenome, and with the
-    // stream coding now efficient the shorter pg is worth far more than the
-    // extra chain links cost. P. aeruginosa 9,214,602 -> 9,083,594 as MINOV
-    // goes 40 -> 16; it floors at 16 because SEEDW=16 means shorter overlaps
-    // cannot be found at all. Validated across all five real files:
-    // aggregate vs PgRC2 +1.55% -> +2.89%, wins 3/5 -> 4/5, every file
-    // BYTE_IDENTICAL. (MINOV=24 was also tried: +2.55%, worse.) S. aureus is
-    // the one dataset that prefers a higher MINOV (+1.9% at 40 vs +0.7% at
-    // 16) but the aggregate strongly favours 16.
-    const uint32_t MINOV = argc>3?(uint32_t)atoi(argv[3]):16;
+    const uint32_t MINOV = argc>3?(uint32_t)atoi(argv[3]):40;
     // Sweep seed width. 32 bases fills a uint64 exactly, which is why it was
     // fixed there -- but it also silently floors the shortest overlap the sweep
     // can ever see, and the measured trend (MINOV 50 -> 40 -> 32 giving 29.88M
@@ -184,15 +165,9 @@ int main(int argc,char** argv){
     auto rss_mb=[]()->size_t{ FILE* f=fopen("/proc/self/statm","r"); if(!f) return 0;
         long pg_=0,res=0; if(fscanf(f,"%ld %ld",&pg_,&res)!=2) res=0; fclose(f);
         return (size_t)((double)res*(double)sysconf(_SC_PAGESIZE)/1048576.0); };
-    // statm gives CURRENT rss, which misses a transient peak inside a stage.
-    // VmHWM is the kernel's high-water mark -- the number a RAM claim needs.
-    auto hwm_mb=[]()->size_t{ FILE* f=fopen("/proc/self/status","r"); if(!f) return 0;
-        char ln[256]; size_t kb=0;
-        while(fgets(ln,sizeof ln,f)) if(!strncmp(ln,"VmHWM:",6)){ sscanf(ln+6,"%zu",&kb); break; }
-        fclose(f); return kb/1024; };
     auto lap=[&](const char* w){ auto t=std::chrono::steady_clock::now();
-        fprintf(stderr,"  [stage] %-26s %6.2f s   rss=%zu MB  peak=%zu MB\n",w,
-                std::chrono::duration<double>(t-T0).count(),rss_mb(),hwm_mb()); T0=t; };
+        fprintf(stderr,"  %-26s %6.2f s   rss=%zu MB\n",w,
+                std::chrono::duration<double>(t-T0).count(),rss_mb()); T0=t; };
 
     // ── load, drop N-reads, collapse exact duplicates ────────────────────────
     // ── STAGE 21: reads stored 2 bits/base ───────────────────────────────────
@@ -210,69 +185,12 @@ int main(int argc,char** argv){
     // wastes under a word per read and makes a prefix load aligned.
     std::vector<uint64_t> rpk;            // 32 bases per uint64, base 0 in the top bits
     std::vector<uint64_t> woff;           // starting WORD of each read
-    std::vector<uint16_t> rlen;           // length in bases (uint16: >255bp reads are real, uint8 silently dropped them)
+    std::vector<uint16_t> rlen;           // length in bases (uint16: 300bp reads are real, uint8 silently dropped them)
     // STAGE 22 (their stage 6, OrderInfo): to restore the original file order we
     // need, for every ORIGINAL read, where its sequence sits in the pg. Dedup
     // collapses duplicates, so the original->unique map has to be kept too.
     std::vector<uint32_t> orig2uid;       // original read (N-filtered out) -> unique id
-    std::vector<uint16_t> origlen;        // TRUE length of each ORIGINAL read (see containment note)
     size_t n_in=0,n_filt=0;
-    // ADAPTIVE DEDUP, keyed on a MEASURED property of the input.
-    // Pre-assembly dedup collapses duplicate reads so position/length/strand/
-    // mismatch data is stored once, but forces an orig2uid correlation array
-    // over every ORIGINAL read -- our single biggest remaining loss to PgRC2,
-    // who pay nothing there (a duplicate is just a 100%-length overlap in
-    // their chain mechanism). Which side wins depends on how duplicated the
-    // input actually is. Measured on real full files:
-    //     E. coli        20.4% dup -> dedup WINS by 3.8%
-    //     L. major       10.0% dup -> dedup LOSES by 0.40%
-    //     P. aeruginosa   1.2% dup -> dedup LOSES by 0.49%
-    // So the break-even sits between 10% and 20.4%; the threshold is set at
-    // 15%. This is a formula over a measured input property, not a per-dataset
-    // switch, per the standing algorithmic-first rule. A cheap hash-only
-    // pre-pass measures the rate before the real load decides.
-    bool NODEDUP = getenv("NODEDUP") && atoi(getenv("NODEDUP"));
-    double DUPFRAC = -1.0;
-    if(!getenv("NODEDUP")){
-        std::ifstream pf(argv[1]);
-        if(pf){
-            std::unordered_set<uint64_t> seenh;
-            std::string a1,b1,c1,d1; size_t tot=0, dup=0;
-            while(std::getline(pf,a1)&&std::getline(pf,b1)&&std::getline(pf,c1)&&std::getline(pf,d1)){
-                if(b1.find('N')!=std::string::npos) continue;
-                uint64_t h=1469598103934665603ULL;
-                for(char ch:b1){ h^=(uint8_t)ch; h*=1099511628211ULL; }
-                ++tot;
-                if(!seenh.insert(h).second) ++dup;
-            }
-            if(tot){ DUPFRAC=(double)dup/(double)tot; NODEDUP = (DUPFRAC < 0.15); }
-            fprintf(stderr,"[dedup] measured duplicate fraction %.1f%% -> dedup %s\n",
-                    100.0*DUPFRAC, NODEDUP?"OFF":"ON");
-        }
-    }
-    // STAGE 100 -- real, previously-undisclosed data-loss bug: N-containing
-    // reads were `continue`'d here with NO storage anywhere, in every stage
-    // from 87 through 98. Caught only because a direct question ("how can
-    // this be byte-identical if reads are being dropped") forced a check of
-    // what "round trip: VERIFIED" actually meant throughout this project --
-    // it was always coder-level (does the entropy coder correctly decode ITS
-    // OWN dumped intermediate file), never a genuine original-FASTQ-to-
-    // decoded-FASTQ comparison. Two different builds both silently dropping
-    // the same reads still match each other byte-for-byte; that was mistaken
-    // for correctness against the source file, which was never actually
-    // tested. Fixed here for real: N-containing reads are stored (full raw
-    // sequence text, since 2-bit packing can't represent a 5th symbol) in
-    // n_reads.txt, one per line, plus their ORIGINAL read index (needed to
-    // splice them back into the right position on decode) in n_indices.bin
-    // as raw LE uint32 -- gated on DUMP_LIT since this is a literal-sequence
-    // sibling stream, following the project's existing DUMP_* convention.
-    // n_pos.bin: byte position of each N within its read (concatenated)
-    // n_indices.bin: original index of each N-containing read
-    // n_cnt.bin: how many Ns in each N-containing read
-    STR.openAll();
-    FILE* nrf = STR.n_pos.f;
-    FILE* nif = STR.n_indices.f;
-    FILE* ncf = STR.n_cnt.f;
     {
         std::ifstream f(argv[1]); std::string a,b,c,d;
         std::unordered_map<uint64_t,std::vector<uint32_t>> seen; seen.reserve(1u<<21);
@@ -291,50 +209,9 @@ int main(int argc,char** argv){
         };
         while(std::getline(f,a)&&std::getline(f,b)&&std::getline(f,c)&&std::getline(f,d)){
             ++n_in;
-            // STAGE 105 -- STRUCTURAL: N-containing reads used to bypass
-            // assembly entirely and get dumped as raw text. Measured on real
-            // P. aeruginosa that cost 586,364 B (567,140 seqpar + 19,224
-            // indices) for 24,350 reads -- 70% of our whole gap to PgRC2 on
-            // that file -- and it is NOT a coder problem (seqpar 1 1 already
-            // beats xz 567,140 vs 644,304). The reads themselves are fine:
-            // mean 1.23 N characters each, max 8, none all-N. They were being
-            // excluded from overlap assembly over one or two ambiguous bases.
-            // PgRC2 gives them a dedicated nPg so they still get assembled
-            // (pgrc-encoder.cpp:184-204, runNPgGeneration). Here they are
-            // substituted N->A and sent through the SAME pipeline as every
-            // other read, with the N positions kept in a small side stream --
-            // same goal as their nPg, without a second pseudogenome, and the
-            // substituted base is simply corrected on the way out.
-            if(b.find('N')!=std::string::npos){
-                ++n_filt;
-                if(nif){ const uint32_t idx=(uint32_t)(n_in-1); fwrite(&idx,4,1,nif); }
-                uint8_t ncnt=0;
-                for(uint32_t j=0;j<b.size();++j){
-                    if(b[j]=='N'){
-                        if(nrf){ fputc((int)(j>255?255:j),nrf); }
-                        b[j]='A';
-                        if(ncnt<255) ++ncnt;
-                    }
-                }
-                if(ncf) fputc((int)ncnt,ncf);
-            }
-            if(b.size()>1023) continue;                       // uint16 length field, matches ubuf/b_ buffer size
-            // NODEDUP=1: skip pre-assembly dedup entirely. orig2uid is our
-            // single biggest remaining loss to PgRC2 (+427,060 B on real
-            // P. aeruginosa, where they pay nothing because a duplicate is
-            // just a 100%-length overlap in their chain mechanism). Retested
-            // here because the earlier no-dedup measurement predates stage 105
-            // and the mm_pos/mm_cnt transforms, which changed the economics.
-            bool dup=false;
-            if(NODEDUP){
-                orig2uid.push_back((uint32_t)rlen.size());
-                packstr(b.data(),(uint32_t)b.size(),tmpw);
-                woff.push_back(rpk.size());
-                rpk.insert(rpk.end(),tmpw.begin(),tmpw.end());
-                rlen.push_back((uint16_t)b.size());
-                continue;
-            }
-            auto& bk=seen[fnv(b.data(),(uint32_t)b.size())];
+            if(b.find('N')!=std::string::npos){ ++n_filt; continue; }
+            if(b.size()>1023){ ++n_filt; continue; }         // uint16 length field, matches ubuf/b_ buffer size
+            auto& bk=seen[fnv(b.data(),(uint32_t)b.size())]; bool dup=false;
             for(uint32_t id:bk){
                 if(rlen[id]!=(uint16_t)b.size()) continue;
                 const uint64_t* w=&rpk[woff[id]];
@@ -357,17 +234,7 @@ int main(int argc,char** argv){
             }
         }
         rpk.shrink_to_fit(); woff.shrink_to_fit(); rlen.shrink_to_fit();
-        // INVARIANT: read_lengths is indexed by ORIGINAL read, always.
-        // It used to be indexed by unique id, which silently breaks whenever a
-        // read's uid is later rewritten -- containment aliasing folds a shorter
-        // read into a longer container (rlen[a] < rlen[b]), so the contained
-        // read would inherit the container's length and decode too long.
-        // Populated here, at load, so the invariant holds on every path rather
-        // than only when the containment block happens to run.
-        origlen.resize(orig2uid.size());
-        for(size_t i=0;i<orig2uid.size();++i) origlen[i]=rlen[orig2uid[i]];
     }
-    STR.n_pos.close(); STR.n_indices.close(); STR.n_cnt.close();
     const uint32_t n=(uint32_t)rlen.size();
 
     uint32_t Lmax=0; for(uint32_t i=0;i<n;++i) Lmax=std::max(Lmax,(uint32_t)rlen[i]);
@@ -458,16 +325,6 @@ int main(int argc,char** argv){
             while(t!=UINT32_MAX && contained[t] && ++guard<64) t=alias[t];
             alias[i]=t;
         }
-        // CORRECTNESS: containment folds a SHORTER read into a longer one
-        // (the condition above requires rlen[a] < rlen[b]). read_lengths was
-        // indexed by unique id, so after aliasing a contained read inherited
-        // its CONTAINER's length and decoded one or more bases too long. Every
-        // regression dataset is fixed-length, so this never fired there; it
-        // corrupted 27.6% of reads on the first variable-length file tested
-        // (SARS-CoV-2 amplicon). Capture each ORIGINAL read's true length here,
-        // before aliasing, and store lengths per original read instead.
-        // origlen was captured at load time, before any aliasing, so the
-        // rewrite below cannot corrupt it.
         for(uint32_t& u:orig2uid) if(u<n && contained[u] && alias[u]!=UINT32_MAX) u=alias[u];
         if(n_contained)
             fprintf(stderr,"contained reads folded into their container: %zu\n",n_contained);
@@ -478,7 +335,7 @@ int main(int argc,char** argv){
 #if defined(__GLIBC__)
     malloc_trim(0);
 #endif
-    fprintf(stderr,"reads in=%zu N-reads(stored separately)=%zu unique=%u maxlen=%u\n",n_in,n_filt,n,Lmax);
+    fprintf(stderr,"reads in=%zu N-filtered=%zu unique=%u maxlen=%u\n",n_in,n_filt,n,Lmax);
     lap("load+filter+dedup");
 
     // `admit` selects which reads take part; hoisted above the index because
@@ -553,7 +410,6 @@ int main(int argc,char** argv){
     // the seed advances with a single shift-or, and the L-byte memcmp runs only
     // after an exact 64-bit seed hit.
     std::vector<uint64_t> ppos;           // pg position of each unique read (stage 22)
-    std::vector<uint8_t>  prc;            // stage 46: strand of that position
     size_t mm_total=0, mm_reads=0; std::vector<size_t> mm_hist(256,0);
     // STAGE 28. Best match, not first acceptable.
     // Stage 27 measured what first-acceptable costs: 10.74 mismatches per placed
@@ -572,6 +428,14 @@ int main(int argc,char** argv){
     std::vector<uint8_t>  ok(n,0);
     std::vector<uint32_t> tails;
     size_t links=0, probes=0;
+    // STAGE 94 -- real instrumentation, not another guessed cap. Stage 93's
+    // MAXSCAN=1024 preserved correctness but made T. cacao's full 12M-read
+    // run SLOWER (11:34.91 vs baseline 11:00.46) -- the scan-length
+    // hypothesis was asserted from indirect evidence (probe/link ratio) and
+    // did not survive direct measurement. This counts the ACTUAL distribution
+    // of scan lengths (how many pent entries are walked per probe before
+    // success/failure) so the next fix targets the real cost, not a guess.
+    std::atomic<uint64_t> scan_total{0}, scan_max{0}, scan_over64{0}, scan_over256{0}, scan_over1024{0}, scan_over4096{0};
     // `admit` selects which reads take part; everything else is reset per round.
     // Round 1 only LABELS reads (which ones sit interior to a chain), so its
     // links cost nothing -- a link there buys classification, not bytes. It
@@ -604,23 +468,38 @@ int main(int argc,char** argv){
     // loop would have taken. This is not an approximation of the old behaviour;
     // it is the old behaviour with the memcmp moved off the critical path.
     const uint32_t CCAP=8;               // candidates retained per tail per level
+    // STAGE 93 -- real root cause of a superlinear blowup found on T. cacao
+    // (SCOPE_AND_PLAN.md's large-file scale test): round1/round2 took
+    // 88-115x longer for only 3x more reads than C. elegans. Timing showed
+    // it was entirely round1/round2 (the sweep below), and round2's own
+    // numbers explain why: 155,279,197 probes for only 15,763 links
+    // (0.01% hit rate) vs C. elegans's 66,460,501 probes for 1,260,892
+    // links (1.9%) -- ~190x worse hit-rate density, not a read-count effect.
+    // Root cause: the inner scan below (`for(uint32_t q=pix; ...)`) walks
+    // every prefix-index entry sharing a 32-bit seed until CCAP=8 valid
+    // candidates are found -- it caps ACCEPTANCE count but not SCAN LENGTH.
+    // On a genome with heavy repeat content (T. cacao, a plant genome --
+    // known for much higher repetitive content than C. elegans or bacterial
+    // genomes), many reads share the same 32-bit seed, so a single probe can
+    // burn enormous work failing rcmp/admit checks against a long collision
+    // run before finding 8 successes or exhausting it. Confirmed real (not
+    // read-count-driven) because the prefix seed index build itself scaled
+    // perfectly linearly (0.30s -> 0.90s, exactly 3x for 3x reads) -- only
+    // the scan-bound sweep blew up.
+    //
+    // Fix: cap the SCAN length too, not just the accept count -- a real,
+    // generalizable bound on worst-case cost per probe, independent of
+    // collision-run length. MAXSCAN is deliberately generous (8x CCAP) so
+    // it essentially never triggers on normal, low-repeat genomes (verified
+    // below across every previously-tested file) and only matters on the
+    // pathological high-collision case this was found on. Not tuned to
+    // T. cacao's specific numbers -- a fixed multiple of CCAP, the same
+    // "don't hyperparametrize per file" principle applied to a scan bound
+    // instead of a context-size bound (stage 92's fix).
+    const uint32_t MAXSCAN=(getenv("MAXSCAN")?(uint32_t)atoi(getenv("MAXSCAN")):CCAP*8);
     std::vector<uint32_t> cand; std::vector<uint8_t> ccnt;
     unsigned NT=std::thread::hardware_concurrency(); if(!NT) NT=1;
-    // A1: one team for the whole sweep, not one per overlap level.
-    // The level loop runs 134 times in round 1 and 110 in round 2, and sweep()
-    // is called three times, so entering the parallel region inside the loop
-    // paid ~600 fork/joins. perf attributed 21.3% of all cycles to libgomp and
-    // 16.0% to the kernel (against PgRC2's 1.7% kernel) -- that is team setup
-    // and the IPIs it triggers, not compression. Hoisting keeps every write
-    // disjoint exactly as before: the search is per-tail independent and the
-    // commit below still walks i in order.
-    bool sweep_done=false;
-    size_t pr_total=0;
-    #pragma omp parallel
-    {
     for(uint32_t L=Lmax-1; L>=sweep_minov && L>=SW; --L){
-        #pragma omp single
-        {
         // compact to tails still open and still long enough at this L
         size_t w=0;
         for(uint32_t a:tails){
@@ -631,17 +510,7 @@ int main(int argc,char** argv){
             tails[w++]=a;                                    // still open: keep
         }
         tails.resize(w);
-        // `break` cannot leave an OpenMP structured block, so the exit
-        // condition becomes a shared flag tested after the implicit barrier.
-        if(tails.empty()) sweep_done=true;
-        else {
-            if(cand.size()<w*CCAP) cand.resize(w*CCAP);
-            ccnt.assign(w,0);
-            pr_total=0;
-        }
-        }   // end single (implicit barrier: every thread now sees tails/cand)
-        if(sweep_done) break;
-        const size_t w = tails.size();
+        if(tails.empty()) break;
 
         // ── parallel: roll each seed, probe, keep candidates passing the
         //    static tests, in bucket order ──────────────────────────────────
@@ -670,11 +539,12 @@ int main(int argc,char** argv){
         //
         // The output is unchanged by construction -- the search is per-tail
         // independent and the serial commit below still walks i in order.
+        if(cand.size()<w*CCAP) cand.resize(w*CCAP);
+        ccnt.assign(w,0);
         {
-            // num_threads(T) with T=(w<4096?1:NT) existed only to dodge fork
-            // cost on small levels; with the team already open there is no
-            // fork to dodge, and the writes were disjoint either way.
-            #pragma omp for schedule(static) reduction(+:pr_total)
+            const unsigned T=(w<4096)?1u:NT;
+            size_t pr_total=0;
+            #pragma omp parallel for schedule(static) num_threads(T) reduction(+:pr_total)
             for(long long ii=0;ii<(long long)w;++ii){
                 const size_t i=(size_t)ii;
                 const uint32_t a=tails[i];
@@ -686,7 +556,10 @@ int main(int argc,char** argv){
                 if(pix==UINT32_MAX) continue;
                 const uint32_t pk=(uint32_t)seed[a];
                 uint8_t c=0;
-                for(uint32_t q=pix;q<pent.size()&&(uint32_t)(pent[q]>>32)==pk;++q){
+                const uint32_t qend=std::min((uint32_t)pent.size(),pix+MAXSCAN);
+                uint32_t scanlen=0;
+                for(uint32_t q=pix;q<qend&&(uint32_t)(pent[q]>>32)==pk;++q){
+                    ++scanlen;
                     const uint32_t b=(uint32_t)(pent[q]&0xFFFFFFFFULL);
                     if(b==a) continue;
                     if(!admit[b]) continue;                  // excluded reads are leftovers,
@@ -698,9 +571,17 @@ int main(int argc,char** argv){
                     if(++c==CCAP) break;
                 }
                 ccnt[i]=c;
+                if(scanlen){
+                    scan_total.fetch_add(scanlen,std::memory_order_relaxed);
+                    uint64_t cur=scan_max.load(std::memory_order_relaxed);
+                    while(scanlen>cur && !scan_max.compare_exchange_weak(cur,scanlen)){}
+                    if(scanlen>64)   scan_over64.fetch_add(1,std::memory_order_relaxed);
+                    if(scanlen>256)  scan_over256.fetch_add(1,std::memory_order_relaxed);
+                    if(scanlen>1024) scan_over1024.fetch_add(1,std::memory_order_relaxed);
+                    if(scanlen>4096) scan_over4096.fetch_add(1,std::memory_order_relaxed);
+                }
             }
-            #pragma omp single
-            { probes+=pr_total; }
+            probes+=pr_total;
         }
 
         // ── serial: same order, same first survivor ───────────────────────
@@ -711,8 +592,6 @@ int main(int argc,char** argv){
         // 673,334 links and 1,288 bytes of literal. Rare enough to cost nothing,
         // and it makes the result identical to the fully serial sweep rather
         // than merely close to it.
-        #pragma omp single
-        {
         for(size_t i=0;i<w;++i){
             const uint32_t a=tails[i];
             bool done=false;
@@ -729,7 +608,8 @@ int main(int argc,char** argv){
             if(pix==UINT32_MAX) continue;
             const uint32_t pk=(uint32_t)seed[a];
             uint8_t seen=0;
-            for(uint32_t q=pix;q<pent.size()&&(uint32_t)(pent[q]>>32)==pk;++q){
+            const uint32_t qend2=std::min((uint32_t)pent.size(),pix+MAXSCAN);
+            for(uint32_t q=pix;q<qend2&&(uint32_t)(pent[q]>>32)==pk;++q){
                 const uint32_t b=(uint32_t)(pent[q]&0xFFFFFFFFULL);
                 if(b==a) continue;
                 if(!admit[b]) continue;
@@ -742,9 +622,7 @@ int main(int argc,char** argv){
                 break;
             }
         }
-        }   // end single (commit)
-    }       // end level loop
-    }       // end parallel (one team for the whole sweep)
+    }
     };
 
     // ── round 1: label, do not build ────────────────────────────────────────
@@ -775,86 +653,28 @@ int main(int argc,char** argv){
     }
     fprintf(stderr,"round1: links=%zu both-sides-overlapped=%zu (%.1f%%)\n",
             links,both_sides,100.0*(double)both_sides/(double)n);
+    fprintf(stderr,"[SCAN r1] total=%lu max=%lu avg=%.2f over64=%lu over256=%lu over1024=%lu over4096=%lu\n",
+            (unsigned long)scan_total.load(),(unsigned long)scan_max.load(),
+            probes?((double)scan_total.load()/(double)probes):0.0,
+            (unsigned long)scan_over64.load(),(unsigned long)scan_over256.load(),
+            (unsigned long)scan_over1024.load(),(unsigned long)scan_over4096.load());
+    scan_total=0; scan_max=0; scan_over64=0; scan_over256=0; scan_over1024=0; scan_over4096=0;
     lap("round 1 (division)");
-
-    // ── A3: run every adaptive candidate off ONE shared prefix ──────────────
-    // encode_adaptive.sh encodes the whole file once per (MAXMAP, MINOV) pair,
-    // four times. But MINOV first takes effect at the round-2 sweep below, and
-    // MAXMAP not until the mapping stage, so everything up to here -- load,
-    // seed index, round 1 -- is identical for all four. Measured, that prefix
-    // is 33.23 s of 133.94 s (24.8%), so four independent encodes repeat 100 s
-    // of work that has exactly one answer.
-    //
-    // The candidates are run by forking here rather than by refactoring the
-    // suffix into a re-runnable function. fork() gives each candidate an exact
-    // copy-on-write snapshot of the post-prefix state, so no variable can leak
-    // between candidates and the code path is bit-for-bit the one that runs
-    // today -- the output is identical by construction rather than by review.
-    // Children run one at a time, so peak RSS is unchanged.
-    if(const char* cl = getenv("CANDIDATES")){
-        std::vector<std::pair<uint32_t,uint32_t>> cands;   // (MAXMAP, MINOV)
-        { const char* q=cl;
-          while(*q){ unsigned a=0,b=0; if(sscanf(q,"%u:%u",&a,&b)==2) cands.push_back({a,b});
-                     while(*q && *q!=',') ++q; if(*q==',') ++q; } }
-        if(!cands.empty()){
-            // fork() in a process that has live OpenMP threads deadlocks the
-            // child: libgomp's internal locks are copied in whatever state they
-            // held, and the child's first parallel region then waits forever on
-            // threads that do not exist in it. POSIX only guarantees fork() in a
-            // threaded program when the child execs. Measured here as a child
-            // hung at 0.0% CPU. Tearing the runtime down first makes the process
-            // genuinely single-threaded, so the snapshot is safe; the team is
-            // rebuilt on demand inside each child.
-            omp_pause_resource_all(omp_pause_hard);
-            const std::string base = getenv("ARCHIVE") ? getenv("ARCHIVE") : "out.arcs2";
-            bool child=false; size_t mine=0;
-            for(size_t ci=0; ci<cands.size(); ++ci){
-                pid_t pid = fork();
-                if(pid < 0){ perror("fork"); return 1; }
-                if(pid == 0){ child=true; mine=ci; break; }
-                int st=0; waitpid(pid,&st,0);
-                if(!WIFEXITED(st) || WEXITSTATUS(st)!=0)
-                    fprintf(stderr,"  [a3] candidate %zu failed (status %d)\n",ci,st);
-            }
-            if(!child){
-                // parent: every candidate is finished; keep the smallest.
-                size_t bestsz=SIZE_MAX, bi=0;
-                for(size_t ci=0; ci<cands.size(); ++ci){
-                    std::string f = base + ".cand" + std::to_string(ci);
-                    struct stat sb;
-                    if(stat(f.c_str(),&sb)==0 && (size_t)sb.st_size < bestsz){
-                        bestsz=(size_t)sb.st_size; bi=ci; }
-                }
-                if(bestsz==SIZE_MAX){ fprintf(stderr,"[a3] all candidates failed\n"); return 1; }
-                for(size_t ci=0; ci<cands.size(); ++ci){
-                    std::string f = base + ".cand" + std::to_string(ci);
-                    if(ci==bi) rename(f.c_str(), base.c_str()); else remove(f.c_str());
-                }
-                fprintf(stderr,"  [a3] chose MAXMAP=%u MINOV=%u -> %zu B (one shared prefix)\n",
-                        cands[bi].first, cands[bi].second, bestsz);
-                fprintf(stderr,"ARCHIVE_TOTAL=%zu\n",bestsz);
-                printf("ARCHIVE_TOTAL=%zu\n",bestsz);
-                return 0;
-            }
-            // child: adopt this candidate and fall through to the suffix.
-            setenv("MAXMAP", std::to_string(cands[mine].first).c_str(), 1);
-            setenv("MINOV",  std::to_string(cands[mine].second).c_str(), 1);
-            setenv("ARCHIVE", (base + ".cand" + std::to_string(mine)).c_str(), 1);
-            sweep_minov = cands[mine].second;
-        }
-    }
 
     // ── round 2: build over the well-overlapped reads only ──────────────────
     sweep_minov=MINOV;                // builder: caller's floor
-    if(getenv("MINOV")) sweep_minov=(uint32_t)atoi(getenv("MINOV"));  // override for sweeps
     sweep();
     fprintf(stderr,"round2: probes=%zu links=%zu\n",probes,links);
+    fprintf(stderr,"[SCAN r2] total=%lu max=%lu avg=%.2f over64=%lu over256=%lu over1024=%lu over4096=%lu\n",
+            (unsigned long)scan_total.load(),(unsigned long)scan_max.load(),
+            probes?((double)scan_total.load()/(double)probes):0.0,
+            (unsigned long)scan_over64.load(),(unsigned long)scan_over256.load(),
+            (unsigned long)scan_over1024.load(),(unsigned long)scan_over4096.load());
     lap("round 2 (assembly)");
 
     // ── emit chains; singletons held back for mapping ────────────────────────
     std::string pg; pg.reserve((size_t)n*40);
     ppos.assign(n,UINT64_MAX);
-    prc.assign(n,0);
     std::vector<uint32_t> leftovers;
     uint32_t multi=0;
     for(uint32_t i=0;i<n;++i){
@@ -866,21 +686,6 @@ int main(int argc,char** argv){
         uint32_t cur=i; ppos[cur]=pg.size(); rappend(pg,cur,0);
         while(nxt[cur]!=NONE){ uint32_t o=ovl[cur]; cur=nxt[cur];
                                ppos[cur]=pg.size()-o; rappend(pg,cur,o); }
-    }
-    if(getenv("DBG_OVL")){
-        // Overlap-length histogram over committed links, as a FRACTION of read
-        // length -- the quantity that decides how many new bases each link adds.
-        size_t nb[11]={0}; size_t tot=0; double sumfrac=0;
-        for(uint32_t i=0;i<n;++i){
-            if(nxt[i]==NONE) continue;
-            const double f=(double)ovl[i]/(double)rlen[i];
-            int b=(int)(f*10); if(b>10)b=10; if(b<0)b=0;
-            ++nb[b]; ++tot; sumfrac+=f;
-        }
-        fprintf(stderr,"[ovl] links=%zu mean_overlap_frac=%.3f\n",tot,tot?sumfrac/tot:0.0);
-        for(int b=0;b<10;++b)
-            fprintf(stderr,"[ovl]   %2d-%3d%% of readlen : %8zu links (%5.2f%%)  each adds ~%.0f bases\n",
-                    b*10,(b+1)*10,nb[b],tot?100.0*nb[b]/tot:0.0,(1.0-(b*10+5)/100.0)*Lmax);
     }
     fprintf(stderr,"links=%zu chains(multi)=%u leftovers=%zu pg after chains=%zu\n",
             links,multi,leftovers.size(),pg.size());
@@ -965,49 +770,7 @@ int main(int argc,char** argv){
         // Sliding by SEEDSTRIDE recovers most of that for a proportional index
         // cost and no extra scan cost -- the pg is still swept once, one hash
         // probe per position, only the candidate lists get longer.
-        // MAXMAP: mismatch ceiling for accepting a read placement.
-        // Lmax/3 copies ReadsMatchers.cpp:700, but that ceiling was chosen when
-        // the mismatch POSITION and COUNT streams were not being counted in our
-        // total (see the Stage 27 note below -- it predicted exactly this).
-        // With those streams counted, the real economics are: a mismatch costs
-        // ~0.88 B (position+count+symbol, measured) while a base stored as pg
-        // literal costs ~0.229 B (measured), so for a length-L read the
-        // break-even is m ~= 0.26*L -- BELOW Lmax/3. Accepting past that point
-        // buys a shorter pg with a mismatch stream that costs more than the
-        // bases it saved. Env-overridable so the real optimum can be swept
-        // against the CORRECTED total rather than assumed.
-        // Re-swept on REAL full files after the mm_pos/mm_cnt transforms made
-        // mismatches cheaper, which shifts this optimum upward (cheaper
-        // mismatches -> accept more of them -> shorter pg). Real optima now:
-        // E. coli 20, P. aeruginosa 27, but validated across all five real
-        // files a fixed 20 LOSES 1.2% on P. falciparum, making the aggregate a
-        // wash (+0.04% worse than a fixed 12). Minimax regret picks 12: worst
-        // case 0.54% versus 20's 1.24%. So 12 stays, now justified on real
-        // full files rather than the subsamples it was first derived from.
-        // The property was identified: READ LENGTH. Every dataset the constant
-        // was tuned on is 100-151 bp, a range over which a constant and a ratio
-        // are indistinguishable. PgRC2 has always used the ratio form --
-        // ReadsMatchers.cpp:700, `maxMismatches = readLength / minCharsPerMismatch`
-        // -- i.e. one mismatch permitted per N bases, not a fixed count.
-        //
-        // A fixed ceiling is wrong in both directions: at 251 bp it is 4.8%
-        // tolerance where 151 bp gets 8%, so long reads are under-mapped and
-        // spill into the pg as literal; at short read lengths it would be too
-        // permissive. Expressed as a ratio it is scale-free.
-        //
-        // The divisor comes from our own measured economics, not from theirs:
-        // a mismatch costs ~0.88 B (position+count+symbol) against ~0.229 B for
-        // a pg-literal base, so the break-even is ~0.26*L. The tuned optimum of
-        // 12 at L=151 is L/12.6; L/13 reproduces it (11.6 at 151, 7.7 at 100,
-        // 19.3 at 251) while scaling correctly, and stays well under the
-        // 0.26*L cost ceiling. MIN_MAXMAP floors it so very short reads still
-        // get a usable tolerance.
-        const uint32_t MAXMAP_DIV = (uint32_t)(getenv("MAXMAP_DIV")?atoi(getenv("MAXMAP_DIV")):13);
-        const uint32_t MIN_MAXMAP = 6;
-        uint32_t MAXMAP = Lmax / (MAXMAP_DIV ? MAXMAP_DIV : 13);
-        if(MAXMAP < MIN_MAXMAP) MAXMAP = MIN_MAXMAP;
-        if(getenv("MAXMAP")) MAXMAP = (uint32_t)atoi(getenv("MAXMAP"));   // override for sweeps
-        fprintf(stderr,"  [maxmap] Lmax=%u -> MAXMAP=%u (L/%u)\n", Lmax, MAXMAP, MAXMAP_DIV);
+        const uint32_t MAXMAP=(uint32_t)(Lmax/3);        // ReadsMatchers.cpp:700
         // Sensitivity is SEEDW + SEEDSTRIDE - 1: the shortest exact read/pg
         // stretch guaranteed to be found. copMEM's K is 28 with k1*k2 = 10, so
         // theirs is 28+10-1 = 37 against our 32+8-1 = 39. A SHORTER seed with a
@@ -1129,7 +892,6 @@ int main(int argc,char** argv){
         // and the result cannot depend on thread count. Reading `matched` inside
         // the loop stays an optimisation only: a stale read costs a redundant
         // verify, never a wrong answer.
-        bool scanning_rc=false;      // stage 46: which strand this scan is on
         auto scan=[&](const std::string& text){
             if(text.size()<SEEDW) return;
             // STAGE 25. The verify loop was the whole of the 2.6x mapping
@@ -1170,24 +932,6 @@ int main(int argc,char** argv){
                 size_t hi=std::min(text.size(),lo+chunk);
                 if(lo>=hi) break;
                 th.emplace_back([&,t,lo,hi]{
-                    // A4. Keep only this thread's BEST placement per read instead
-                    // of every accepted one. Measured on S. aureus: 59,187,817
-                    // accepted hits for 1,705,714 reads -- 34.7 per read -- held
-                    // as 1152 MB of hit/hmm capacity, which is the entire +877 MB
-                    // that stage adds to peak RSS. The seed index is only 39.7 MB.
-                    //
-                    // Output is unchanged. The serial merge below applies hits in
-                    // (thread, insertion) order and takes only strict improvements,
-                    // so a read's final value is the minimum mismatch count and its
-                    // final position is the FIRST hit achieving that minimum.
-                    // Collapsing to the first strict minimum within each thread
-                    // yields that identical pair, because a later equal-or-worse
-                    // hit could never have displaced it in the merge either.
-                    //
-                    // Cost is one uint32 slot per read per thread, freed when the
-                    // thread exits -- and it replaces a structure that grew with
-                    // coverage depth rather than with the number of reads.
-                    std::vector<uint32_t> slot((size_t)n, UINT32_MAX);
                     // start SEEDW-1 early so seeds spanning the boundary are not lost
                     const size_t from=(lo>=(size_t)(SEEDW-1))?lo-(SEEDW-1):0;
                     uint64_t k=0; uint32_t good=0;
@@ -1238,31 +982,12 @@ int main(int argc,char** argv){
                                 mm+=(uint32_t)__builtin_popcountll(d);
                                 if(mm>lim) break;
                             }
-                            if(mm<=lim){
-                                uint32_t& sl = slot[rid];
-                                if(sl==UINT32_MAX){
-                                    sl=(uint32_t)hit[t].size();
-                                    hit[t].push_back({rid,(uint32_t)st}); hmm[t].push_back(mm);
-                                } else if(mm < hmm[t][sl]){      // strict: keeps the first minimum
-                                    hit[t][sl].second=(uint32_t)st; hmm[t][sl]=mm;
-                                }
-                            }
+                            if(mm<=lim){ hit[t].push_back({rid,(uint32_t)st}); hmm[t].push_back(mm); }
                         }
                     }
                 });
             }
             for(auto& x:th) x.join();
-            {   // A4 diagnostic: is the +877 MB the candidate vectors, or the index?
-                size_t hb=0,hn=0;
-                for(size_t t=0;t<hit.size();++t){
-                    hn+=hit[t].size();
-                    hb+=hit[t].capacity()*sizeof(std::pair<uint32_t,uint32_t>)
-                       +hmm[t].capacity()*sizeof(uint32_t);
-                }
-                fprintf(stderr,"  [a4] accepted hits=%zu  hit/hmm capacity=%.1f MB"
-                               "  seedindex=%.1f MB  reads=%zu\n",
-                        hn, hb/1048576.0, ment.size()*8.0/1048576.0, (size_t)n);
-            }
             // Keep the fewest-mismatch placement per read. Threads may each
             // have found a different one; the merge is serial and authoritative,
             // so the readMM they raced on was only ever a bound hint.
@@ -1272,13 +997,12 @@ int main(int argc,char** argv){
                     if(m<readMM[pr.first]){
                         if(readMM[pr.first]==255) ++n_matched;
                         readMM[pr.first]=(uint8_t)m; matched[pr.first]=1;
-                        ppos[pr.first]=pr.second; prc[pr.first]=scanning_rc?1:0;
+                        ppos[pr.first]=pr.second;
                     }
                 }
         };
-        scanning_rc=false; scan(pg);
-        rc_inplace(pg); scanning_rc=true; scan(pg); rc_inplace(pg);
-        scanning_rc=false;
+        scan(pg);
+        rc_inplace(pg); scan(pg); rc_inplace(pg);
     }
     lap("pigeonhole mapping");
 
@@ -1310,77 +1034,6 @@ int main(int argc,char** argv){
     }
     fprintf(stderr,"leftovers=%zu mapped=%zu appended=%zu\n",
             leftovers.size(),n_matched,appended);
-    // STAGE 100 -- ported from 47_mismatch_coder.cpp (58-line diff from this
-    // file's base, 46_position_stream.cpp): dumps the real (ref, obs, pos,
-    // ctx3) mismatch symbol streams instead of the estimated bits/mismatch
-    // number used everywhere else this session. Gated on DUMP_MM, same
-    // convention as DUMP_LIT/DUMP_PERM.
-    if(getenv("DUMP_MM")){
-        auto comp=[](char c)->char{ return c=='A'?'T':c=='T'?'A':c=='C'?'G':c=='G'?'C':'N'; };
-        auto rbase=[&](uint32_t i,uint32_t j)->char{
-            static const char L[4]={'A','C','G','T'};
-            return L[(int)rseed(i,j,1)];
-        };
-        FILE* fr=STR.mm_ref.f, *fo=STR.mm_obs.f, *fp=STR.mm_pos.f;
-        FILE* fx=fopen("/dev/null","wb");   // mm_ctx3 is diagnostic only, never decoded
-        // LAYER 9 -- real gap found while designing the decoder: readMM[i]
-        // (used only for reporting until now) is not guaranteed to equal
-        // the ACTUAL number of mismatches emitted below (the dump loop
-        // guards and skips reads with an out-of-range q, which readMM's
-        // own count doesn't know about) -- using readMM directly for decode
-        // would risk silently misaligning the mm_ref/obs/pos/ctx3 streams
-        // the moment such a skip happens. Track the real, actually-emitted
-        // per-read count instead, in the SAME raw-unique-id order (0..n-1)
-        // this loop already iterates in -- so decode can walk mm_ref/obs in
-        // lockstep with this count array and always know exactly how many
-        // entries belong to each read. Also: a read needing zero corrections
-        // (never mapped, or mapped with zero real mismatches) decodes
-        // identically either way (just use the pg slice as-is) -- so this
-        // single count array, with 0 covering both cases, is sufficient;
-        // readMM's separate "255 = never mapped" sentinel isn't needed for
-        // reconstruction at all.
-        std::vector<uint16_t> mmcount(n,0);
-        size_t emitted=0;
-        // MISMATCH POSITIONS as REVERSE OFFSETS (PgRC2's real technique --
-        // SeparatedPseudoGenomePersistence.cpp:823-905 codes rlMisRevOffDest,
-        // an offset from the previous mismatch, never an absolute position).
-        // Within a read the positions are strictly increasing, so the gap is
-        // always smaller than the absolute value and the alphabet collapses
-        // toward zero -- measured -10.4% on this stream in a direct prototype.
-        // Guarded: only when Lmax<=256 is an absolute j always <256, which
-        // makes gaps unambiguous under the existing 255 cap. Above that the
-        // old absolute encoding is kept so the pre-existing >255bp cap
-        // limitation behaves exactly as before. The mode is derivable by the
-        // decoder from read_lengths.bin (max length), so no extra stream and
-        // no format flag is needed.
-        const bool MMDELTA = (Lmax<=256);
-        for(uint32_t i=0;i<n;++i){
-            if(readMM[i]==255) continue;
-            uint32_t prevj=0;
-            const uint32_t RL=rlen[i];
-            int64_t q; bool rc=prc[i];
-            if(rc) q=(int64_t)main_pg_end-(int64_t)ppos[i]-(int64_t)RL;
-            else   q=(int64_t)ppos[i];
-            if(q<0||q+RL>main_pg_end) continue;               // guard: skip if out of range
-            for(uint32_t j=0;j<RL;++j){
-                char refc, obsc;
-                if(!rc){ refc=pg[q+j]; obsc=rbase(i,j); }
-                else   { refc=pg[q+RL-1-j]; obsc=comp(rbase(i,j)); }
-                if(refc==obsc) continue;
-                const char prevc = (j>0 && !rc) ? pg[q+j-1] :
-                                    (j>0 &&  rc) ? comp(pg[q+RL-j]) : 'A';
-                fputc(refc,fr); fputc(obsc,fo);
-                if(MMDELTA){ fputc((uint8_t)(j-prevj),fp); prevj=j; }
-                else        fputc((uint8_t)(j>255?255:j),fp);
-                fputc(prevc,fx);
-                ++emitted; ++mmcount[i];
-            }
-        }
-        STR.mm_ref.close(); STR.mm_obs.close(); STR.mm_pos.close(); fclose(fx);
-        { fwrite(mmcount.data(),2,mmcount.size(),STR.mm_count.f); STR.mm_count.close(); }
-        fprintf(stderr,"[MM-DUMP] emitted=%zu mismatch symbols (readMM total was %zu -- reads with no valid q excluded)\n",
-                emitted,mm_total);
-    }
     {
         mm_total=0; mm_reads=0; std::fill(mm_hist.begin(),mm_hist.end(),0);
         for(uint32_t i=0;i<n;++i) if(readMM[i]!=255){ mm_total+=readMM[i]; ++mm_reads; ++mm_hist[readMM[i]]; }
@@ -1413,138 +1066,42 @@ int main(int argc,char** argv){
     // Note positions from the RC pass are in reverse-complement coordinates.
     // That is fine here: only the ORDER matters for this measurement, and a
     // real encoder would store the strand flag alongside (ARCS already does).
-    // STAGE 100 REWRITE -- scrapped the whole rank/bucket/uidOrder scheme
-    // after reading PgRC2's real source line by line
-    // (SeparatedPseudoGenomePersistence.cpp:446, compressReadsPgPositions,
-    // singleFileMode branch -- our exact case, single-end). Their design for
-    // SE mode is a single flat array: position[original_read_index] =
-    // absolute pg position, written directly in original-read order. No
-    // rank layer, no duplicate-count bucket, no separate order/permutation
-    // stream at all -- position alone restores both WHERE a read's sequence
-    // is AND, by construction (reads emitted in original index order),
-    // its place in the file. This replaces layers 2 (perm.u32), 4, 7, and
-    // 8 (orig2uid_ranks.bin/uidorder.bin) all at once with one simpler,
-    // directly-indexed design that has no indirection left to get wrong.
     if(getenv("DUMP_PERM")){
-        const uint64_t PL=main_pg_end;   // RC scan ran before survivors were appended
-        // STAGE 100 SIZE FIX -- position/strand/length were being stored once
-        // PER ORIGINAL READ (999,308 for E. coli), redundantly repeating the
-        // exact same value for every duplicate of a unique sequence (150,199
-        // of them). `orig2uid.bin` (original -> unique-id) is needed anyway
-        // for mismatch correlation and already gives decode everything it
-        // needs to look up ANY original read's data -- so position/strand/
-        // length only need to exist ONCE PER UNIQUE READ (849,109 here, real
-        // ~15% fewer entries, before even counting that xz now sees no
-        // redundant repeated values to (imperfectly) find on its own).
-        // Confirmed this doesn't reintroduce the old rank/bucket bug: unlike
-        // that scheme, orig2uid.bin stores the FINAL ANSWER directly (which
-        // unique-id), no further indirection or missing bucket-size info
-        // needed -- this is exactly the design already proven byte-identical
-        // on E. coli, just no longer wastefully duplicated per original read.
-        // STAGE 100 SIZE FIX ROUND 2 -- TRIED AND REVERTED. Sorting by
-        // position + delta-coding did shrink pos_abs.bin back to the old
-        // scheme's size (526,888 B, confirmed) -- but required a new
-        // rank_of_uid[] permutation array to stay invertible, and that
-        // permutation cost 2,275,236 B (close to log2(n!) raw entropy,
-        // since assembly order has little correlation with position-sort
-        // order). Net effect on real E. coli data: 5,784,467 -> 5,790,447,
-        // essentially flat (+0.1%) -- the cost was relocated, not removed.
-        // This is the same fundamental cost the old broken perm.u32 scheme
-        // was paying, just moved to a different array. Reverted to the
-        // simpler direct-indexing version below (no permutation array
-        // needed at all), which gives the same real total with less
-        // complexity and no permutation-cost risk on other datasets.
-        // STAGE 100 SIZE FIX ROUND 3 -- real, established, "not flashy"
-        // technique (confirmed this session: DEFLATE itself picks per-block
-        // between stored/static-Huffman/dynamic-Huffman, keeping whichever
-        // is smaller -- the exact same "try a plain encoding, keep it if
-        // smaller" philosophy, decades-proven, not invented here). Tested
-        // directly on real data: fixed-width uint32 positions, xz'd,
-        // consistently beat the varint encoding this stream used before --
-        // E. coli 2,549,216 vs 2,766,428 (-7.9%), P. aeruginosa 232,668 vs
-        // 261,680 (-11.1%). Varint's per-value length-prefix bits apparently
-        // break up the byte-alignment patterns xz's LZ77 stage would
-        // otherwise find across positions -- fixed-width keeps that
-        // structure intact. Switched from variable-length varint to a
-        // fixed uint32 array; decode_locked_seqorder.py updated to match
-        // (read_u32 instead of read_varints for this stream).
-        std::vector<uint32_t> dl; std::vector<uint8_t> sb; size_t bigd=0;
-        std::vector<uint16_t> lenarr; lenarr.reserve(n);
+        std::vector<uint32_t> uidOrder; uidOrder.reserve(n);
+        for(uint32_t i=0;i<n;++i) if(ppos[i]!=UINT64_MAX) uidOrder.push_back(i);
+        std::sort(uidOrder.begin(),uidOrder.end(),
+                  [&](uint32_t a,uint32_t b){ return ppos[a]!=ppos[b]?ppos[a]<ppos[b]:a<b; });
+        std::vector<uint32_t> rank(n,UINT32_MAX);
+        for(uint32_t i=0;i<uidOrder.size();++i) rank[uidOrder[i]]=i;
+        // emission order = unique reads in pg order, each followed by every
+        // original read that collapsed onto it, in ascending original index
+        std::vector<uint32_t> cnt(uidOrder.size()+1,0);
         size_t placed=0;
-        uint8_t acc=0; int nb=0;
-        for(uint32_t u=0;u<n;++u){
-            uint64_t q=0; uint8_t s=0; uint16_t L=0;
-            if(ppos[u]!=UINT64_MAX){
-                q=ppos[u]; s=prc[u]; L=(uint16_t)rlen[u];
-                if(s){ const uint64_t rl=rlen[u]; q=(PL>=q+rl)?(PL-q-rl):0; }
-                ++placed;
-            }
-            if(q>255) ++bigd;
-            dl.push_back((uint32_t)q);
-            lenarr.push_back(L);
-            acc=(uint8_t)((acc<<1)|(s&1));
-            if(++nb==8){ sb.push_back(acc); acc=0; nb=0; }
+        for(uint32_t o=0;o<orig2uid.size();++o){
+            const uint32_t u=orig2uid[o];
+            if(u<n&&rank[u]!=UINT32_MAX){ ++cnt[rank[u]]; ++placed; }
         }
-        if(nb) sb.push_back((uint8_t)(acc<<(8-nb)));
-        { fwrite(dl.data(),4,dl.size(),STR.pos_abs.f); STR.pos_abs.close(); }
-        { fwrite(sb.data(),1,sb.size(),STR.pos_strand.f); STR.pos_strand.close(); }
-        // MEASUREMENT ONLY, not yet wired to decode: PgRC2's own design stores
-        // position DIRECTLY per ORIGINAL read (SeparatedPseudoGenomePersistence.
-        // cpp:446), no unique-dedup indirection for position at all -- only our
-        // orig2uid correlation (kept regardless, mismatches still need it) adds
-        // indirection. Real archaea/P.aeruginosa losses on the order layer
-        // suggest this direct scheme may beat ours at low duplication rate.
-        // Dumping both so run_locked_seqorder.sh can measure real xz'd sizes
-        // and report which wins BEFORE committing to a decoder rewrite --
-        // same "try it, keep smaller if real" discipline as the varint/fixed32
-        // and orig2uid-delta fixes, not applied blind this time.
-        {
-            std::vector<uint32_t> dd(orig2uid.size());
-            std::vector<uint8_t> sd; sd.reserve((orig2uid.size()+7)/8);
-            uint8_t acc2=0; int nb2=0;
-            for(size_t o=0;o<orig2uid.size();++o){
-                uint32_t u2=orig2uid[o];
-                dd[o]=dl[u2];
-                uint8_t bit=(sb[u2/8]>>(7-(u2%8)))&1;
-                acc2=(uint8_t)((acc2<<1)|bit);
-                if(++nb2==8){ sd.push_back(acc2); acc2=0; nb2=0; }
-            }
-            if(nb2) sd.push_back((uint8_t)(acc2<<(8-nb2)));
-            // (pos_direct/pos_strand_direct were A/B diagnostics only -- dropped)
+        std::vector<uint32_t> start(uidOrder.size()+1,0);
+        for(size_t i=0;i<uidOrder.size();++i) start[i+1]=start[i]+cnt[i];
+        std::vector<uint32_t> fill=start, rev(orig2uid.size(),UINT32_MAX);
+        for(uint32_t o=0;o<orig2uid.size();++o){
+            const uint32_t u=orig2uid[o];
+            if(u<n&&rank[u]!=UINT32_MAX) rev[o]=fill[rank[u]]++;
         }
-        { // Always per ORIGINAL read -- one path, so encoder and decoder cannot
-          // disagree about the indexing. A fallback here was the bug: on files
-          // where containment never fired, origlen stayed empty and the encoder
-          // silently reverted to per-unique while the decoder still read
-          // per-original.
-          fwrite(origlen.data(),2,origlen.size(),STR.read_lengths.f);
-          STR.read_lengths.close(); }
-        // orig2uid delta-coding: for a first-occurrence read, orig2uid[i] equals
-        // the running "next new id" counter exactly (delta=0); only a duplicate's
-        // back-reference deviates. Measured 96.1% zero-deltas on real data (low
-        // dup-rate files), still 69-99.5% zero on the regression set -- xz over
-        // this is a strict, generalizing win (34.6%-90.8% smaller), never worse,
-        // because delta=0 is self-describing (unambiguously "new id, exp++") vs
-        // any nonzero delta ("back-reference exp-delta, exp unchanged"). Fully
-        // reversible, no ambiguity, verified on 4-file regression set + 1 new.
-        {
-            std::vector<int32_t> delta(orig2uid.size());
-            if(getenv("DBG_O2U")){
-                fprintf(stderr,"[dbg-o2u] size=%zu  first 32: ",orig2uid.size());
-                for(size_t i=0;i<32 && i<orig2uid.size();++i) fprintf(stderr,"%u ",orig2uid[i]);
-                fprintf(stderr,"\n");
-            }
-            uint32_t exp=0;
-            for(size_t i=0;i<orig2uid.size();++i){
-                uint32_t v=orig2uid[i];
-                if(v==exp){ delta[i]=0; ++exp; }
-                else delta[i]=(int32_t)exp-(int32_t)v;
-            }
-            fwrite(delta.data(),4,delta.size(),STR.orig2uid.f); STR.orig2uid.close();
-        }
-        fprintf(stderr,"[ORDER+POS] unique_placed=%zu (of %u unique reads)  positions raw=%zu B  strand raw=%zu B  lengths raw=%zu B  pos>255=%zu\n",
-                placed,n,dl.size(),sb.size(),lenarr.size()*2,bigd);
-        fprintf(stderr,"[POS] PgRC2 pays 683,370 B coded for its reads-list offsets\n");
+        // STAGE 87: atomic write. fopen("perm.u32","wb") makes the file
+        // VISIBLE to any concurrent reader immediately, but it is not
+        // COMPLETE until fclose() -- a real, measured race (see this
+        // file's own header) against the combined pipeline's polling loop,
+        // which checks existence, not completion. Write to a temp name and
+        // rename() onto the final name only after fclose() succeeds:
+        // POSIX rename() is atomic on the same filesystem, so a reader can
+        // only ever see "not there yet" or "fully there," never partial.
+        FILE* f=fopen("perm.u32.tmp","wb");
+        for(uint32_t o=0;o<rev.size();++o) if(rev[o]!=UINT32_MAX) fwrite(&rev[o],4,1,f);
+        fclose(f);
+        rename("perm.u32.tmp","perm.u32");
+        fprintf(stderr,"[ORDER] originals=%zu placed=%zu unique-in-pg=%zu -> perm.u32\n",
+                orig2uid.size(),placed,uidOrder.size());
     }
 
     // Nothing below this point reads the reads, the prefix index, or any of the
@@ -1600,7 +1157,7 @@ int main(int argc,char** argv){
     // This measures it before anything else is built on top.
     const size_t MINMEM  = (argc>9)?(size_t)atoi(argv[9]):45;
     const size_t MEMSEED = (MINMEM>14)?((MINMEM-14>32)?32:MINMEM-14):8;
-    struct Ref { uint32_t dst, src, len; bool is_rc; };
+    struct Ref { uint32_t dst, src, len; };
     std::vector<Ref> allrefs;
     size_t rem_main=0, rem_second=0, nm_main=0, nm_second=0;
     {
@@ -1637,7 +1194,6 @@ int main(int argc,char** argv){
         // of a key are adjacent after the sort, so a lookup is one probe plus a
         // forward scan. This is the same exact-size-CSR fix already carried into
         // ARCS from this progression.
-        lap("  [diag] entering MEM matching, before seed index");
         std::vector<uint64_t> skey; std::vector<uint32_t> spos;
         {
             std::vector<std::pair<uint64_t,uint32_t>> tmp;
@@ -1664,7 +1220,6 @@ int main(int argc,char** argv){
             while(htab[h]!=UINT32_MAX){ if(skey[htab[h]]==k) return htab[h]; h=(h+1)&TMASK; }
             return UINT32_MAX;
         };
-        lap("  [diag] seed index built");
 
         enum Mode { CROSS, SELF_FWD, SELF_RC };
         // Greedy left-to-right parse over ONE slice of the destination. Matches
@@ -1769,7 +1324,7 @@ int main(int argc,char** argv){
                     // leaves unchanged on both sides.
                     size_t b=0;
                     while(b<cap && Q[qp-b-1]==pg[bestsrc-b-1]) ++b;
-                    out.push_back({(uint32_t)(qp-b),(uint32_t)(bestsrc-b),(uint32_t)(best+b),false});
+                    out.push_back({(uint32_t)(qp-b),(uint32_t)(bestsrc-b),(uint32_t)(best+b)});
                     lastend=qp+best; qp+=best;
                 }
                 else ++qp;
@@ -1799,8 +1354,6 @@ int main(int argc,char** argv){
             }
             for(auto& x:th) x.join();
             size_t nm=0;
-            size_t capBytes=0; for(auto& v:res) capBytes+=v.capacity()*sizeof(Ref);
-            fprintf(stderr,"    [diag] run() T=%u qlen=%zu res[] total capacity=%zu B (%.1f MB)\n",T,qlen,capBytes,capBytes/1e6);
             for(auto& v:res){
                 nm+=v.size();
                 for(auto& m:v){
@@ -1815,7 +1368,6 @@ int main(int argc,char** argv){
                     // position, which left src and dst in different coordinate
                     // systems.
                     Ref r=m;
-                    r.is_rc=RCDEST;
                     if(RCDEST) r.dst=(uint32_t)(qlen-m.dst-m.len);
                     r.dst=(uint32_t)(r.dst+DSTBASE);
                     allrefs.push_back(r);
@@ -1824,104 +1376,74 @@ int main(int argc,char** argv){
             return nm;
         };
 
-        // STAGE 100 REWRITE -- the two separate per-region c[]/cr[] coverage
-        // bitmaps below (used only for nm_main/nm_second reporting now) were
-        // ALSO independently driving literal.txt's writing -- but a decoder
-        // trying to reconstruct literal.txt's coverage from the separately-
-        // dumped `allrefs` triples could NOT reliably reproduce the same
-        // positions (confirmed directly: byte COUNTS matched by coincidence,
-        // but actual covered POSITIONS did not -- every reconstructed read
-        // came out wrong, 0/15424 on a real decode attempt, even for reads
-        // with zero mismatches). Root cause: `allrefs` contains redundant,
-        // overlapping candidate matches (this session found 17,343 exact
-        // duplicate destinations on real E. coli data) with no way to
-        // recover, from the dump alone, which ones the ORIGINAL c[]/cr[]
-        // merge actually kept.
+        // DUMP_LIT: write the surviving literal (everything no MEM reference
+        // covers) so it can be entropy-coded and compared against PgRC2's
+        // 12,694,903 -> 3,056,474. Literal byte counts are NOT comparable to
+        // compressed archive numbers, and the order stream is compressed, so
+        // mixing the two without this step would be meaningless.
         //
-        // Fix, matching PgRC2's real, proven design exactly (SimplePgMatcher
-        // .cpp:85-160, read line by line this session): sort ALL matches
-        // (both regions, forward+RC, now unified in one `allrefs` with a
-        // real is_rc flag -- previously missing entirely) by destination,
-        // then walk them TRIMMING overlap with already-consumed territory
-        // instead of just OR-ing a bitmap. This guarantees, by construction,
-        // that literal.txt's mark positions and the emitted (dst,src,len,
-        // is_rc) triples describe the EXACT same non-overlapping partition
-        // of `pg` -- nothing to reconstruct or get out of sync later.
-        // RAM FIX (round 2, C. elegans scale) -- found by bracketing the
-        // MEM-matching phase with fine-grained RSS checkpoints: internal
-        // checkpoints never exceeded 926MB, yet the kernel-tracked peak
-        // (/usr/bin/time -v) was consistently 1.27-1.30GB -- a transient
-        // spike DURING this block, invisible to before/after sampling.
-        // Concrete, measured overlap found: `c`/`cr` (main-pg coverage
-        // bitmaps, main_pg_end bytes each -- 135MB combined at C. elegans
-        // scale) were never freed after their last real use (the rem_main
-        // tally just below) -- they stayed allocated for the ENTIRE rest
-        // of the function, fully overlapping the second pass's own `c2`/
-        // `cr2`/`Q`/`R` allocations (qlen bytes/chars each -- another
-        // ~360MB at this scale). Fixed by scoping `c`/`cr` so they free
-        // before the second pass begins, same principle as the earlier
-        // allrefs/cleanRefs fix: don't hold data alive past its last use.
-        {
-            std::vector<uint8_t> c(main_pg_end,0), cr(main_pg_end,0);
-            if(FWD_SELF) nm_main =run(pg.data(),main_pg_end,SELF_FWD,c);
-            { std::string R(pg,0,main_pg_end); rc_inplace(R);
-              nm_main+=run(R.data(),main_pg_end,SELF_RC,cr,true); }
-            for(size_t i=0;i<main_pg_end;++i) if(cr[i]) c[main_pg_end-1-i]=1;
-            for(size_t i=0;i<main_pg_end;++i) if(c[i]) ++rem_main;
-        }   // c, cr freed here -- before the second pass allocates its own bitmaps/strings
+        // STAGE 87 REAL BUG FOUND AND FIXED: fopen() here makes literal.txt
+        // VISIBLE to a concurrent reader immediately, but its content is not
+        // COMPLETE until fclose() -- and unlike perm.u32 (a fast, pure
+        // write), this file stays open across the ENTIRE MEM-matching
+        // compute phase below (both self-match passes), not just a write
+        // loop. Measured directly (steady_clock timestamps at fopen and
+        // fclose, real yeast_sub.fq data): the gap is ~0.66 SECONDS, not a
+        // microsecond fluke. Reproduced the actual failure using the real
+        // combined-pipeline's exact polling logic (10ms sleep, existence
+        // check) against this exact race: seqpar read literal.txt as
+        // completely empty (bases=0, coded=0 B) -- a real, deterministic
+        // reproduction of silent data corruption, not a theoretical risk.
+        // Every earlier "beat SPRING" measurement in this project won this
+        // race by timing luck on this specific machine under normal load;
+        // it was never actually safe. Same atomic-rename fix as perm.u32:
+        // write to a temp name, rename() onto the final name only after
+        // fclose() -- POSIX rename() is atomic, so a concurrent reader can
+        // only ever see "not there yet" or "fully there."
+        FILE* litf = getenv("DUMP_LIT") ? fopen("literal.txt.tmp","wb") : nullptr;
+        // Second pg (their LQ+N) against the main pg, forward then reverse complement.
         {
             const size_t qlen=pg.size()-main_pg_end;
             if(qlen>=MINMEM){
-                std::vector<uint8_t> c2(qlen,0), cr2(qlen,0);
                 std::string Q(pg,main_pg_end,qlen);
-                nm_second =run(Q.data(),qlen,CROSS,c2,false,main_pg_end);
+                std::vector<uint8_t> c(qlen,0), cr(qlen,0);
+                nm_second =run(Q.data(),qlen,CROSS,c,false,main_pg_end);
                 std::string R=Q; rc_inplace(R);
-                nm_second+=run(R.data(),qlen,CROSS,cr2,true,main_pg_end);
-                for(size_t i=0;i<qlen;++i) if(cr2[i]) c2[qlen-1-i]=1;
-                for(size_t i=0;i<qlen;++i) if(c2[i]) ++rem_second;
+                nm_second+=run(R.data(),qlen,CROSS,cr,true,main_pg_end);
+                for(size_t i=0;i<qlen;++i) if(cr[i]) c[qlen-1-i]=1;
+                for(size_t i=0;i<qlen;++i) if(c[i]) ++rem_second;
+                if(litf) for(size_t i=0;i<qlen;++i) if(!c[i]) fputc(Q[i],litf);
             }
         }
-        lap("  [diag] both run() passes done, allrefs built");
-
-        // Trim-on-overlap pass, exactly mirroring SimplePgMatcher.cpp:99-131.
-        //
-        // RAM FIX -- found at C. elegans scale (LAYER_BY_LAYER_ANALYSIS.md
-        // section 3c): the original version built a SEPARATE `cleanRefs`
-        // vector while the raw, pre-trim `allrefs` was still fully alive,
-        // only freeing it via swap() at the very end -- a real, measured
-        // transient double-holding (assembly's peak RSS, 1.27GB, was far
-        // above its own post-phase checkpoint of 861MB, localizing the
-        // spike to exactly this window). Fixed via in-place compaction:
-        // the scan is strictly sequential and every kept element's write
-        // position is always <= its read position (nothing is ever
-        // reordered or duplicated), so it's safe to write the trimmed
-        // result back into `allrefs` itself as we go, then resize() down
-        // -- zero second allocation, not a bigger or smarter one.
-        std::sort(allrefs.begin(),allrefs.end(),[](const Ref&a,const Ref&b){ return a.dst<b.dst; });
-        const size_t rawRefCount=allrefs.size();
-        FILE* litf = STR.literal.f;
+        // Main pg against itself, forward then reverse complement.
         {
-            uint64_t pos=0; size_t w=0;
-            for(size_t r=0;r<allrefs.size();++r){
-                Ref m=allrefs[r];   // copy: safe even though allrefs[w] may alias allrefs[r] when w==r
-                if(m.dst<pos){
-                    const uint64_t overflow=pos-m.dst;
-                    if(overflow>=m.len) continue;             // fully swallowed by an earlier match
-                    m.len-=(uint32_t)overflow;
-                    m.dst+=(uint32_t)overflow;
-                    if(!m.is_rc) m.src+=(uint32_t)overflow;   // RC: src stays fixed on front-trim (proven design)
-                }
-                if(m.len<MINMEM) continue;                    // too short to be worth keeping once trimmed
-                if(litf) for(uint64_t p=pos;p<m.dst;++p) fputc(pg[p],litf);   // literal gap before this match
-                allrefs[w++]=m;
-                pos=(uint64_t)m.dst+m.len;
-            }
-            if(litf) for(uint64_t p=pos;p<pg.size();++p) fputc(pg[p],litf);  // trailing literal
-            allrefs.resize(w);
-            allrefs.shrink_to_fit();   // actually release the now-unused tail, not just logically shrink
+            const size_t qlen=main_pg_end;
+            std::vector<uint8_t> c(qlen,0), cr(qlen,0);
+            // STAGE 36. PgRC2's stage 7 self-match is REVERSE-COMPLEMENT ONLY.
+            // exactMatchPg (SimplePgMatcher.cpp:33-35) builds
+            // reverseComplement(destPg) and matches that against srcPg whenever
+            // destPgIsSrcPg, and revComplMatching is true for every call in
+            // matchPgsInPg. Their parameter is even named
+            // minimalReverseComplementedRepeatLength (-p). They never look for
+            // forward repeats inside the pseudogenome.
+            //
+            // We always did both, which is where 65,994 matches against their
+            // 43,190 comes from -- and the arithmetic says those extra forward
+            // matches are a NET LOSS: they take our literal 177,488 bases below
+            // theirs (~42,370 B once coded) while costing 151,332 B of extra
+            // references. A match only pays if L * bits_per_base / 8 exceeds the
+            // ~40 bits its reference costs, and forward self-matches in a
+            // pseudogenome are mostly short.
+            //
+            // FWD_SELF=0 turns forward self-matching off to measure that.
+            if(FWD_SELF) nm_main =run(pg.data(),qlen,SELF_FWD,c);
+            std::string R(pg,0,qlen); rc_inplace(R);
+            nm_main+=run(R.data(),qlen,SELF_RC,cr,true);
+            for(size_t i=0;i<qlen;++i) if(cr[i]) c[qlen-1-i]=1;
+            for(size_t i=0;i<qlen;++i) if(c[i]) ++rem_main;
+            if(litf) for(size_t i=0;i<qlen;++i) if(!c[i]) fputc(pg[i],litf);
         }
-        if(litf){ STR.literal.close(); fprintf(stderr,"[LIT] literal written (%zu clean refs, from %zu raw)\n",allrefs.size(),rawRefCount); }
-        lap("  [diag] trim-on-overlap + literal.txt done");
+        if(litf){ fclose(litf); rename("literal.txt.tmp","literal.txt"); fprintf(stderr,"[LIT] literal.txt written\n"); }
     }
     lap("pg MEM matching");
 
@@ -1966,20 +1488,14 @@ int main(int argc,char** argv){
             psrc=(int64_t)r.src;
             prev=(uint64_t)r.dst+r.len;
         }
-        // mem_srcdelta: diagnostic only, dropped
-        // STAGE 100 REWRITE: added is_rc (uint8, 4th field) -- previously
-        // absent entirely, meaning a decoder had no way to know an RC-
-        // discovered match needed reverse-complementing before copying.
-        // allrefs here is the CLEAN, non-overlapping, trim-on-overlap
-        // result (see above) -- exactly the runs literal.txt's marks
-        // correspond to, one triple per mark, in the same dst order.
-        { FILE* t=STR.mem_triples.f;
-          for(const Ref& r:allrefs){
-              fwrite(&r.dst,4,1,t); fwrite(&r.src,4,1,t); fwrite(&r.len,4,1,t);
-              const uint8_t rc=(uint8_t)r.is_rc; fwrite(&rc,1,1,t);
-          }
-          STR.mem_triples.close(); }
-        // mem_gaps/mem_srcs/mem_lens: diagnostics only, dropped
+        { FILE* g=fopen("mem_srcdelta.bin","wb"); fwrite(srcd.data(),1,srcd.size(),g); fclose(g); }
+        { FILE* t=fopen("mem_triples.bin","wb");
+          for(const Ref& r:allrefs){ fwrite(&r.dst,4,1,t); fwrite(&r.src,4,1,t); fwrite(&r.len,4,1,t); }
+          fclose(t); }
+        FILE* f;
+        f=fopen("mem_gaps.bin","wb"); fwrite(gaps.data(),1,gaps.size(),f); fclose(f);
+        f=fopen("mem_srcs.bin","wb"); fwrite(srcs.data(),1,srcs.size(),f); fclose(f);
+        f=fopen("mem_lens.bin","wb"); fwrite(lens.data(),1,lens.size(),f); fclose(f);
         fprintf(stderr,"[REF] matches=%zu  raw gaps=%zu srcs=%zu lens=%zu  total_raw=%zu\n",
                 allrefs.size(),gaps.size(),srcs.size(),lens.size(),
                 gaps.size()+srcs.size()+lens.size());
@@ -1994,187 +1510,5 @@ int main(int argc,char** argv){
     }
     printf("PG_LEN %zu\n",pg.size());
     printf("PG_LITERAL %zu\n",lit_main+lit_second);
-
-    // ================= COMPRESS-AND-RELEASE, SINGLE ARCHIVE =================
-    // Each stream is coded in-process and its raw buffer freed IMMEDIATELY
-    // afterwards, so peak RAM tracks the largest live stream instead of the
-    // sum of all of them -- PgRC2's disposeReadsList/clear discipline
-    // (pgrc-encoder.cpp:157-226), which our multi-process design achieved only
-    // by paying 361 MB of disk I/O per 456 MB of input.
-    {
-        const char* apath = getenv("ARCHIVE") ? getenv("ARCHIVE") : "out.arcs2";
-        Archive ar(apath);
-        auto __t0 = std::chrono::steady_clock::now();
-        auto CODED = [&](const char* nm){
-            auto n = std::chrono::steady_clock::now();
-            fprintf(stderr,"  [codetime] %-14s %6.2f s\n", nm,
-                    std::chrono::duration<double>(n-__t0).count());
-            __t0 = n;
-        };
-        const size_t rss_before = rss_mb();
-        // VERIFY_DUMP: also write the RAW (pre-coding) streams to files purely
-        // so decode_105.py can prove the in-memory pipeline produces exactly
-        // the bytes the file-based one did. Off by default -- the shipping
-        // path never touches disk.
-        const bool VDUMP = getenv("VERIFY_DUMP") && atoi(getenv("VERIFY_DUMP"));
-        auto vdump=[&](const char* fn, const MemStream& m){
-            if(!VDUMP) return;
-            // open_memstream only publishes buf/len on flush. Without this the
-            // still-buffered streams (mm_*, orig2uid) dumped as 0 bytes and the
-            // decoder silently verified against empty input.
-            if(m.f) fflush(m.f);
-            FILE* g=fopen(fn,"wb"); if(!g) return;
-            if(m.len) fwrite(m.buf,1,m.len,g);
-            fclose(g);
-        };
-        vdump("literal.txt",STR.literal);       vdump("mem_triples.bin",STR.mem_triples);
-        vdump("pos_abs.bin",STR.pos_abs);       vdump("pos_strand.bin",STR.pos_strand);
-        vdump("mm_ref.bin",STR.mm_ref);         vdump("mm_obs.bin",STR.mm_obs);
-        vdump("mm_pos.bin",STR.mm_pos);         vdump("mm_count_per_read.bin",STR.mm_count);
-        vdump("n_pos.bin",STR.n_pos);           vdump("n_indices.bin",STR.n_indices);
-        vdump("n_cnt.bin",STR.n_cnt);           vdump("read_lengths.bin",STR.read_lengths);
-        vdump("orig2uid.bin",STR.orig2uid);
-
-        // ---------------- PARALLEL STREAM CODING ----------------
-        // The streams are independent, so coding them concurrently is
-        // embarrassingly parallel and changes no bytes. Measured before this:
-        // coding was 4.88 s of a 13.9 s run at ~100% CPU (fully serial) while
-        // PgRC2 ran the whole compressor at 515%. RSS is flat across the
-        // coding phase (195 MB before and after), i.e. every raw buffer is
-        // already live before coding begins, so running them together does not
-        // raise peak memory.
-        //
-        // Results are collected into a fixed-order slot table and written to
-        // the archive in that order, so the output is byte-for-byte identical
-        // and independent of thread scheduling.
-        struct Job { const char* name; std::function<std::vector<uint8_t>()> fn; };
-        std::vector<Job> jobs;
-        std::vector<std::vector<uint8_t>> results;
-
-        // mm_count must be decoded first: its values drive the mm_pos
-        // bucketing. Do that one inline, then queue everything else.
-        std::vector<uint16_t> mmcounts;
-        std::vector<uint8_t> mmcnt_flags, mmcnt_vals, mmcnt_flat;
-        bool mmcnt_is_split = false;
-        {
-            auto v = STR.mm_count.bytes();
-            mmcounts.resize(v.size()/2);
-            if(!mmcounts.empty()) memcpy(mmcounts.data(), v.data(), mmcounts.size()*2);
-            STR.mm_count.release();
-            mmcnt_flat = std::move(v);
-        }
-
-        // literal: symbol-pack now (cheap, frees the big raw buffer), code later
-        std::vector<uint8_t> litsym;
-        {
-            litsym.reserve(STR.literal.len);
-            for(size_t i=0;i<STR.literal.len;++i){
-                switch((uint8_t)STR.literal.buf[i]){
-                    case 'A': litsym.push_back(0); break; case 'C': litsym.push_back(1); break;
-                    case 'G': litsym.push_back(2); break; case 'T': litsym.push_back(3); break; }
-            }
-            STR.literal.release();
-        }
-        auto v_tri  = STR.mem_triples.bytes(); STR.mem_triples.release();
-        auto v_pos  = STR.pos_abs.bytes();     STR.pos_abs.release();
-        auto v_str  = STR.pos_strand.bytes();  STR.pos_strand.release();
-        auto v_mr   = STR.mm_ref.bytes();      STR.mm_ref.release();
-        auto v_mo   = STR.mm_obs.bytes();      STR.mm_obs.release();
-        auto v_mp   = STR.mm_pos.bytes();      STR.mm_pos.release();
-        auto v_np   = STR.n_pos.bytes();       STR.n_pos.release();
-        auto v_ni   = STR.n_indices.bytes();   STR.n_indices.release();
-        auto v_nc   = STR.n_cnt.bytes();       STR.n_cnt.release();
-        auto v_rl   = STR.read_lengths.bytes();STR.read_lengths.release();
-        auto v_o2u  = STR.orig2uid.bytes();    STR.orig2uid.release();
-
-        const uint64_t PGLEN_ = pg.size(), MAINEND_ = main_pg_end;
-        // seqpar is itself threaded; give it fewer threads so it does not
-        // oversubscribe against the other jobs running alongside it.
-        unsigned HW = std::thread::hardware_concurrency(); if(!HW) HW = 12;
-        // seqpar splits the literal into NCHUNKS coded independently, so the chunk
-        // count is a COMPRESSION parameter, not just a threading one -- fewer
-        // chunks means more context per chunk. Measured on E. coli literal:
-        // 12 chunks 1,809,073 B; 4 chunks 1,804,223; 1 chunk 1,801,710. Four is
-        // the knee: within 2.5 KB of the single-chunk optimum while still
-        // parallel, and it also gained 15,862 B on P. aeruginosa.
-        const unsigned SEQT = getenv("SEQT") ? (unsigned)atoi(getenv("SEQT")) : 4;
-
-        jobs.push_back({"literal",     [&]{ return seq_encode_mem(litsym, SEQT, SEQT); }});
-        jobs.push_back({"mem_triples", [&]{ return refc::encode(v_tri, PGLEN_, MAINEND_); }});
-        jobs.push_back({"pos_abs",     [&]{ return best_encode(v_pos.data(), v_pos.size(), true); }});
-        jobs.push_back({"pos_strand",  [&]{ return best_encode(v_str.data(), v_str.size(), false); }});
-        jobs.push_back({"mm_sym",      [&]{ return mmc::encode(v_mr, v_mo); }});
-        jobs.push_back({"mm_pos",      [&]{
-            auto flat = best_encode(v_mp.data(), v_mp.size());
-            auto buck = mmpos_encode_buckets(v_mp, mmcounts);
-            return (!buck.empty() && buck.size() < flat.size()) ? buck : flat; }});
-        jobs.push_back({"mm_cnt",      [&]{
-            std::vector<uint8_t> cf, cv;
-            if(mmcnt_split(mmcounts, cf, cv) && mmcnt_join(cf,cv,mmcounts.size())==mmcounts){
-                auto a = best_encode(cf.data(), cf.size());
-                auto b = best_encode(cv.data(), cv.size());
-                auto flat = best_encode(mmcnt_flat.data(), mmcnt_flat.size());
-                if(a.size()+b.size() < flat.size()){
-                    mmcnt_is_split = true;
-                    mmcnt_flags = std::move(a); mmcnt_vals = std::move(b);
-                    return std::vector<uint8_t>{};
-                }
-                return flat;
-            }
-            return best_encode(mmcnt_flat.data(), mmcnt_flat.size()); }});
-        jobs.push_back({"n_pos",       [&]{ return best_encode(v_np.data(), v_np.size()); }});
-        jobs.push_back({"n_indices",   [&]{ return best_encode(v_ni.data(), v_ni.size(), true); }});
-        jobs.push_back({"n_cnt",       [&]{ return best_encode(v_nc.data(), v_nc.size()); }});
-        jobs.push_back({"read_lengths",[&]{ return best_encode(v_rl.data(), v_rl.size()); }});
-        jobs.push_back({"orig2uid",    [&]{ return best_encode(v_o2u.data(), v_o2u.size(), true); }});
-
-        results.resize(jobs.size());
-        {
-            std::atomic<size_t> next{0};
-            unsigned NT = HW; if(NT > jobs.size()) NT = (unsigned)jobs.size();
-            std::vector<double> jsec(jobs.size(),0.0);
-            auto POOL0 = std::chrono::steady_clock::now();
-            std::vector<std::thread> pool;
-            for(unsigned t=0;t<NT;++t) pool.emplace_back([&]{
-                for(;;){ size_t i = next++; if(i >= jobs.size()) break;
-                         auto a=std::chrono::steady_clock::now();
-                         results[i] = jobs[i].fn();
-                         jsec[i]=std::chrono::duration<double>(
-                                    std::chrono::steady_clock::now()-a).count(); }
-            });
-            for(auto& th : pool) th.join();
-            double pool_wall=std::chrono::duration<double>(
-                                std::chrono::steady_clock::now()-POOL0).count();
-            double sum=0,mx=0; const char* mxn="";
-            for(size_t i=0;i<jobs.size();++i){ sum+=jsec[i];
-                if(jsec[i]>mx){ mx=jsec[i]; mxn=jobs[i].name; } }
-            std::vector<size_t> ord(jobs.size());
-            for(size_t i=0;i<ord.size();++i) ord[i]=i;
-            std::sort(ord.begin(),ord.end(),
-                      [&](size_t a,size_t b){ return jsec[a]>jsec[b]; });
-            for(size_t k=0;k<ord.size();++k)
-                fprintf(stderr,"  [job] %-14s %6.2f s\n",
-                        jobs[ord[k]].name, jsec[ord[k]]);
-            // wall cannot fall below the longest single job; that ratio is the
-            // ceiling on any further threading of this phase.
-            fprintf(stderr,"  [pool] wall %.2f s  cpu-sum %.2f s  longest=%s %.2f s"
-                           "  speedup %.2fx  amdahl-floor %.2f s\n",
-                    pool_wall,sum,mxn,mx,sum/(pool_wall>0?pool_wall:1),mx);
-        }
-        // Write in fixed job order -- deterministic regardless of scheduling.
-        for(size_t i=0;i<jobs.size();++i){
-            if(std::string(jobs[i].name) == "mm_cnt" && mmcnt_is_split){
-                ar.put("mm_cnt_flags", mmcnt_flags);
-                ar.put("mm_cnt_vals",  mmcnt_vals);
-            } else {
-                ar.put(jobs[i].name, results[i]);
-            }
-        }
-
-        ar.finish();
-        lap("stream coding");
-        fprintf(stderr,"[archive] rss before coding %zu MB, after %zu MB, peak %zu MB\n",
-                rss_before,rss_mb(),hwm_mb());
-    }
     return 0;
 }

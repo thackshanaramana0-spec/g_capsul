@@ -1,0 +1,8 @@
+ecoli IDENTICAL  9.87s rss=432MB
+paeru IDENTICAL  8.82s rss=457MB
+halo IDENTICAL  2.86s rss=199MB
+sulfo IDENTICAL  4.88s rss=294MB
+pfalc IDENTICAL  30.43s rss=606MB
+saureus IDENTICAL  24.18s rss=1170MB
+lmajor IDENTICAL  49.75s rss=1377MB
+GATE_DONE
