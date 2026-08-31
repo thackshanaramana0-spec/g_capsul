@@ -763,6 +763,21 @@ int main(int argc,char** argv){
         while(nxt[cur]!=NONE){ uint32_t o=ovl[cur]; cur=nxt[cur];
                                ppos[cur]=pg.size()-o; rappend(pg,cur,o); }
     }
+    if(getenv("DBG_OVL")){
+        // Overlap-length histogram over committed links, as a FRACTION of read
+        // length -- the quantity that decides how many new bases each link adds.
+        size_t nb[11]={0}; size_t tot=0; double sumfrac=0;
+        for(uint32_t i=0;i<n;++i){
+            if(nxt[i]==NONE) continue;
+            const double f=(double)ovl[i]/(double)rlen[i];
+            int b=(int)(f*10); if(b>10)b=10; if(b<0)b=0;
+            ++nb[b]; ++tot; sumfrac+=f;
+        }
+        fprintf(stderr,"[ovl] links=%zu mean_overlap_frac=%.3f\n",tot,tot?sumfrac/tot:0.0);
+        for(int b=0;b<10;++b)
+            fprintf(stderr,"[ovl]   %2d-%3d%% of readlen : %8zu links (%5.2f%%)  each adds ~%.0f bases\n",
+                    b*10,(b+1)*10,nb[b],tot?100.0*nb[b]/tot:0.0,(1.0-(b*10+5)/100.0)*Lmax);
+    }
     fprintf(stderr,"links=%zu chains(multi)=%u leftovers=%zu pg after chains=%zu\n",
             links,multi,leftovers.size(),pg.size());
     lap("emit chains");
