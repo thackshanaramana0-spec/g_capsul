@@ -403,14 +403,22 @@ static std::vector<uint8_t> encode_method(const uint8_t* d, size_t n, int m){
 // encodes the full stream ONCE. Running all candidates at full length was
 // costing 10.0 s of an 18.7 s run, 6.69 s of it on pos_abs alone.
 static const size_t PROBE_MIN   = 1u<<16;   // 64 KB, their DEFAULT_MIN_PROBE_SIZE
-static const double PROBE_FRAC  = 0.20;     // their probeFraction
+static double probe_frac(){
+    const char* e = getenv("PROBE_FRAC");
+    // PgRC2 uses 0.20. Measured on real files: 0.20 costs E. coli +50,149 B
+    // (+0.63%) because a coder that wins on a 20% sample is not always the
+    // winner on the full stream, while 0.40 recovers all but 60 B of full
+    // selection at no measurable time cost, and makes no difference at all on
+    // P. aeruginosa. Raised to 0.40 on that evidence.
+    return e ? atof(e) : 0.40;
+}
 
 static std::vector<uint8_t> best_encode(const uint8_t* d, size_t n, bool u32shaped=false){
     if(!n) return {};
     std::vector<int> methods = {0,1,2,3,4};
     if(u32shaped && n>=4 && n%4==0){ methods.push_back(5); methods.push_back(6); }
 
-    size_t probe = (size_t)(n*PROBE_FRAC);
+    size_t probe = (size_t)(n*probe_frac());
     if(probe < PROBE_MIN) probe = PROBE_MIN;
     if(probe > n) probe = n;
     if(u32shaped) probe &= ~(size_t)3;          // keep the 4-byte stride intact

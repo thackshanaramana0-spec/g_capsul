@@ -108,11 +108,13 @@ print(f"[decode] pg reconstructed: {len(pg)} bytes, {n_triples} clean refs, lite
 positions = read_u32(f'{WORK}/pos_abs.bin')
 lengths = read_u16(f'{WORK}/read_lengths.bin')
 n_unique_pos = len(positions)
-assert len(lengths) == n_unique_pos
+# read_lengths is now indexed by ORIGINAL read, not by unique id: containment
+# aliasing folds a shorter read into a longer container, so a contained read
+# must keep its own length rather than inherit the container's.
 strands = read_bits(f'{WORK}/pos_strand.bin', n_unique_pos)
 # Encoder uses reverse-offset mismatch positions iff Lmax <= 256; recover that
 # decision from the lengths themselves rather than storing a flag.
-MM_DELTA = (max(lengths) <= 256) if lengths else False
+MM_DELTA = (max(lengths) <= 256) if len(lengths) else False
 
 # ---- orig2uid.bin: original -> unique-id, delta-coded ----
 # delta=0 means "first occurrence" (id = running counter, counter++);
@@ -146,7 +148,7 @@ assert mm_offset[n_unique] == len(mm_ref) == len(mm_obs)
 out_seqs = [None]*n_orig
 for o in range(n_orig):
     u = orig2uid[o]
-    p, L, s = positions[u], lengths[u], strands[u]
+    p, L, s = positions[u], lengths[o], strands[u]
     slice_ = pg[p:p+L]
     seq = list(revcomp(slice_)) if s else list(slice_)
     cnt = mmcount[u] if u < n_unique else 0
@@ -165,6 +167,8 @@ for o in range(n_orig):
                 prevj = j
             elif j == 255:
                 continue  # capped position, disclosed limitation for reads >255bp
+            if j >= L:
+                continue  # container mismatch beyond this (contained, shorter) read
             seq[j] = obsc if not s else COMP[obsc]
     out_seqs[o] = ''.join(seq)
 

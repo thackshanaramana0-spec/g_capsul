@@ -79,6 +79,7 @@ static inline bool pack(const char* p,uint64_t& out){
 // Output is one archive; no intermediates ever touch disk.
 #include <unordered_set>
 #include <fstream>
+#include <functional>
 #include "coders_inproc.h"
 #include "seqpar_core.h"
 
@@ -206,6 +207,7 @@ int main(int argc,char** argv){
     // need, for every ORIGINAL read, where its sequence sits in the pg. Dedup
     // collapses duplicates, so the original->unique map has to be kept too.
     std::vector<uint32_t> orig2uid;       // original read (N-filtered out) -> unique id
+    std::vector<uint16_t> origlen;        // TRUE length of each ORIGINAL read (see containment note)
     size_t n_in=0,n_filt=0;
     // ADAPTIVE DEDUP, keyed on a MEASURED property of the input.
     // Pre-assembly dedup collapses duplicate reads so position/length/strand/
@@ -347,6 +349,15 @@ int main(int argc,char** argv){
             }
         }
         rpk.shrink_to_fit(); woff.shrink_to_fit(); rlen.shrink_to_fit();
+        // INVARIANT: read_lengths is indexed by ORIGINAL read, always.
+        // It used to be indexed by unique id, which silently breaks whenever a
+        // read's uid is later rewritten -- containment aliasing folds a shorter
+        // read into a longer container (rlen[a] < rlen[b]), so the contained
+        // read would inherit the container's length and decode too long.
+        // Populated here, at load, so the invariant holds on every path rather
+        // than only when the containment block happens to run.
+        origlen.resize(orig2uid.size());
+        for(size_t i=0;i<orig2uid.size();++i) origlen[i]=rlen[orig2uid[i]];
     }
     STR.n_pos.close(); STR.n_indices.close(); STR.n_cnt.close();
     const uint32_t n=(uint32_t)rlen.size();
@@ -439,6 +450,16 @@ int main(int argc,char** argv){
             while(t!=UINT32_MAX && contained[t] && ++guard<64) t=alias[t];
             alias[i]=t;
         }
+        // CORRECTNESS: containment folds a SHORTER read into a longer one
+        // (the condition above requires rlen[a] < rlen[b]). read_lengths was
+        // indexed by unique id, so after aliasing a contained read inherited
+        // its CONTAINER's length and decoded one or more bases too long. Every
+        // regression dataset is fixed-length, so this never fired there; it
+        // corrupted 27.6% of reads on the first variable-length file tested
+        // (SARS-CoV-2 amplicon). Capture each ORIGINAL read's true length here,
+        // before aliasing, and store lengths per original read instead.
+        // origlen was captured at load time, before any aliasing, so the
+        // rewrite below cannot corrupt it.
         for(uint32_t& u:orig2uid) if(u<n && contained[u] && alias[u]!=UINT32_MAX) u=alias[u];
         if(n_contained)
             fprintf(stderr,"contained reads folded into their container: %zu\n",n_contained);
@@ -844,11 +865,30 @@ int main(int argc,char** argv){
         // wash (+0.04% worse than a fixed 12). Minimax regret picks 12: worst
         // case 0.54% versus 20's 1.24%. So 12 stays, now justified on real
         // full files rather than the subsamples it was first derived from.
-        // The true optimum is dataset-dependent across 12..27 with about a 1%
-        // spread; a formula keyed on a measured property could capture it, but
-        // no such property has been identified, and a per-dataset switch is
-        // forbidden by the standing algorithmic-first rule.
-        const uint32_t MAXMAP=(uint32_t)(getenv("MAXMAP")?atoi(getenv("MAXMAP")):12);
+        // The property was identified: READ LENGTH. Every dataset the constant
+        // was tuned on is 100-151 bp, a range over which a constant and a ratio
+        // are indistinguishable. PgRC2 has always used the ratio form --
+        // ReadsMatchers.cpp:700, `maxMismatches = readLength / minCharsPerMismatch`
+        // -- i.e. one mismatch permitted per N bases, not a fixed count.
+        //
+        // A fixed ceiling is wrong in both directions: at 251 bp it is 4.8%
+        // tolerance where 151 bp gets 8%, so long reads are under-mapped and
+        // spill into the pg as literal; at short read lengths it would be too
+        // permissive. Expressed as a ratio it is scale-free.
+        //
+        // The divisor comes from our own measured economics, not from theirs:
+        // a mismatch costs ~0.88 B (position+count+symbol) against ~0.229 B for
+        // a pg-literal base, so the break-even is ~0.26*L. The tuned optimum of
+        // 12 at L=151 is L/12.6; L/13 reproduces it (11.6 at 151, 7.7 at 100,
+        // 19.3 at 251) while scaling correctly, and stays well under the
+        // 0.26*L cost ceiling. MIN_MAXMAP floors it so very short reads still
+        // get a usable tolerance.
+        const uint32_t MAXMAP_DIV = (uint32_t)(getenv("MAXMAP_DIV")?atoi(getenv("MAXMAP_DIV")):13);
+        const uint32_t MIN_MAXMAP = 6;
+        uint32_t MAXMAP = Lmax / (MAXMAP_DIV ? MAXMAP_DIV : 13);
+        if(MAXMAP < MIN_MAXMAP) MAXMAP = MIN_MAXMAP;
+        if(getenv("MAXMAP")) MAXMAP = (uint32_t)atoi(getenv("MAXMAP"));   // override for sweeps
+        fprintf(stderr,"  [maxmap] Lmax=%u -> MAXMAP=%u (L/%u)\n", Lmax, MAXMAP, MAXMAP_DIV);
         // Sensitivity is SEEDW + SEEDSTRIDE - 1: the shortest exact read/pg
         // stretch guaranteed to be found. copMEM's K is 28 with k1*k2 = 10, so
         // theirs is 28+10-1 = 37 against our 32+8-1 = 39. A SHORTER seed with a
@@ -1316,7 +1356,13 @@ int main(int argc,char** argv){
             if(nb2) sd.push_back((uint8_t)(acc2<<(8-nb2)));
             // (pos_direct/pos_strand_direct were A/B diagnostics only -- dropped)
         }
-        { fwrite(lenarr.data(),2,lenarr.size(),STR.read_lengths.f); STR.read_lengths.close(); }
+        { // Always per ORIGINAL read -- one path, so encoder and decoder cannot
+          // disagree about the indexing. A fallback here was the bug: on files
+          // where containment never fired, origlen stayed empty and the encoder
+          // silently reverted to per-unique while the decoder still read
+          // per-original.
+          fwrite(origlen.data(),2,origlen.size(),STR.read_lengths.f);
+          STR.read_lengths.close(); }
         // orig2uid delta-coding: for a first-occurrence read, orig2uid[i] equals
         // the running "next new id" counter exactly (delta=0); only a duplicate's
         // back-reference deviates. Measured 96.1% zero-deltas on real data (low
@@ -1327,6 +1373,11 @@ int main(int argc,char** argv){
         // reversible, no ambiguity, verified on 4-file regression set + 1 new.
         {
             std::vector<int32_t> delta(orig2uid.size());
+            if(getenv("DBG_O2U")){
+                fprintf(stderr,"[dbg-o2u] size=%zu  first 32: ",orig2uid.size());
+                for(size_t i=0;i<32 && i<orig2uid.size();++i) fprintf(stderr,"%u ",orig2uid[i]);
+                fprintf(stderr,"\n");
+            }
             uint32_t exp=0;
             for(size_t i=0;i<orig2uid.size();++i){
                 uint32_t v=orig2uid[i];
@@ -1824,60 +1875,119 @@ int main(int argc,char** argv){
         vdump("n_cnt.bin",STR.n_cnt);           vdump("read_lengths.bin",STR.read_lengths);
         vdump("orig2uid.bin",STR.orig2uid);
 
-        // L1 sequence -- literal bases through the seqpar context model
+        // ---------------- PARALLEL STREAM CODING ----------------
+        // The streams are independent, so coding them concurrently is
+        // embarrassingly parallel and changes no bytes. Measured before this:
+        // coding was 4.88 s of a 13.9 s run at ~100% CPU (fully serial) while
+        // PgRC2 ran the whole compressor at 515%. RSS is flat across the
+        // coding phase (195 MB before and after), i.e. every raw buffer is
+        // already live before coding begins, so running them together does not
+        // raise peak memory.
+        //
+        // Results are collected into a fixed-order slot table and written to
+        // the archive in that order, so the output is byte-for-byte identical
+        // and independent of thread scheduling.
+        struct Job { const char* name; std::function<std::vector<uint8_t>()> fn; };
+        std::vector<Job> jobs;
+        std::vector<std::vector<uint8_t>> results;
+
+        // mm_count must be decoded first: its values drive the mm_pos
+        // bucketing. Do that one inline, then queue everything else.
+        std::vector<uint16_t> mmcounts;
+        std::vector<uint8_t> mmcnt_flags, mmcnt_vals, mmcnt_flat;
+        bool mmcnt_is_split = false;
         {
-            std::vector<uint8_t> sym; sym.reserve(STR.literal.len);
+            auto v = STR.mm_count.bytes();
+            mmcounts.resize(v.size()/2);
+            if(!mmcounts.empty()) memcpy(mmcounts.data(), v.data(), mmcounts.size()*2);
+            STR.mm_count.release();
+            mmcnt_flat = std::move(v);
+        }
+
+        // literal: symbol-pack now (cheap, frees the big raw buffer), code later
+        std::vector<uint8_t> litsym;
+        {
+            litsym.reserve(STR.literal.len);
             for(size_t i=0;i<STR.literal.len;++i){
                 switch((uint8_t)STR.literal.buf[i]){
-                    case 'A': sym.push_back(0); break; case 'C': sym.push_back(1); break;
-                    case 'G': sym.push_back(2); break; case 'T': sym.push_back(3); break; }
+                    case 'A': litsym.push_back(0); break; case 'C': litsym.push_back(1); break;
+                    case 'G': litsym.push_back(2); break; case 'T': litsym.push_back(3); break; }
             }
-            STR.literal.release();                       // raw literal gone before coding peaks
-            unsigned T=std::thread::hardware_concurrency(); if(!T) T=12;
-            ar.put("literal", seq_encode_mem(sym,T,T)); CODED("literal");
+            STR.literal.release();
         }
-        // L3 MEM references
-        { auto v=STR.mem_triples.bytes(); STR.mem_triples.release();
-          ar.put("mem_triples", refc::encode(v,pg.size(),main_pg_end)); CODED("mem_triples"); }
-        // L4 position + strand
-        { auto v=STR.pos_abs.bytes();      STR.pos_abs.release();      ar.put("pos_abs", best_encode(v.data(),v.size(),true)); CODED("pos_abs"); }
-        { auto v=STR.pos_strand.bytes();   STR.pos_strand.release();   ar.put("pos_strand",  best_encode(v.data(),v.size(),false)); CODED("pos_strand"); }
-        // L5 mismatch symbols / positions / counts
-        { auto r=STR.mm_ref.bytes(), o=STR.mm_obs.bytes();
-          STR.mm_ref.release(); STR.mm_obs.release();
-          ar.put("mm_sym", mmc::encode(r,o)); CODED("mm_sym"); }
-        // mm_count first: its values drive the mm_pos bucketing, and the
-        // decoder gets it the same way.
-        std::vector<uint16_t> mmcounts;
-        { auto v=STR.mm_count.bytes();
-          mmcounts.resize(v.size()/2);
-          if(!mmcounts.empty()) memcpy(mmcounts.data(), v.data(), mmcounts.size()*2);
-          STR.mm_count.release();
-          std::vector<uint8_t> cf, cv;
-          if(mmcnt_split(mmcounts, cf, cv) && mmcnt_join(cf,cv,mmcounts.size())==mmcounts){
-              auto a=best_encode(cf.data(),cf.size()), b=best_encode(cv.data(),cv.size());
-              const size_t flat=xz_compress(v.data(),v.size()).size();
-              if(a.size()+b.size() < flat){
-                  fprintf(stderr,"[mm_cnt] zero-flag split %zu vs flat %zu (%+.1f%%)\n",
-                          a.size()+b.size(), flat, 100.0*((double)(a.size()+b.size())-flat)/(flat?flat:1));
-                  ar.put("mm_cnt_flags", a); ar.put("mm_cnt_vals", b); CODED("mm_cnt");
-              } else ar.put("mm_count", best_encode(v.data(),v.size()));
-          } else ar.put("mm_count", best_encode(v.data(),v.size())); }
-        { auto v=STR.mm_pos.bytes();       STR.mm_pos.release();
-          auto flat = best_encode(v.data(),v.size());
-          auto buck = mmpos_encode_buckets(v, mmcounts);
-          if(!buck.empty() && buck.size()<flat.size()){
-              fprintf(stderr,"[mm_pos] per-bucket real coders %zu vs flat %zu (%+.1f%%)\n",
-                      buck.size(), flat.size(), 100.0*((double)buck.size()-flat.size())/flat.size());
-              ar.put("mm_pos", buck); CODED("mm_pos");
-          } else ar.put("mm_pos", flat); }
-        // L6 N restoration
-        { auto v=STR.n_pos.bytes();        STR.n_pos.release();        ar.put("n_pos", best_encode(v.data(),v.size(),false)); CODED("n_pos"); }
-        { auto v=STR.n_indices.bytes();    STR.n_indices.release();    ar.put("n_indices",   best_encode(v.data(),v.size(),true)); CODED("n_indices"); }
-        { auto v=STR.n_cnt.bytes();        STR.n_cnt.release();        ar.put("n_cnt", best_encode(v.data(),v.size(),false)); CODED("n_cnt"); }
-        // L7 lengths, L8 orig2uid
-        { auto v=STR.read_lengths.bytes(); STR.read_lengths.release(); ar.put("read_lengths",best_encode(v.data(),v.size(),false)); CODED("read_lengths"); }
-        { auto v=STR.orig2uid.bytes();     STR.orig2uid.release();     ar.put("orig2uid", best_encode(v.data(),v.size(),true)); CODED("orig2uid"); }
+        auto v_tri  = STR.mem_triples.bytes(); STR.mem_triples.release();
+        auto v_pos  = STR.pos_abs.bytes();     STR.pos_abs.release();
+        auto v_str  = STR.pos_strand.bytes();  STR.pos_strand.release();
+        auto v_mr   = STR.mm_ref.bytes();      STR.mm_ref.release();
+        auto v_mo   = STR.mm_obs.bytes();      STR.mm_obs.release();
+        auto v_mp   = STR.mm_pos.bytes();      STR.mm_pos.release();
+        auto v_np   = STR.n_pos.bytes();       STR.n_pos.release();
+        auto v_ni   = STR.n_indices.bytes();   STR.n_indices.release();
+        auto v_nc   = STR.n_cnt.bytes();       STR.n_cnt.release();
+        auto v_rl   = STR.read_lengths.bytes();STR.read_lengths.release();
+        auto v_o2u  = STR.orig2uid.bytes();    STR.orig2uid.release();
+
+        const uint64_t PGLEN_ = pg.size(), MAINEND_ = main_pg_end;
+        // seqpar is itself threaded; give it fewer threads so it does not
+        // oversubscribe against the other jobs running alongside it.
+        unsigned HW = std::thread::hardware_concurrency(); if(!HW) HW = 12;
+        // seqpar splits the literal into NCHUNKS coded independently, so the chunk
+        // count is a COMPRESSION parameter, not just a threading one -- fewer
+        // chunks means more context per chunk. Measured on E. coli literal:
+        // 12 chunks 1,809,073 B; 4 chunks 1,804,223; 1 chunk 1,801,710. Four is
+        // the knee: within 2.5 KB of the single-chunk optimum while still
+        // parallel, and it also gained 15,862 B on P. aeruginosa.
+        const unsigned SEQT = getenv("SEQT") ? (unsigned)atoi(getenv("SEQT")) : 4;
+
+        jobs.push_back({"literal",     [&]{ return seq_encode_mem(litsym, SEQT, SEQT); }});
+        jobs.push_back({"mem_triples", [&]{ return refc::encode(v_tri, PGLEN_, MAINEND_); }});
+        jobs.push_back({"pos_abs",     [&]{ return best_encode(v_pos.data(), v_pos.size(), true); }});
+        jobs.push_back({"pos_strand",  [&]{ return best_encode(v_str.data(), v_str.size(), false); }});
+        jobs.push_back({"mm_sym",      [&]{ return mmc::encode(v_mr, v_mo); }});
+        jobs.push_back({"mm_pos",      [&]{
+            auto flat = best_encode(v_mp.data(), v_mp.size());
+            auto buck = mmpos_encode_buckets(v_mp, mmcounts);
+            return (!buck.empty() && buck.size() < flat.size()) ? buck : flat; }});
+        jobs.push_back({"mm_cnt",      [&]{
+            std::vector<uint8_t> cf, cv;
+            if(mmcnt_split(mmcounts, cf, cv) && mmcnt_join(cf,cv,mmcounts.size())==mmcounts){
+                auto a = best_encode(cf.data(), cf.size());
+                auto b = best_encode(cv.data(), cv.size());
+                auto flat = best_encode(mmcnt_flat.data(), mmcnt_flat.size());
+                if(a.size()+b.size() < flat.size()){
+                    mmcnt_is_split = true;
+                    mmcnt_flags = std::move(a); mmcnt_vals = std::move(b);
+                    return std::vector<uint8_t>{};
+                }
+                return flat;
+            }
+            return best_encode(mmcnt_flat.data(), mmcnt_flat.size()); }});
+        jobs.push_back({"n_pos",       [&]{ return best_encode(v_np.data(), v_np.size()); }});
+        jobs.push_back({"n_indices",   [&]{ return best_encode(v_ni.data(), v_ni.size(), true); }});
+        jobs.push_back({"n_cnt",       [&]{ return best_encode(v_nc.data(), v_nc.size()); }});
+        jobs.push_back({"read_lengths",[&]{ return best_encode(v_rl.data(), v_rl.size()); }});
+        jobs.push_back({"orig2uid",    [&]{ return best_encode(v_o2u.data(), v_o2u.size(), true); }});
+
+        results.resize(jobs.size());
+        {
+            std::atomic<size_t> next{0};
+            unsigned NT = HW; if(NT > jobs.size()) NT = (unsigned)jobs.size();
+            std::vector<std::thread> pool;
+            for(unsigned t=0;t<NT;++t) pool.emplace_back([&]{
+                for(;;){ size_t i = next++; if(i >= jobs.size()) break;
+                         results[i] = jobs[i].fn(); }
+            });
+            for(auto& th : pool) th.join();
+        }
+        // Write in fixed job order -- deterministic regardless of scheduling.
+        for(size_t i=0;i<jobs.size();++i){
+            if(std::string(jobs[i].name) == "mm_cnt" && mmcnt_is_split){
+                ar.put("mm_cnt_flags", mmcnt_flags);
+                ar.put("mm_cnt_vals",  mmcnt_vals);
+            } else {
+                ar.put(jobs[i].name, results[i]);
+            }
+        }
 
         ar.finish();
         fprintf(stderr,"[archive] rss before coding %zu MB, after %zu MB\n",rss_before,rss_mb());
