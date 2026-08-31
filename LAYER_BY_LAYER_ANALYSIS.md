@@ -1488,3 +1488,78 @@ and our coder rate is 1.9069 vs 1.8722 b/base (sulfo, 1.9% behind) and
 The single unambiguous, dataset-independent finding is therefore **surviving
 pg volume**, not span. §3w overstated the span ratio and generalised a
 sulfo-only effect to both files. Corrected here rather than left standing.
+
+## 3y. File-wise, layer-wise, at each file's CHOSEN config — where we lose
+
+Measured at the config the adaptive driver actually selects for each file, so
+this describes the shipped behaviour, not a sweep point.
+
+| layer | sulfo (LOSE) | halo (WIN) | paeru (WIN) |
+|---|---|---|---|
+| literal | **+8,998** | **+80,592** | **+119,943** |
+| **mem_triples** | **+82,172** | **+451,963** | **+93,090** |
+| pos_abs | +61,515 | −22,049 | +18,453 |
+| pos_strand | +5,432 | −1,115 | −13,456 |
+| mm_sym | −84,253 | −459,801 | −149,431 |
+| mm_pos | +7,991 | −387,023 | −119,073 |
+| mm_cnt | −4,345 | −93,965 | −37,435 |
+| **NET** | **+78,705** | **−431,069** | **−73,026** |
+
+### The two structural losses are present on EVERY file
+
+`literal` and `mem_triples` lose on all three, win or lose overall. The
+mismatch layers are what carry us. **Whether a file is a win is decided
+entirely by whether the mismatch advantage exceeds that fixed deficit.**
+
+sulfo loses for exactly one reason: at its chosen (high) ceiling its `mm_pos`
+advantage collapses to +7,991 instead of the −100K..−390K seen elsewhere, so
+there is nothing left to cover the deficit.
+
+### literal + mem_triples is a closed tradeoff, and it has a floor
+
+Sweeping MINMEM on sulfo moves cost between the two but never reduces the sum:
+
+| MINMEM | mem_triples | literal | sum |
+|---|---|---|---|
+| 24 | 98,616 | 604,832 | **703,448** |
+| 45 | 80,712 | 652,597 | 733,309 |
+| 64 | 68,067 | 709,006 | 777,073 |
+| PgRC2 | 16,444 | 595,834 | **612,278** |
+
+Our best combined is 703,448 against their 612,278 -- an **irreducible +91,170
+at the current architecture**, which alone exceeds sulfo's entire 78,705 loss.
+
+Across files: sulfo +91,170, paeru +213,033, halo +532,555. Always present,
+always large.
+
+### Why: they get BOTH a small literal and tiny references; we cannot
+
+Their 3-way split (hqPg/lqPg/nPg) assembles and self-matches each pg
+separately, so each is small and internally coherent and needs very few
+cross-references (16K-72K). We build one large pg plus an appended region and
+self-match the whole thing, needing 99K-473K of references to collapse it. No
+setting of MAXMAP, MINOV or MINMEM escapes this -- they only move cost between
+literal and mem_triples.
+
+### Third parameter found, same property as the other two
+
+MINMEM (our 24, theirs 45) is also dataset-dependent: halo optimum 45
+(2,618,332 -> **2,583,579**, −1.3%), sulfo optimum 24 (raising it costs 0.9%).
+A third search dimension would cost 8 encodes for roughly 0.5-1% aggregate --
+recorded, not adopted, because the cost/benefit is poor next to the runtime we
+already carry.
+
+### Current shipped result (2D adaptive, 7 real files, all byte-identical)
+
+| dataset | ours | PgRC2 | margin | chosen |
+|---|---|---|---|---|
+| E. coli | 7,965,683 | 8,864,420 | **+10.14%** | MAXMAP=11 MINOV=16 |
+| P. aeruginosa | 8,969,147 | 9,043,181 | **+0.82%** | MAXMAP=20 MINOV=16 |
+| S. aureus | 13,241,852 | 13,595,003 | **+2.60%** | MAXMAP=29 MINOV=51 |
+| P. falciparum | 16,321,262 | 17,219,695 | **+5.22%** | MAXMAP=7 MINOV=16 |
+| L. major | 27,561,086 | 28,272,652 | **+2.52%** | MAXMAP=20 MINOV=16 |
+| H. salinarum | 2,618,332 | 3,050,477 | **+14.17%** | MAXMAP=11 MINOV=52 |
+| S. acidocaldarius | 3,192,790 | 3,114,782 | **−2.50%** | MAXMAP=50 MINOV=87 |
+
+**Aggregate +3.96%, 6 of 7 wins.** No two files choose the same config,
+which is the empirical statement of why no constant works.
