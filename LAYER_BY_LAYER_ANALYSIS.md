@@ -1432,3 +1432,59 @@ we differ by 5-7x.**
 - our reference coder (at the log2(pg_len) floor on both)
 - our mismatch coder or mismatch volume (we emit FEWER than they do on both
   files -- §3v)
+
+## 3x. SELF-CORRECTION of §3w: the span claim was wrong; re-verified
+
+Re-checked §3w against the source before building anything on it. Two claims
+do not survive.
+
+**ERROR FOUND.** §3w compared OUR pre-matching pg span against PgRC2's
+POST-matching `Final size of Pg`. That is invalid: `joinedPgLength` is
+computed at `pgrc-encoder.cpp:211`, in the stage BEFORE
+`SimplePgMatcher::matchPgsInPg` runs at line 240 -- so their positions index
+the PRE-matching pg, exactly as ours do. Their true span is
+hqPg + lqPg + nPg, i.e. "Target pseudogenome length" + "Destination
+pseudogenome length".
+
+| | our span | their TRUE span | ratio (was claimed) |
+|---|---|---|---|
+| sulfo | 13,391,739 | 5,263,413 | **2.54x** (claimed 5.3x) |
+| halo | 18,251,699 | 5,084,453 | **3.59x** (claimed 7.1x) |
+
+**Does the span model actually predict the pos_abs delta?**
+
+| | predicted extra | ACTUAL delta | verdict |
+|---|---|---|---|
+| sulfo | 87,051 B | +83,815 B | **matches within 4%** |
+| halo | 106,138 B | −22,525 B | **fails -- we WIN despite a wider span** |
+
+So span explains sulfo's pos_abs loss almost exactly, and does NOT explain
+halo at all. On halo our position coder runs 8.6% below the uniform-random
+floor versus 3.1% on sulfo, and that efficiency more than covers the wider
+span. **"pos_abs loses because our span is bigger" is true only on sulfo.**
+
+**The literal claim DOES survive.** Verified their sequence coder's raw input
+(2,546,069 / 2,554,328) equals exactly the sum of their post-matching pg
+pieces, and our literal.txt is likewise post-MEM-removal -- both sides
+apples-to-apples:
+
+| | our post-removal bases | their post-removal bases | excess |
+|---|---|---|---|
+| sulfo | 3,418,901 | 2,546,069 | +34.3% |
+| halo | 3,239,294 | 2,554,328 | +26.8% |
+
+and our coder rate is 1.9069 vs 1.8722 b/base (sulfo, 1.9% behind) and
+1.6444 vs 1.8148 (halo, we are 9.4% BETTER).
+
+### Corrected conclusion
+
+- **literal**: real, verified, holds on both files. We carry ~30% more
+  surviving bases; our coder is competitive-to-better. VOLUME is the problem.
+- **pos_abs**: span-driven on sulfo (predicted 87K vs actual 84K); NOT a
+  problem at all on halo, where we win by 22K. Not a general defect.
+- **mem_triples**: measured at 17.8-22.2 bits/match, at the log2 floor. Large
+  where matches are numerous, and those matches pay for themselves.
+
+The single unambiguous, dataset-independent finding is therefore **surviving
+pg volume**, not span. §3w overstated the span ratio and generalised a
+sulfo-only effect to both files. Corrected here rather than left standing.
