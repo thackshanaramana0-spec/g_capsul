@@ -90,6 +90,39 @@ static std::vector<uint8_t> xz_compress_lzma(const void* data, size_t n,
 // statistics -- the high plane is highly skewed and compresses hard, the low
 // planes are near-random. This beats stride-aligned lp tuning on real data
 // (P. aeruginosa pos_abs: 4,983,604 vs 5,021,990 vs 5,082,152 for xz default).
+// ── B1: do not spend coding effort on provably incompressible byte planes ──
+//
+// PgRC2 does not probe its position stream at all: getReadsPositionsCoderProps
+// returns one LZMA coder whose context stride is DERIVED from the width the
+// values need (SimplePgMatcher.cpp:233 picks DATAPERIOD 32 vs 64 from whether
+// the pg length is standard). The coder is a consequence of what the data is.
+//
+// Our positions are indices into a multi-megabyte pseudogenome, so their low
+// bytes are uniform noise by construction. Measured on pos_abs: planes 0 and 1
+// compress to ratio exactly 1.000 on every file -- they come out LARGER than
+// raw -- and they are half the stream. Shannon says a plane whose order-0
+// entropy is 8.00 bits/byte cannot be coded below its raw size, so the decision
+// needs no trial: compute the histogram once, in O(n), and store such planes
+// verbatim.
+//
+// This is conditional on the data, not a fixed rule: orig2uid's low planes have
+// entropy 2.36, and storing THOSE raw costs +2,141,527 B. The criterion selects
+// correctly in both cases.
+//
+// The guard: a plane can have H0 = 8 and still be compressible if it has
+// higher-order structure (a counter mod 256 is the textbook case). So a plane
+// that looks incompressible by entropy is confirmed on a bounded 64 KB prefix
+// -- PgRC2's own DEFAULT_MIN_PROBE_SIZE -- before we skip it. That is O(64 KB),
+// not O(n).
+static double plane_entropy(const uint8_t* p, size_t n){
+    if(!n) return 0.0;
+    size_t c[256]={0};
+    for(size_t i=0;i<n;++i) ++c[p[i]];
+    double h=0.0, inv=1.0/(double)n;
+    for(int k=0;k<256;++k) if(c[k]){ double q=c[k]*inv; h-=q*std::log2(q); }
+    return h;
+}
+
 static std::vector<uint8_t> u32_byteplanes(const uint8_t* d, size_t n){
     const size_t cnt=n/4;
     std::vector<uint8_t> out(cnt*4);
@@ -393,7 +426,43 @@ static std::vector<uint8_t> encode_method(const uint8_t* d, size_t n, int m){
         case 3: return pgc::fse_encode(d,n);
         case 4: return pgc::range_encode(d,n,1);
         case 5: { auto bp=u32_byteplanes(d,n); return xz_compress(bp.data(),bp.size()); }
-        case 6: { auto bp=u32_byteplanes(d,n); return xz_compress_lzma(bp.data(),bp.size(),0,0,0); }
+        case 6: {
+            // Byte planes coded together (one shared LZMA model), except that
+            // any plane the data proves incompressible is stored verbatim.
+            const size_t cnt=n/4; if(!cnt) return {};
+            auto bp=u32_byteplanes(d,n);
+            uint8_t rawmask=0;
+            for(int k=0;k<4;++k){
+                const uint8_t* pl=bp.data()+(size_t)k*cnt;
+                if(plane_entropy(pl,cnt) < 7.999) continue;      // codeable
+                // entropy says incompressible; confirm on a bounded prefix so a
+                // high-entropy-but-structured plane is never thrown away
+                const size_t PREF_CAP = 1u<<16;   // PgRC2 DEFAULT_MIN_PROBE_SIZE
+                const size_t pref = cnt < PREF_CAP ? cnt : PREF_CAP;
+                auto t = xz_compress_lzma(pl,pref,0,0,0);
+                if(!t.empty() && t.size() < pref) continue;      // it IS codeable
+                rawmask |= (uint8_t)(1u<<k);
+            }
+            if(!rawmask) {                                        // nothing to skip
+                auto c=xz_compress_lzma(bp.data(),bp.size(),0,0,0);
+                std::vector<uint8_t> o; o.reserve(c.size()+1);
+                o.push_back(0); o.insert(o.end(),c.begin(),c.end());
+                return o;
+            }
+            std::vector<uint8_t> keep; keep.reserve(bp.size());
+            for(int k=0;k<4;++k) if(!(rawmask&(1u<<k)))
+                keep.insert(keep.end(), bp.begin()+(size_t)k*cnt, bp.begin()+(size_t)(k+1)*cnt);
+            auto c = keep.empty() ? std::vector<uint8_t>() 
+                                  : xz_compress_lzma(keep.data(),keep.size(),0,0,0);
+            std::vector<uint8_t> o; o.reserve(bp.size()+16);
+            o.push_back(rawmask);
+            uint32_t cl=(uint32_t)c.size();
+            o.insert(o.end(),(uint8_t*)&cl,(uint8_t*)&cl+4);
+            o.insert(o.end(),c.begin(),c.end());
+            for(int k=0;k<4;++k) if(rawmask&(1u<<k))
+                o.insert(o.end(), bp.begin()+(size_t)k*cnt, bp.begin()+(size_t)(k+1)*cnt);
+            return o;
+        }
     }
     return {};
 }
@@ -444,6 +513,8 @@ static std::vector<uint8_t> best_encode(const uint8_t* d, size_t n, bool u32shap
         out.insert(out.end(), keep.begin(), keep.end());
         return out;
     }
+    if(getenv("LOG_PICK"))
+        fprintf(stderr,"  [pick] n=%-10zu u32=%d -> method %d\n", n, (int)u32shaped, best);
     auto coded = encode_method(d, n, best);
     if(coded.empty()) coded = xz_compress(d,n), best = 0;
     std::vector<uint8_t> out; out.reserve(coded.size()+1);
