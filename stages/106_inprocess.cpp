@@ -2363,7 +2363,7 @@ int main(int argc,char** argv){
         jobs.push_back({"mem_dstgap",  [&]{ return best_encode(ref_gaps.data(), ref_gaps.size()); }});
         jobs.push_back({"mem_len",     [&]{ return best_encode(ref_lens.data(), ref_lens.size()); }});
         jobs.push_back({"mem_rc",      [&]{ return best_encode(ref_rc.data(),   ref_rc.size());   }});
-        jobs.push_back({"pos_abs",     [&]{ return best_encode(v_pos.data(), v_pos.size(), true); }});
+        jobs.push_back({"pos_abs",     [&]{ return best_encode_chunked(v_pos.data(), v_pos.size(), true); }});
         jobs.push_back({"pos_strand",  [&]{ return best_encode(v_str.data(), v_str.size(), false); }});
         jobs.push_back({"mm_sym",      [&]{ return mmc::encode(v_mr, v_mo); }});
         // mm_pos: the encoder picks whichever of the flat and bucketed forms is

@@ -105,6 +105,46 @@ Reads are already 2-bit packed (rbase decodes via rseed), so the obvious
 saving is not available. `woff` as u64 per read is 38 MB where u32 would do,
 but that is 4% of peak, not a structural win.
 
+## IMPLEMENTED: chunking the largest stream (method 7)
+
+Built and verified 7/7 lossless through the real archive.
+
+| | size | wall | peak RAM |
+|---|---|---|---|
+| baseline | 81,581,661 | 112.77 s | 965 MB |
+| chunked, concurrency 2 | 81,634,777 (+0.065%) | 100.27 s (-11.1%) | 997 MB (+3.3%) |
+
+Margin vs PgRC2 +1.90% -> +1.83%. Speed 2.55x -> 2.26x slower.
+L. major alone: 47.60 -> 37.91 s (-20.4%).
+
+The design separates the SPLIT from the CONCURRENCY, because they have
+different costs:
+
+- Splitting is nearly free and helps on its own -- LZMA is superlinear in block
+  size, so coding L. major's pos_abs as 4 pieces takes 10.42 s sequentially
+  against 14.85 s whole, with no extra memory.
+- Concurrency is what costs memory: each chunk in flight holds its own LZMA
+  encoder state, ~11.5x its dictionary.
+
+Measured on L. major, varying concurrency at a fixed split:
+
+| concurrent chunks | wall | peak RAM |
+|---|---|---|
+| 1 | 41.69 s | 941 MB |
+| 2 | 38.31 s | 989 MB |
+| 4 | 35.56 s | 1118 MB |
+| 12 | 36.30 s | 1441 MB |
+
+Twelve is both SLOWER and 49% heavier than four: the gain saturates well before
+the core count because the job stops being the pool's bottleneck, while memory
+keeps climbing. Running all chunks at once cost +44.9% peak RAM across the suite
+for only 2.9 points more speed than two does. The default is 2.
+
+The split factor is derived from stream size, never fixed: below CHUNK_MIN (4 MB)
+the stream is coded whole, which is why H. salinarum and S. acidocaldarius are
+byte-identical to baseline (+0.000%) -- their streams are too small for splitting
+to pay, and on H. salinarum chunking is slower sequentially.
+
 ## Honest ranking
 
 1. **Assembly is 48-66% of the wall clock and has not been attacked at all.**
