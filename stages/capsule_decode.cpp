@@ -149,7 +149,8 @@ static std::vector<uint64_t> varints(const std::vector<uint8_t>& v){
     return o;
 }
 
-int capsule_decode_all(const char* arcpath, const std::string& outdir){
+int capsule_decode_all(const char* arcpath, const std::string& outdir,
+                       const std::string& outreads = std::string()){
     uint64_t PGLEN=0, MAINEND=0; uint32_t MINMEM=0; std::vector<Stream> ss;
     if(!read_capsule(arcpath,PGLEN,MAINEND,MINMEM,ss)){ fprintf(stderr,"bad archive\n"); return 1; }
     std::map<std::string,std::vector<uint8_t>> S;
@@ -262,6 +263,75 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir){
       } }
     auto obs = mmc::decode(S["mm_sym"].data(), S["mm_sym"].size(), refs);
 
+    // ---- reconstruct the reads (was decode_105.py) -------------------------
+    // That script was 80% of decompression wall clock and set the memory peak
+    // at 1563 MB, above our own compress peak, because it built one Python
+    // string per read for millions of reads. Everything it needs is already
+    // decoded here.
+    if(!outreads.empty()){
+        const size_t NO = o2u.size();
+        std::vector<size_t> mmoff(NU+1,0);
+        for(size_t u=0;u<NU;++u) mmoff[u+1]=mmoff[u]+(u<mmcount.size()?mmcount[u]:0);
+        auto comp=[](uint8_t b)->uint8_t{ return b=='A'?'T':b=='C'?'G':b=='G'?'C':'A'; };
+
+        // One flat buffer: every read plus its newline. Read lengths are known,
+        // so the layout is computed up front and filled in parallel.
+        std::vector<size_t> rowoff(NO+1,0);
+        for(size_t o=0;o<NO;++o) rowoff[o+1]=rowoff[o]+(o<lengths.size()?lengths[o]:0)+1;
+        std::vector<uint8_t> flat(rowoff[NO], '\n');
+
+        std::atomic<size_t> nxo{0};
+        unsigned T=std::max(1u,std::thread::hardware_concurrency());
+        std::vector<std::thread> th;
+        for(unsigned t=0;t<T;++t) th.emplace_back([&]{
+            for(;;){
+                size_t lo=nxo.fetch_add(4096); if(lo>=NO) break;
+                size_t hi=std::min(NO,lo+4096);
+                for(size_t o=lo;o<hi;++o){
+                    const uint32_t u=o2u[o];
+                    const uint32_t L=(o<lengths.size())?lengths[o]:0;
+                    if(u>=NU || !L) continue;
+                    const uint64_t pp=positions[u];
+                    const bool rc=strand[u];
+                    uint8_t* dst=&flat[rowoff[o]];
+                    if(!rc){ for(uint32_t k=0;k<L;++k) dst[k]=(pp+k<PGLEN)?pg[pp+k]:'A'; }
+                    else   { for(uint32_t k=0;k<L;++k) dst[k]=(pp+L-1-k<PGLEN)?comp(pg[pp+L-1-k]):'A'; }
+                    const uint16_t cnt=(u<mmcount.size())?mmcount[u]:0;
+                    if(!cnt) continue;
+                    size_t off=mmoff[u]; uint32_t prevj=0;
+                    for(uint16_t m=0;m<cnt;++m){
+                        if(off+m>=mmpos.size()||off+m>=obs.size()) break;
+                        uint32_t j=mmpos[off+m];
+                        if(MMDELTA){ j=prevj+j; prevj=j; }
+                        else if(j==255) continue;      // capped, >255 bp reads
+                        if(j>=L) continue;             // container mismatch past this read
+                        const uint8_t ob=obs[off+m];
+                        dst[j]= rc ? comp(ob) : ob;
+                    }
+                }
+            }
+        });
+        for(auto& x:th) x.join();
+
+        // N restoration: N-reads went through the same pipeline with each N
+        // replaced by 'A', so only the characters need putting back.
+        { auto ni=dec("n_indices"), nc=dec("n_cnt"), np=dec("n_pos");
+          const size_t NI=ni.size()/4; size_t k=0;
+          for(size_t r=0;r<NI && r<nc.size();++r){
+              uint32_t oi; memcpy(&oi,&ni[r*4],4);
+              const uint8_t c=nc[r];
+              if(oi<NO) for(uint8_t m=0;m<c && k+m<np.size();++m){
+                  const size_t j=np[k+m];
+                  if(rowoff[oi]+j < rowoff[oi+1]-1) flat[rowoff[oi]+j]='N';
+              }
+              k+=c;
+          } }
+
+        FILE* of=fopen(outreads.c_str(),"wb");
+        if(of){ fwrite(flat.data(),1,flat.size(),of); fclose(of); }
+        fprintf(stderr,"  reads written: %zu\n", NO);
+    }
+
     // ---- emit what the read-reconstruction step reads ----------------------
     std::string O=outdir;
     put_file(O+"/literal.txt", literal.data(), literal.size());
@@ -292,7 +362,7 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir){
 
 #ifndef CAPSULE_NO_MAIN
 int main(int argc,char** argv){
-    if(argc<3){ fprintf(stderr,"usage: capsule_decode <in.capsule> <outdir>\n"); return 2; }
-    return capsule_decode_all(argv[1], argv[2]);
+    if(argc<3){ fprintf(stderr,"usage: capsule_decode <in.capsule> <outdir> [reads.out]\n"); return 2; }
+    return capsule_decode_all(argv[1], argv[2], argc>3?argv[3]:std::string());
 }
 #endif  // CAPSULE_NO_MAIN
