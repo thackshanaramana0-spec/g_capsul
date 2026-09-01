@@ -1493,6 +1493,18 @@ int main(int argc,char** argv){
     // 6.46 MB); PgRC2 assembles its 11,298 survivors into 1,504,035 bytes.
     size_t appended=0, second_pg=0;
     const size_t main_pg_end = pg.size();
+    // A REFERENCE NEEDS dst, src AND len. refc::encode stores only src
+    // (`enc.encode(r.src, bound(r.dst))`), and the destination gaps and
+    // lengths were computed beside it and then explicitly dropped as
+    // "diagnostics only". Nothing else carried them: the literal stream holds
+    // ACGT and nothing else, so unlike PgRC2 -- whose destinations ride in-band
+    // as a MATCH_MARK inside the literal -- ours cannot be implicit. The
+    // archive was therefore missing the data needed to place a single
+    // reference, and every reported size was understated by that amount.
+    // The read-level lossless check never caught it because it decodes the
+    // dumped mem_triples.bin, which has all four fields.
+    std::vector<uint8_t> ref_gaps, ref_lens, ref_rc;
+
     {
         std::vector<uint8_t> keep(n,0);
         for(uint32_t rid:leftovers) if(!matched[rid]){ keep[rid]=1; ++appended; }
@@ -2144,7 +2156,12 @@ int main(int argc,char** argv){
     {
         std::sort(allrefs.begin(),allrefs.end(),
                   [](const Ref&a,const Ref&b){ return a.dst<b.dst; });
-        std::vector<uint8_t> gaps,srcs,lens;
+        std::vector<uint8_t> srcs;
+        // gaps/lens/rc are hoisted (declared before the MEM block) because they
+        // MUST reach the archive: refc::encode stores only src.
+        ref_gaps.clear(); ref_lens.clear(); ref_rc.clear();
+        std::vector<uint8_t>& gaps = ref_gaps;
+        std::vector<uint8_t>& lens = ref_lens;
         auto vint=[](std::vector<uint8_t>& o,uint64_t v){
             while(true){ uint8_t b=v&0x7f; v>>=7; o.push_back(b|(v?0x80:0)); if(!v) break; } };
         // Source offsets are the dominant component (182 KB of 300 KB, 24.7 bits
@@ -2157,6 +2174,7 @@ int main(int argc,char** argv){
         for(const Ref& r:allrefs){
             const uint64_t g=(r.dst>=prev)?(r.dst-prev):0;
             vint(gaps,g); vint(srcs,r.src); vint(lens,(uint64_t)(r.len-MINMEM));
+            ref_rc.push_back((uint8_t)(r.is_rc?1:0));
             // Repeat DISTANCE, not absolute position. Every self-match points
             // backwards, so dst-src is the LZ77 match distance, and distances
             // are strongly skewed towards small values where absolute offsets
@@ -2182,7 +2200,7 @@ int main(int argc,char** argv){
               const uint8_t rc=(uint8_t)r.is_rc; fwrite(&rc,1,1,t);
           }
           STR.mem_triples.close(); }
-        // mem_gaps/mem_srcs/mem_lens: diagnostics only, dropped
+        // gaps and lens are NO LONGER dropped -- see the archive jobs below.
         fprintf(stderr,"[REF] matches=%zu  raw gaps=%zu srcs=%zu lens=%zu  total_raw=%zu\n",
                 allrefs.size(),gaps.size(),srcs.size(),lens.size(),
                 gaps.size()+srcs.size()+lens.size());
@@ -2314,6 +2332,9 @@ int main(int argc,char** argv){
 
         jobs.push_back({"literal",     [&]{ return seq_encode_mem(litsym, SEQT, SEQT); }});
         jobs.push_back({"mem_triples", [&]{ return refc::encode(v_tri, PGLEN_, MAINEND_); }});
+        jobs.push_back({"mem_dstgap",  [&]{ return best_encode(ref_gaps.data(), ref_gaps.size()); }});
+        jobs.push_back({"mem_len",     [&]{ return best_encode(ref_lens.data(), ref_lens.size()); }});
+        jobs.push_back({"mem_rc",      [&]{ return best_encode(ref_rc.data(),   ref_rc.size());   }});
         jobs.push_back({"pos_abs",     [&]{ return best_encode(v_pos.data(), v_pos.size(), true); }});
         jobs.push_back({"pos_strand",  [&]{ return best_encode(v_str.data(), v_str.size(), false); }});
         jobs.push_back({"mm_sym",      [&]{ return mmc::encode(v_mr, v_mo); }});

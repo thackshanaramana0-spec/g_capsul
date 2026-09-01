@@ -1,0 +1,74 @@
+CORRECTION: the archive was missing the data needed to place any reference
+
+## The defect
+
+refc::encode (include/coders_inproc.h) encodes ONLY the source:
+
+    for(const Ref& r:R) enc.encode(r.src, bound(r.dst));
+
+The destination gaps, match lengths and RC flags were computed on the following
+lines and then discarded, with the comment "mem_gaps/mem_srcs/mem_lens:
+diagnostics only, dropped" (106_inprocess.cpp:2185).
+
+Nothing else carried them. Our literal stream contains four distinct symbols --
+A, C, G, T -- and no marker, so unlike PgRC2, whose destinations ride in-band as
+a '%' MATCH_MARK inside the literal, ours cannot be implicit. The archive
+therefore could not place a single reference, and could not reconstruct the
+pseudogenome.
+
+## Why it survived
+
+The encoder writes TWO outputs:
+
+    archive     2,606,283 B    what we measured and compared against PgRC2
+    dumps      11,789,364 B    13 uncompressed intermediate files
+
+scripts/verify_lossless.sh decodes the DUMPS. It has never read the archive.
+The dump's mem_triples.bin is 2,299,531 B carrying dst+src+len+is_rc; the
+archive's mem_triples stream was 489,798 B carrying src alone. The lossless
+result is real -- every read reconstructs exactly -- but it was proven from a
+complete input while an incomplete output was shipped and measured.
+
+ARCHIVE_TOTAL was never wrong: it matches the file on disk byte for byte, before
+and after. The file itself was incomplete.
+
+## The fix
+
+Three streams added: mem_dstgap, mem_len, mem_rc. On H. salinarum they cost
+53,474 + 131,970 + 19,094 = 204,538 B, 7.8% of that archive.
+
+## Corrected standings -- real file sizes on disk, complete archives
+
+| file | corrected | PgRC2 | margin | previously claimed |
+|---|---|---|---|---|
+| H. salinarum | 2,788,399 | 3,050,477 | +8.59% | +14.57% |
+| E. coli | 8,199,540 | 8,864,420 | +7.50% | +11.38% |
+| L. major | 27,860,951 | 28,272,652 | +1.46% | +2.83% |
+| P. aeruginosa | 8,961,459 | 9,043,181 | +0.90% | +1.84% |
+| S. aureus | 13,506,629 | 13,595,003 | +0.65% | +3.77% |
+| P. falciparum | 17,118,655 | 17,219,695 | +0.59% | +5.38% |
+| S. acidocaldarius | 3,143,897 | 3,114,782 | **-0.93%** | +0.33% |
+| TOTAL | 81,579,530 | 83,160,210 | **+1.90%** | +4.65% |
+
+6 wins, 1 loss. The missing data was 2,286,493 B across seven files.
+
+S. acidocaldarius is a loss again. The duplicate-chaining fix (3e06957) was real
+-- it shrank that pseudogenome 9,134,100 -> 6,157,270 -- but the flip to a win
+was measured against an incomplete archive and did not actually happen.
+
+## The lesson, and why it did not generalise
+
+This project already recorded the identical failure once: totals that omitted
+mm_pos and mm_count. The lesson was "count every decode stream". It did not
+generalise, because the check that would enforce it -- decode the archive itself
+-- did not exist. A verification path that reads different data than the product
+ships cannot catch a missing stream, by construction.
+
+Until scripts/verify_lossless.sh decodes the ARCHIVE, no size figure here should
+be treated as final.
+
+## Open, and identified by our own code
+
+dst need not be a separate stream. PgRC2 pays nothing for destinations because a
+MATCH_MARK sits in the literal. Adopting that would recover the mem_dstgap
+stream -- 53,474 B on H. salinarum.
