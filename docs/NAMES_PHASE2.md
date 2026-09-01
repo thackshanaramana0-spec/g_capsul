@@ -10,7 +10,74 @@ Gated behind `CAPS_NAMES=1`. With it unset the archive is **byte-identical**
 to the pre-change binary (verified by `cmp` against a build of `HEAD`), so the
 locked Phase-1 result is provably untouched.
 
-## Result — exact, both competitors, same protocol
+## Result — all 14 real datasets, exact, both competitors
+
+**The two-dataset result in the first version of this file did not hold.** Run
+across every FASTQ on the box, the unconditional global dictionary lost to
+Genozip on 10 of 14. See "The bug the 14-dataset run found" below. After the
+fix:
+
+| | vs Genozip | vs SPRING |
+|---|---|---|
+| before the fix | 4 wins / 10 losses | 7 / 7 |
+| **after** | **10 wins / 4 losses** | **8 wins / 5 losses** |
+
+Aggregate over all 14: ours 13,786,364 B vs Genozip 14,337,055 B, **-3.84%**.
+**Round trip VERIFIED 14/14** -- no header shape misparses, including three
+the coder had never seen: minimal SRA (`@ERR5181310.1 1 length=97`, no
+instrument fields), raw Illumina (HG002-5, no accession prefix and no
+`length=`), and MiSeq with long zero runs (`000000000-A7FRA`).
+
+| dataset | ours | Genozip | SPRING | vs GZ |
+|---|---|---|---|---|
+| SRR554369 | 0.003 | 0.010 | - | -69.5% |
+| SRR870667 (T. cacao) | 1.769 | 2.026 | 2.601 | -12.7% |
+| SRR37283774 (P. falciparum) | 2.404 | 2.672 | 3.215 | -10.1% |
+| ERR17740259 (S. aureus) | 2.174 | 2.340 | 2.294 | -7.1% |
+| DRR976266 (S. cerevisiae) | 1.803 | 1.888 | 1.905 | -4.5% |
+| HG005 | 2.335 | 2.443 | 2.150 | -4.4% |
+| HG002 | 2.428 | 2.525 | 2.273 | -3.9% |
+| HG004 | 2.460 | 2.556 | 2.335 | -3.7% |
+| HG003 | 2.472 | 2.559 | 2.580 | -3.4% |
+| SRR065390 (C. elegans) | 1.852 | 1.875 | 1.843 | -1.2% |
+| SRR2584863 (E. coli) | 2.713 | 2.698 | 3.092 | +0.6% |
+| SRR36741279 (L. major) | 2.395 | 2.374 | 3.031 | +0.9% |
+| ERR552797 (M. tuberculosis) | 2.685 | 2.654 | 2.540 | +1.2% |
+| ERR5181310 (SARS-CoV-2) | 0.079 | 0.055 | 0.143 | +42.9% |
+
+Three of the four losses are under 1.2%. ERR5181310 is 42.9% relative on a
+stream that costs 0.079 B/name -- 11,772 B absolute, on a header whose only
+varying field is a counter.
+
+## The bug the 14-dataset run found
+
+Stage 66 gated its dictionary on an observed hit rate and switched it off
+where it did not pay. **When stage 70's global dictionary replaced the local
+one, that gate was dropped** -- and stage 70 was only ever measured on
+DRR976266, where the dictionary always wins. Unconditional, it costs
++351,569 B on HG002 and +125,846 B on ERR552797, while saving 113,766 B on
+DRR976266.
+
+The fix is not stage 66's threshold restored but a measured cost comparison
+in pass 1, which already has the histograms:
+
+    dictionary : N*H(values) + 4 B/entry of header
+    raw        : N * sum of the four byte models' order-0 entropies
+
+whichever is cheaper wins, per token index. An index that loses is simply
+never registered; an empty `GlobalDict` makes `LocalDictFreq` a one-symbol
+alphabet, which the range coder emits in zero bits -- so the fallback costs
+no flag and needs no format change. Verified to pick the better of the two
+configurations on every dataset tested, within ~21 B.
+
+## Earlier result, superseded (kept -- it was wrong in an instructive way)
+
+The first version of this document reported 1.779 / 2.710 B/name on two
+datasets and called it a win over both tools. That was true only on those
+two. The lesson is the one already in this repo's standing rules: a result
+measured on the file a mechanism was developed on is not a result.
+
+## Original two-dataset comparison, same protocol
 
 Names cost is isolated by differencing against a constant-name control file
 (identical SEQ/QUAL, names replaced by `@r`), so no per-field stats rounding

@@ -54,6 +54,7 @@
 #include <deque>
 #include <algorithm>
 #include <unordered_map>
+#include <cmath>
 
 namespace nmc {
 
@@ -104,6 +105,9 @@ struct Model {
 };
 
 enum TokType { ID_ALPHA, ID_DIGIT, ID_CHAR, ID_MATCH, ID_ZEROS, ID_DELTA, ID_END, ID_ZDELTA };
+// Diagnostic only: isolate our two additions over SPRING's baseline coder.
+static const bool NO_ZD   = getenv("NMC_NOZD")!=nullptr;    // drop ID_ZDELTA
+static const bool NO_DICT = getenv("NMC_NODICT")!=nullptr;  // drop the value dictionary
 static const uint32_t MAXTOK=1024;
 
 struct GlobalDict {
@@ -202,6 +206,13 @@ static void dict_pass(const char* fq_path, std::array<GlobalDict,MAXTOK>& gdict,
     std::vector<uint8_t>     cflag(MAXTOK,0);
     std::vector<uint64_t>    cseen(MAXTOK,0);   // reads that HAVE this index
     uint32_t ntok_max=0;
+    // Per-token-index statistics for the dictionary decision. Counted only on
+    // tokens that actually reach the ID_DIGIT fallback -- the same routing
+    // pass 2 will take -- so the estimate prices the real alternative.
+    std::vector<std::unordered_map<uint32_t,uint32_t>> vcnt(MAXTOK);
+    std::vector<std::array<std::array<uint32_t,256>,4>> bhist(MAXTOK);
+    for(auto& h:bhist) for(auto& q:h) q.fill(0);
+    std::vector<uint64_t> vtot(MAXTOK,0);
     while(fgets(buf.data(),(int)buf.size(),f)){
         const bool is_header = (lineno%4==0);
         ++lineno;
@@ -260,9 +271,12 @@ static void dict_pass(const char* fq_path, std::array<GlobalDict,MAXTOK>& gdict,
                         ++seen[token_ctr];
                         if(delta>=-2048 && delta<=2048) ++hit[token_ctr];
                     }
-                    const bool trust_wide = (seen[token_ctr]>=20) && (hit[token_ctr]*10 >= seen[token_ctr]*3);
-                    if(!can_delta && !(can_zdelta && trust_wide))
-                        gdict[token_ctr].registerNew(digit_value);
+                    const bool trust_wide = !NO_ZD && (seen[token_ctr]>=20) && (hit[token_ctr]*10 >= seen[token_ctr]*3);
+                    if(!can_delta && !(can_zdelta && trust_wide) && !NO_DICT){
+                        ++vcnt[token_ctr][digit_value];
+                        ++vtot[token_ctr];
+                        for(int bb=0;bb<4;++bb) ++bhist[token_ctr][bb][(digit_value>>(bb*8))&0xff];
+                    }
                 }
             }
             if(lay){
@@ -282,6 +296,39 @@ static void dict_pass(const char* fq_path, std::array<GlobalDict,MAXTOK>& gdict,
         for(uint32_t k=token_ctr+1;k<MAXTOK;++k) prev_tok_ptr[k]=0;
     }
     fclose(f);
+    // ---- dictionary decision, per token index, by measured cost ------------
+    // Stage 66 gated its LOCAL dictionary on an observed hit rate; that gate
+    // was lost when stage 70's GLOBAL dictionary replaced it, and stage 70
+    // was only ever measured on one file. Measured across 14 real datasets
+    // the unconditional dictionary is a large LOSS on high-cardinality name
+    // fields (+351,569 B on HG002, +125,846 B on ERR552797) and a large win
+    // on low-cardinality ones (-113,766 B on DRR976266).
+    //
+    // So price both routes from pass 1's own histograms and keep the cheaper:
+    //   dictionary : N*H(values) + header (4 B/entry, conservative)
+    //   raw        : N*sum of the four byte-model order-0 entropies
+    // An index that loses simply gets no entries; an empty GlobalDict makes
+    // LocalDictFreq a one-symbol alphabet, which the range coder emits in
+    // zero bits, so the fallback needs no flag and no format change.
+    for(uint32_t k=0;k<MAXTOK;++k){
+        const uint64_t N=vtot[k];
+        if(!N) continue;
+        double Hv=0.0;
+        for(auto& e:vcnt[k]){ const double p=(double)e.second/(double)N; Hv-=p*std::log2(p); }
+        const double dict_bits = (double)N*Hv + (double)vcnt[k].size()*4.0*8.0;
+        double Hb=0.0;
+        for(int bb=0;bb<4;++bb){
+            double h=0.0;
+            for(int v=0;v<256;++v){
+                const uint32_t c=bhist[k][bb][v]; if(!c) continue;
+                const double p=(double)c/(double)N; h-=p*std::log2(p);
+            }
+            Hb+=h;
+        }
+        const double raw_bits = (double)N*Hb;
+        if(dict_bits < raw_bits)
+            for(auto& e:vcnt[k]) gdict[k].registerNew(e.first);
+    }
     if(lay && ntok_max>0){
         lay->ntok = ntok_max;
         lay->isconst.assign(ntok_max,0);
@@ -370,7 +417,7 @@ static void compress_id(RangeEnc& enc, IdModels& m, std::array<GlobalDict,MAXTOK
                     if(delta>=-2048 && delta<=2048) ++m.hit[token_ctr];
                 }
                 const uint32_t seen=m.seen[token_ctr], hit=m.hit[token_ctr];
-                const bool trust_wide = (seen>=20) && (hit*10 >= seen*3);
+                const bool trust_wide = !NO_ZD && (seen>=20) && (hit*10 >= seen*3);
                 if(can_delta){
                     m.token_type[token_ctr].enc(enc,ID_DELTA);
                     m.delta[token_ctr].enc(enc,(uint32_t)delta);
@@ -381,8 +428,8 @@ static void compress_id(RangeEnc& enc, IdModels& m, std::array<GlobalDict,MAXTOK
                     m.zdelta_lo[token_ctr].enc(enc,z&0xff);
                 } else {
                     m.token_type[token_ctr].enc(enc,ID_DIGIT);
-                    uint32_t sym = gdict[token_ctr].lookup(digit_value);
-                    ldict[token_ctr]->encSym(enc,sym);
+                    uint32_t sym = NO_DICT ? 0u : gdict[token_ctr].lookup(digit_value);
+                    if(!NO_DICT) ldict[token_ctr]->encSym(enc,sym);
                     if(sym==0){   // pass 1 missed it; safety net
                         m.integer[token_ctr*4+0].enc(enc,(digit_value>>0)&0xff);
                         m.integer[token_ctr*4+1].enc(enc,(digit_value>>8)&0xff);
@@ -442,7 +489,7 @@ static std::string decompress_id(RangeDec& dec, IdModels& m, std::array<GlobalDi
             token_len = m.alpha_len[token_ctr].dec(dec);
             for(uint32_t k=0;k<token_len;++k) id.push_back((char)m.alpha_value[token_ctr].dec(dec));
         } else if(tok==ID_DIGIT){
-            uint32_t sym = ldict[token_ctr]->decSym(dec);
+            uint32_t sym = NO_DICT ? 0u : ldict[token_ctr]->decSym(dec);
             uint32_t v;
             if(sym==0){
                 v = 0;
