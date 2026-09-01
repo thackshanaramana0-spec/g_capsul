@@ -234,7 +234,34 @@ int main(int argc,char** argv){
     // specificity (more candidates to verify) but lets round 2 pair reads that
     // overlap by less than 32, which after the division are still reads known
     // to tile well.
-    const uint32_t SW = argc>4?(uint32_t)atoi(argv[4]):32;
+    // LOWCOV: an explicitly-requested low-coverage mode. It changes NO default
+    // and is never auto-enabled, because the signal that would gate it
+    // (leftover_frac) is only known AFTER round 1 -- the very stage this
+    // controls -- so auto-detection would mean re-running chaining. Cheap
+    // sample-based coverage estimators were tried and REJECTED: a 25-mer
+    // frequency histogram gives mode=2 for every dataset regardless of true
+    // depth, and unique-kmer fraction orders P. aeruginosa at 26x (0.929)
+    // ABOVE Drosophila at 2.6x (0.919), because a fixed-size sample conflates
+    // genome size with depth.
+    //
+    // Measured on Drosophila SRR40104920 (2.6x), sweeping SEEDW/MINOV together
+    // with everything else fixed -- monotonic all the way to the floor:
+    //     16/16  36,851,932     12/12  36,783,282
+    //     10/10  36,558,158      8/8   36,103,845  (-2.38% vs tuned baseline)
+    // 8 is the hard floor ("below this a seed is noise"). leftover_frac falls
+    // 0.812 -> 0.785 and the second region shrinks by 6.3 M bases, i.e. more
+    // reads chain instead of being appended raw -- attacking the cost at its
+    // source rather than re-encoding it.
+    //
+    // NOT made a default, and deliberately NOT fitted to the locked suite: on
+    // the three datasets checked it wins on H. salinarum (-1.33%) and
+    // Drosophila (-2.38%) but LOSES on E. coli (+0.86%), and no validated
+    // property separates those cases. Choosing a threshold that happens to
+    // suit the 7 locked files would be exactly the overfit this project
+    // forbids -- an eighth dataset could land the wrong side of it. So it stays
+    // opt-in, evidenced, and off.
+    uint32_t SW = argc>4?(uint32_t)atoi(argv[4]):32;
+    if(getenv("LOWCOV")){ SW = 8; }
     const uint64_t SWMASK = (SW>=32)?~0ULL:((1ULL<<(2*SW))-1);
     auto packSW=[&](const char* p,uint64_t& out)->bool{
         uint64_t k=0;
@@ -1099,6 +1126,7 @@ int main(int argc,char** argv){
 
     // ── round 2: build over the well-overlapped reads only ──────────────────
     sweep_minov=MINOV;                // builder: caller's floor
+    if(getenv("LOWCOV") && sweep_minov>8) sweep_minov=8;   // see LOWCOV note at SW
     if(getenv("MINOV")) sweep_minov=(uint32_t)atoi(getenv("MINOV"));  // override for sweeps
     sweep();
     fprintf(stderr,"round2: probes=%zu links=%zu\n",probes,links);
