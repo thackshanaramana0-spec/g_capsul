@@ -325,12 +325,30 @@ static std::vector<uint8_t> seq_decode_mem(const uint8_t* d, size_t n){
     }
     size_t off = tabOff + (size_t)nch*8;
     std::vector<std::vector<uint8_t>> got(nch);
-    for(uint32_t c=0;c<nch;++c){
-        if(!rawN[c]){ off += codN[c]; continue; }
-        if(off + codN[c] > n) return {};
-        std::vector<uint8_t> dummy_out;
-        run_chunk(nullptr, rawN[c], true, d+off, codN[c], dummy_out, got[c]);
-        off += codN[c];
+    // Chunks are independent -- each has its own coded range and its own output,
+    // and the chunk table gives every offset up front. Decoding them one after
+    // another made seq_decode_mem 93% of the C++ decoder's wall clock on
+    // L. major, while the table needed to parallelise it already existed: it was
+    // added so the stream could be decoded at all.
+    std::vector<size_t> offs(nch);
+    { size_t o = off;
+      for(uint32_t c=0;c<nch;++c){ offs[c]=o; o += codN[c]; }
+      if(o > n) return {};
+      off = o; }
+    {
+        std::atomic<uint32_t> next{0};
+        unsigned T = std::min<unsigned>(nch, std::max(1u, std::thread::hardware_concurrency()));
+        std::vector<std::thread> th;
+        for(unsigned t=0;t<T;++t) th.emplace_back([&]{
+            for(;;){
+                uint32_t c = next.fetch_add(1);
+                if(c >= nch) break;
+                if(!rawN[c]) continue;
+                std::vector<uint8_t> dummy_out;
+                run_chunk(nullptr, rawN[c], true, d+offs[c], codN[c], dummy_out, got[c]);
+            }
+        });
+        for(auto& x : th) x.join();
     }
     std::vector<uint8_t> all; all.reserve(total);
     for(auto& g : got) all.insert(all.end(), g.begin(), g.end());
