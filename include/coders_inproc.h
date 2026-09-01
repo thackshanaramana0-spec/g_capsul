@@ -541,6 +541,33 @@ static std::vector<uint8_t> best_encode(const uint8_t* d, size_t n, bool u32shap
     return out;
 }
 
+// A stream with exactly ONE distinct element carries no information beyond that
+// element and how many times it repeats. Measured: read_lengths on E. coli is
+// 3,106,518 B holding the value 150 for all 1,553,259 reads -- one distinct
+// value, order-0 entropy exactly 0. Its exact encoding is (count, value).
+//
+// This is detected, never assumed: variable-length input (SARS-CoV-2, <=221)
+// takes the normal path unchanged. The marker 0xC0 cannot collide with
+// best_encode's leading byte, which is a method id in 0..6, so the ordinary
+// path pays nothing.
+static const uint8_t CONST_MARKER = 0xC0;
+static std::vector<uint8_t> const_or_encode(const uint8_t* d, size_t n, size_t w,
+                                            bool u32shaped=false){
+    if(n && w && n % w == 0 && n > w){
+        bool same = true;
+        for(size_t i=w;i<n;i+=w) if(memcmp(d, d+i, w)){ same=false; break; }
+        if(same){
+            std::vector<uint8_t> o; o.reserve(1+8+w);
+            o.push_back(CONST_MARKER);
+            uint64_t cnt = n / w;
+            o.insert(o.end(), (const uint8_t*)&cnt, (const uint8_t*)&cnt + 8);
+            o.insert(o.end(), d, d + w);
+            return o;
+        }
+    }
+    return best_encode(d, n, u32shaped);
+}
+
 // mm_pos: bucket by mismatch count, then code each bucket with the best real
 // coder -- including the range coder at period = that bucket's count, which is
 // exactly PgRC2's compressRlMisRevOffDest scheme (their per-bucket streams are
