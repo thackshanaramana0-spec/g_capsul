@@ -254,6 +254,38 @@ static std::vector<uint8_t> decode(const uint8_t* d, size_t n,
     }
     return obs;
 }
+
+// Streaming form of the same decoder, one symbol per call. Needed whenever
+// `ref` for entry i+1 can depend on the OVERRIDE applied for entry i -- e.g.
+// MEM matches chained through a tandem repeat, where a later match's SOURCE
+// falls inside an earlier match's DESTINATION. Applying overrides only after
+// a full batch decode (as `decode` above requires, since it needs the whole
+// `ref` array up front) reads the earlier match's un-corrected byte in that
+// case. This keeps the identical adaptive state as `decode` -- same freq
+// tables, same update rule -- just exposed one call at a time so the caller
+// can apply each override before computing the next entry's ref.
+struct StreamDecoder {
+    RangeDec dec; uint32_t freq[4][3];
+    void init(const uint8_t* d, size_t n){
+        dec.init(d,n);
+        for(int r=0;r<4;++r) for(int k=0;k<3;++k) freq[r][k]=1;
+    }
+    uint8_t next(uint8_t refc){
+        auto code2=[](uint8_t c)->int{ return c=='A'?0:c=='C'?1:c=='G'?2:3; };
+        const char SYM[4]={'A','C','G','T'};
+        const int r=code2(refc);
+        uint32_t* f=freq[r]; const uint32_t tot=f[0]+f[1]+f[2];
+        const uint32_t target=dec.getFreq(tot);
+        uint32_t lo=0; int k=0;
+        for(; k<3; ++k){ if(lo+f[k]>target) break; lo+=f[k]; }
+        if(k==3) k=2;
+        dec.decodeUpdate(lo, lo+f[k]);
+        int seen=0, sym=0;
+        for(int t=0;t<4;++t){ if(t==r) continue; if(seen==k){ sym=t; break; } ++seen; }
+        f[k]+=8; if(tot+8>65536){ for(int j=0;j<3;++j) f[j]=(f[j]>>1)|1; }
+        return (uint8_t)SYM[sym];
+    }
+};
 } // namespace mmc
 
 // ---------- MEM-reference src coder (from 37_ref_coder.cpp) ----------
