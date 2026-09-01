@@ -1,0 +1,43 @@
+Profiles, E. coli SRR2584863_1, idle machine (load 0.00), perf -F 999 dwarf.
+
+                          ours(B1)      PgRC2     ratio
+  wall                     10.24 s     3.58 s     2.86x
+  CPU-seconds              38.52      20.74       1.86x   (we do more work)
+  cores utilised            3.76       5.79       0.65x   (we use less machine)
+  sys seconds               3.62       0.236     15.3x
+  context-switches          1,834      1,685      same    (not preemption)
+  cpu-migrations               17          3
+  page-faults           1,089,328    169,421      6.4x    <-- the cause
+  threads created (clone3)     99         23       4.3x
+
+  cycles by DSO          ours       PgRC2
+    own code            45.37%     72.64%
+    libgomp             22.50%     24.21%   <-- NOT the differentiator
+    kernel              16.21%      1.86%   <-- 8.7x
+    compression         14.05%      ~2.5%   <-- 6.7x more of our profile
+
+  PgRC2 hot symbols                          ours hot symbols
+    compareSuffixWithPrefix     14.87%         libgomp spin        21.82%
+    CopMEMMatcher::approx...    12.36%         _omp_fn.0 (sweep)   17.26%
+    ParallelGreedySwiping (x2)  14.89%         thread pool workers 17.38%
+    compareSequences             7.04%         asm_sysvec_call_fn   7.25%
+    LzmaEnc + GetMatchesSpec     2.44%         run_chunk + PPMd     2.63%
+
+Findings:
+  1. libgomp spin is NOT our problem -- PgRC2 spins MORE (24.21 vs 22.50) and
+     still finishes in a third the time. An earlier conclusion blaming barrier
+     spin after A1 is withdrawn.
+  2. The differentiator is page faults: 6.4x, accounting for essentially all of
+     our system time. Not thread creation (99 vs 23 is far too few to matter)
+     and not preemption (context switches are identical).
+  3. Source: preset 9 asks for a 64 MB LZMA dictionary regardless of stream
+     size; seven probes over six streams >= 2 MB is ~2.7 GB of allocate-touch-
+     free per file. PgRC2 sizes dictionaries per stream (1/8/16/64 MB).
+  4. Our compression is 6.7x more of the profile than theirs, because they do
+     not probe their large streams at all.
+  5. We are FASTER at the algorithm (assembly 1.64 s vs their 2.75 s) and
+     slower at everything around it.
+
+After B2 (dictionary bounded by input length), 7 files:
+  all sizes byte-identical; wall 132.12 s -> 124.24 s (-6.0%);
+  E. coli page-faults 1,089,328 -> 687,885, sys 3.18 s -> 2.12 s.
