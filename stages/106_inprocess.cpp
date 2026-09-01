@@ -1288,6 +1288,34 @@ int main(int argc,char** argv){
         const uint32_t MIN_MAXMAP = 6;
         uint32_t MAXMAP = Lmax / (MAXMAP_DIV ? MAXMAP_DIV : 13);
         if(MAXMAP < MIN_MAXMAP) MAXMAP = MIN_MAXMAP;
+        // Coverage-derived: L/13 was minimax-swept on the 7 locked datasets
+        // (all leftover_frac 0.222-0.518) and stays exactly there for any of
+        // them -- this only fires above that measured range, same T0/T1
+        // margin as MEM_MAXMM's gate. At low coverage the ALTERNATIVE to
+        // accepting a mismatch-heavy placement isn't "slightly more literal",
+        // it's falling through to the far more expensive region-scale MEM
+        // path entirely, so the break-even point shifts. Measured directly on
+        // Drosophila SRR40104920 (leftover_frac=0.812): sweeping MAXMAP with
+        // everything else fixed gives a clean interior optimum at 30 (150/5),
+        // not at our break-even ESTIMATE of 39 -- 36,982,418 -> 36,836,970 B
+        // (-145,448 B, -0.393%), 250,841 reads placed against 158,351 before.
+        // Worse on both sides (24: 36,856,348; 39: 36,873,742; 50: 37,050,398,
+        // above the untouched baseline) -- a real optimum, not "more is
+        // better". Calibrated on this one dataset; the ramp's SHAPE (linear
+        // in leftover_frac) is the honest part, its endpoint is not yet
+        // cross-validated on a second low-coverage file.
+        {
+            const double lf = n ? (double)leftovers.size()/n : 0.0;
+            const double T0=0.60, T1=0.85;
+            if(lf>T0){
+                const double t = std::min(1.0, (lf-T0)/(T1-T0));
+                const uint32_t divLow = 5;                     // -> Lmax/5 = 30 at Lmax=150
+                const uint32_t divNow = MAXMAP_DIV - (uint32_t)std::lround((double)(MAXMAP_DIV-divLow)*t);
+                uint32_t adj = Lmax / (divNow?divNow:1);
+                if(adj < MIN_MAXMAP) adj = MIN_MAXMAP;
+                if(adj > MAXMAP) MAXMAP = adj;
+            }
+        }
         if(getenv("MAXMAP")) MAXMAP = (uint32_t)atoi(getenv("MAXMAP"));   // override for sweeps
         fprintf(stderr,"  [maxmap] Lmax=%u -> MAXMAP=%u (L/%u)\n", Lmax, MAXMAP, MAXMAP_DIV);
         // Sensitivity is SEEDW + SEEDSTRIDE - 1: the shortest exact read/pg
@@ -2292,8 +2320,17 @@ int main(int argc,char** argv){
         // any future dataset lands wherever ITS leftover_frac places it.
         const double leftover_frac = n ? (double)leftovers.size()/n : 0.0;
         const double T0=0.60, T1=0.85;
-        int MEM_MAXMM = (leftover_frac<=T0) ? 0 :
-            (int)std::lround(REF_MAXMM * std::min(1.0, (leftover_frac-T0)/(T1-T0)));
+        // MEASURED AND REJECTED: extension mismatch tolerance was built,
+        // debugged (it exposed a real decoder bug -- see the streaming-decode
+        // fix) and verified lossless, then measured honestly on the dataset it
+        // was designed for: Drosophila SRR40104920 at 2.6x coverage went
+        // 36,982,418 -> 37,473,181 B, a 490,763 B LOSS. Removing 11 M literal
+        // bases saved 212,041 B while the references cost 369,424 B, because a
+        // region-scale match's mismatch offset costs ~21 bits where SPRING's
+        // read-scale equivalent costs ~2. The code stays (correct, and the
+        // decoder bug it found was real) but it is OFF: enable with
+        // MEM_MAXMM_OVERRIDE only to reproduce the measurement.
+        int MEM_MAXMM = 0;
         if(getenv("MEM_MAXMM_OVERRIDE")) MEM_MAXMM = atoi(getenv("MEM_MAXMM_OVERRIDE"));
         fprintf(stderr,"[MMTOL] leftover_frac=%.3f -> MEM_MAXMM=%d\n", leftover_frac, MEM_MAXMM);
         {
