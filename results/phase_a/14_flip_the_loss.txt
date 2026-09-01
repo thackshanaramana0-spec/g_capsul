@@ -69,3 +69,47 @@ region-split positions, MINOV as a span lever, minimum-degree-first matching).
 The diagnosis that survived all four -- our pg 9,134,100 against their 5,106,918
 at near-identical read counts -- was then checked against PgRC2's own run log
 rather than inferred, and the duplicate counts were sitting there side by side.
+
+---
+
+## Variable-length follow-up: two further hypotheses, both refuted
+
+### Refuted: full-length links are containment on variable-length data
+Hypothesis: when rlen[b] > rlen[a], an off==0 link means a is a PREFIX of b --
+containment, which stage 42 owns -- so it should be excluded. Implemented as
+`if(off==0 && rlen[b]!=L) continue;` at both candidate filters.
+
+Measured: identical archives with and without, on S. acidocaldarius (3,104,624)
+and C. jejuni (3,769,548). The condition never fires. Removed rather than kept
+as dead code, since the hypothesis that motivated it was wrong.
+
+### Refuted: the tail-eligibility bug should be fixed
+A real pre-existing bug was found: the level loop compacts `tails` with
+`tails.resize(w)` after dropping any read with rlen[a] < L, and since L starts at
+the maximum, every read shorter than the longest is deleted at the first level
+and can never chain. Constant-length data is immune. On SARS-CoV-2 it leaves 11
+links for the whole dataset.
+
+Fixed properly -- presort by descending length, admit reads as L descends, so
+`resize` only removes reads that are genuinely finished. Measured:
+
+    C. jejuni   links 335,930 -> 375,997   pg 4,345,489 -> 4,957,070   +26,109 B
+    SARS-CoV-2  links 5 -> 8               pg 1,110 -> 1,741            +4,178 B
+
+**The fix makes things worse.** The newly eligible short reads join the assembly
+as chain heads or poor-overlap links, ADDING to the pseudogenome, when routing
+them to the mapping stage instead was cheaper. The accidental behaviour is the
+better one: short reads should be mapped, not assembled. Reverted, and recorded
+here so it is not "fixed" again later.
+
+### Where L=Lmax stands on variable-length data
+
+    C. jejuni  (35-151)  3,782,465 -> 3,769,548   -12,917  BETTER
+    SARS-CoV-2 (40-221)    841,203 ->   844,436    +3,233  worse
+
+So the change wins on variable-length data too. SARS-CoV-2 is a degenerate case:
+92.3% duplication, a 30 kb genome, 72,244 unique reads producing a pseudogenome
+of only 1-2.6 kb and 11 links in total. Its archive is dominated by mapping, not
+assembly, so any assembly perturbation moves it. The +3,233 (0.38%) is disclosed
+rather than tuned away; it does not change any win -- SARS-CoV-2 still beats
+SPRING by 46% and Genozip by 14%, and PgRC2 cannot compress it at all.
