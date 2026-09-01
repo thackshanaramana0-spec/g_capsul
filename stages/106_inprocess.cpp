@@ -1950,8 +1950,14 @@ int main(int argc,char** argv){
         //
         // Same failure stage 27 caught with mismatches: an aggressive stage looks
         // free because its cost lands somewhere nobody measures.
+        // The source text was hardcoded to pg/main_pg_end in three places, so a
+        // pass could only ever match against the MAIN region. Making it explicit
+        // is a prerequisite for self-matching the second region; passing
+        // pg.data()/main_pg_end reproduces today's behaviour exactly.
         auto parse_range=[&](const char* Q,size_t qlen,Mode mode,size_t lo,size_t hi,
-                             std::vector<Ref>& out){
+                             std::vector<Ref>& out,
+                             const char* S=nullptr,size_t slen=0){
+            if(!S){ S=pg.data(); slen=main_pg_end; }
             // STAGE 34: lazy matching.
             // Taking the longest match at every position, left to right, is
             // GREEDY parsing, and the classic LZ result is that greedy is not
@@ -1981,7 +1987,7 @@ int main(int argc,char** argv){
                     else if(mode==SELF_RC){ if(s>=qlen-qp) continue; capL=(qlen-qp-s)/2; }
                     if(capL<MINMEM) continue;
                     size_t L=0;
-                    while(L<capL && qp+L<qlen && s+L<main_pg_end && Q[qp+L]==pg[s+L]) ++L;
+                    while(L<capL && qp+L<qlen && s+L<slen && Q[qp+L]==S[s+L]) ++L;
                     if(L>best){ best=L; bsrc=s; }
                 }
                 return (best>=MINMEM)?best:0;
@@ -2004,7 +2010,7 @@ int main(int argc,char** argv){
                     else if(mode==SELF_RC){ if(s>=qlen-qp) continue; capL=(qlen-qp-s)/2; }
                     if(capL<MINMEM) continue;
                     size_t L=0;
-                    while(L<capL && qp+L<qlen && s+L<main_pg_end && Q[qp+L]==pg[s+L]) ++L;
+                    while(L<capL && qp+L<qlen && s+L<slen && Q[qp+L]==S[s+L]) ++L;
                     if(L>best){ best=L; bestsrc=s; }
                 }
                 if(best>=MINMEM && LAZY && qp+1<hi && qp+1+MINMEM<=qlen){
@@ -2036,7 +2042,7 @@ int main(int argc,char** argv){
                     // bestsrc+best <= qlen-qp-best, which backward extension
                     // leaves unchanged on both sides.
                     size_t b=0;
-                    while(b<cap && Q[qp-b-1]==pg[bestsrc-b-1]) ++b;
+                    while(b<cap && Q[qp-b-1]==S[bestsrc-b-1]) ++b;
                     out.push_back({(uint32_t)(qp-b),(uint32_t)(bestsrc-b),(uint32_t)(best+b),false});
                     lastend=qp+best; qp+=best;
                 }
@@ -2053,8 +2059,13 @@ int main(int argc,char** argv){
         // relative to the survivor pg, not to the pseudogenome. Stored raw, a
         // cross-match destination of 0 claims to be the very start of the pg,
         // which is why 12,003 of 58,908 rows appeared to violate src < dst.
+        // DSTBASE existed but SRCBASE did not: destinations were lifted into
+        // pseudogenome coordinates while sources were left in whatever frame the
+        // source text used. Invisible while the source IS the main pg (base 0),
+        // and wrong the moment it is not.
         auto run=[&](const char* Q,size_t qlen,Mode mode,std::vector<uint8_t>& consumed,
-                     bool RCDEST=false,size_t DSTBASE=0)->size_t{
+                     bool RCDEST=false,size_t DSTBASE=0,
+                     const char* S=nullptr,size_t slen=0,size_t SRCBASE=0)->size_t{
             unsigned T=std::thread::hardware_concurrency(); if(!T) T=1;
             if(qlen < (1u<<20)) T=1;
             std::vector<std::vector<Ref>> res(T);
@@ -2063,7 +2074,7 @@ int main(int argc,char** argv){
             for(unsigned t=0;t<T;++t){
                 const size_t lo=(size_t)t*chunk, hi=std::min(qlen,lo+chunk);
                 if(lo>=hi) break;
-                th.emplace_back([&,t,lo,hi]{ parse_range(Q,qlen,mode,lo,hi,res[t]); });
+                th.emplace_back([&,t,lo,hi]{ parse_range(Q,qlen,mode,lo,hi,res[t],S,slen); });
             }
             for(auto& x:th) x.join();
             size_t nm=0;
@@ -2086,6 +2097,7 @@ int main(int argc,char** argv){
                     r.is_rc=RCDEST;
                     if(RCDEST) r.dst=(uint32_t)(qlen-m.dst-m.len);
                     r.dst=(uint32_t)(r.dst+DSTBASE);
+                    r.src=(uint32_t)(r.src+SRCBASE);
                     allrefs.push_back(r);
                 }
             }
