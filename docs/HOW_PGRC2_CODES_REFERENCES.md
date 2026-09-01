@@ -101,3 +101,49 @@ The remaining honest statement is that the two tools reach a similar total by
 different decompositions: we spend more on references and far less on mismatch
 symbols (124,280 against 208,234, -40%). On this dataset their decomposition
 wins by 24,662 B, 0.79%.
+
+---
+
+# The exact target: it is the assembly, not any coder
+
+Every stream was checked against a bound. None of them is the target.
+
+| stream | ours | verdict |
+|---|---|---|
+| read order | 1,414,637 | 0.996x its information bound -- closed |
+| mismatch positions | 731,919 | below order-0 AND count-conditioned entropy; PgRC2 spends 23.2% on the same thing, we spend 23.3% |
+| references | 94,935 | per-match within 11% and cheaper on lengths; match count at a verified interior optimum |
+| read strands | 16,314 | order-0 bound is 16,116 B; orders 1-8 give 16,095 B, i.e. no structure left |
+| literal | 597,736 | within 0.3% of theirs |
+| mismatch symbols | 124,280 | we are 40% AHEAD of their 208,234 |
+| mismatch counts | 159,665 | we are ahead |
+
+Every difference that remains traces to how the two pseudogenomes are BUILT:
+
+**1. Strand flips.** Their RC stream is 9,939 B over 516,274 reads = 0.1540
+bits/read, which inverts to about **2.23% of their reads placed reverse**.
+Ours is **4.16%**. Our coder is already at the order-0 bound for our own
+distribution, so the 6,375 B gap is entirely that their placement flips fewer
+reads.
+
+**2. Match count.** 4,141 against our 21,000, a factor of 5.07, for a
+pseudogenome that codes to within 0.3% of ours. Our count is optimal for our
+construction (MINMEM swept, genuine interior optimum, degrades on both sides),
+so this is not a threshold we set wrong -- their pseudogenome is simply shaped
+so that far fewer matches describe it.
+
+Both trace to the same thing: **the hq/lq/n three-way split**, each region
+self-matched separately, against our single region. That produces a
+differently-shaped text -- fewer strand flips, fewer matches needed.
+
+This independently confirms what was concluded earlier from the opposite
+direction (docs/DO_WE_NEED_THEIR_3WAY.md, and the note that their disk-staging
+is dead code while the real gap is the 3-way split). Two different methods,
+same answer.
+
+## What this means for effort
+
+There is no coder left to improve. Every stream is at or below its measurable
+bound, and on the one stream where the two tools differ materially we are 40%
+ahead. Further size work has to change how the pseudogenome is constructed, or
+it changes nothing.
