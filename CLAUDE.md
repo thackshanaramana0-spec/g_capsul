@@ -29,38 +29,36 @@ and entropy-coded.
 
 ---
 
-## 2. Current standing — measured, not estimated
+## 2. Current standing — corrected 2026-09-02, read the warning first
 
-7 of 7 head-to-head wins against PgRC2. Sizes below are **pre-CAPSULE-header**;
-the format header added later costs 210 B per archive (measured on H. salinarum,
-2,606,073 -> 2,606,283, +0.008%), so add ~210 B to each for the current build.
+**Every size figure published before commit `a81f55c` was measured against an
+INCOMPLETE archive** that could not be decoded. See section 6.1. These are the
+corrected numbers, taken from the real file size on disk:
 
-| dataset | kingdom | ours | PgRC2 | margin |
-|---|---|---|---|---|
-| H. salinarum | Archaea | 2,606,073 | 3,050,477 | +14.57% |
-| E. coli | Bacteria | 7,855,707 | 8,864,420 | +11.38% |
-| P. falciparum | Protista | 16,293,690 | 17,219,695 | +5.38% |
-| S. aureus | Bacteria | 13,083,080 | 13,595,003 | +3.77% |
-| L. major | Protista | 27,472,930 | 28,272,652 | +2.83% |
-| P. aeruginosa | Bacteria | 8,876,933 | 9,043,181 | +1.84% |
-| S. acidocaldarius | Archaea | 3,104,624 | 3,114,782 | +0.33% |
-| **aggregate** | | **79,293,037** | **83,160,210** | **+4.65%** |
+| dataset | kingdom | ours | PgRC2 | margin | previously claimed |
+|---|---|---|---|---|---|
+| H. salinarum | Archaea | 2,788,399 | 3,050,477 | +8.59% | +14.57% |
+| E. coli | Bacteria | 8,199,540 | 8,864,420 | +7.50% | +11.38% |
+| L. major | Protista | 27,860,951 | 28,272,652 | +1.46% | +2.83% |
+| P. aeruginosa | Bacteria | 8,961,459 | 9,043,181 | +0.90% | +1.84% |
+| S. aureus | Bacteria | 13,506,629 | 13,595,003 | +0.65% | +3.77% |
+| P. falciparum | Protista | 17,118,655 | 17,219,695 | +0.59% | +5.38% |
+| **S. acidocaldarius** | Archaea | 3,143,897 | 3,114,782 | **-0.93%** | +0.33% |
+| **aggregate** | | **81,579,530** | **83,160,210** | **+1.90%** | +4.65% |
 
-Three more datasets PgRC2 cannot process at all:
+**6 wins, 1 loss.** S. acidocaldarius is a loss again -- the duplicate-chaining
+fix (`3e06957`) was real and shrank that pseudogenome 32%, but the flip to a win
+was measured against an incomplete archive and did not happen.
 
-| dataset | ours | SPRING | Genozip | PgRC2 |
-|---|---|---|---|---|
-| SARS-CoV-2 | 844,436 | 1,556,480 | 976,083 | refuses: variable-length |
-| A. fumigatus | 34,526,106 | 74,813,440 | 147,388,530 | crashes at constant 150 bp |
-| S. cerevisiae | 21,529,908 | 24,647,680 | 162,404,291 | 21,841,286 (we win +1.43%) |
+The three datasets PgRC2 cannot process have NOT been re-measured since the
+correction and their figures are stale:
 
-**10 datasets run, 10 won, 0 lost.**
+    SARS-CoV-2, A. fumigatus, S. cerevisiae -- re-run before quoting
 
 Speed/RAM against PgRC2 (E. coli, idle machine): ~1.7x slower, ~2.5x heavier at
-worst. Session moved wall 243.78 s -> 130.60 s (-46.4%) across 7 files and
-worst-case peak RSS 1,388 MB -> 930 MB (-33.0%).
-
----
+worst. Wall 243.78 s -> 130.60 s (-46.4%) across 7 files, worst-case peak RSS
+1,388 MB -> 930 MB (-33.0%). These predate the correction; the added streams
+cost encode time that has not been re-measured.
 
 ## 3. Repository layout, and why
 
@@ -119,7 +117,33 @@ the encoder dumps, not through the archive.** It exercises the whole algorithm
 
 ## 6. What is NOT done — checked, not assumed
 
-**The archive decoder is incomplete.** `stages/capsule_decode.cpp` reads the
+### 6.1 The verification path does not read the product
+
+`scripts/verify_lossless.sh` decodes the DUMPED streams, not the archive. The
+encoder writes both: an archive (2.6 MB on H. salinarum) and 13 uncompressed
+dump files (11.8 MB). Only the archive ships and is measured; only the dumps are
+verified.
+
+That gap hid a real defect for the whole session. `refc::encode` stored only a
+reference's source; its destination gap, length and RC flag were computed on the
+next lines and dropped as "diagnostics only". Nothing else carried them -- our
+literal is pure ACGT with no marker, unlike PgRC2's in-band MATCH_MARK -- so the
+archive could not place a single reference. The dump's mem_triples.bin is
+2,299,531 B with all four fields; the archive stream was 489,798 B with one.
+Fixed in `a81f55c` by adding mem_dstgap, mem_len and mem_rc: 2,286,493 B across
+seven files, and the aggregate margin fell from +4.65% to +1.90%.
+
+ARCHIVE_TOTAL was never wrong -- it matches the file on disk byte for byte. The
+file was incomplete, not the count.
+
+**Until verify_lossless.sh decodes the ARCHIVE, no size figure in this repo is
+final.** This project had already recorded the identical failure once (totals
+omitting mm_pos and mm_count); the lesson did not generalise because the check
+that enforces it does not exist.
+
+### 6.2 The archive decoder is incomplete
+
+`stages/capsule_decode.cpp` reads the
 CAPSULE container and inverts the general-purpose coders. Verified identical
 against the encoder's own in-memory streams on H. salinarum: `pos_abs`
 (1,842,004 B), `read_lengths` (921,002 B), `pos_strand`, and the three N
