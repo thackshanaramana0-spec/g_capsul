@@ -116,4 +116,81 @@ static std::vector<uint8_t> range_encode(const uint8_t* src, size_t n, unsigned 
     return std::move(rc.out);
 }
 
+
+// ============================ DECODERS ======================================
+// Inverses of the three coders above. Written for the CAPSULE decoder: the
+// archive was previously unreadable, so losslessness could only be checked
+// through the raw dumped streams, never through the entropy layer.
+
+struct InBuf { IByteIn vt; const uint8_t* cur; const uint8_t* lim; };
+static Byte ppmd_read(const IByteIn* p){
+    InBuf* b = (InBuf*)((char*)p - offsetof(InBuf, vt));
+    return b->cur < b->lim ? *b->cur++ : 0;
+}
+static std::vector<uint8_t> ppmd_decode(const uint8_t* src, size_t n, size_t rawlen){
+    if(n<5 || !rawlen) return {};
+    const unsigned order = src[0];
+    const uint32_t memSize = (uint32_t)src[1] | ((uint32_t)src[2]<<8)
+                           | ((uint32_t)src[3]<<16) | ((uint32_t)src[4]<<24);
+    InBuf ib; ib.vt.Read = ppmd_read; ib.cur = src+5; ib.lim = src+n;
+    CPpmd7 ppmd; Ppmd7_Construct(&ppmd);
+    if(!Ppmd7_Alloc(&ppmd, memSize, &g_Alloc)) return {};
+    ppmd.rc.dec.Stream = &ib.vt;
+    if(!Ppmd7z_RangeDec_Init(&ppmd.rc.dec)){ Ppmd7_Free(&ppmd,&g_Alloc); return {}; }
+    Ppmd7_Init(&ppmd, order);
+    std::vector<uint8_t> out(rawlen);
+    for(size_t i=0;i<rawlen;++i){
+        int sym = Ppmd7z_DecodeSymbol(&ppmd);
+        if(sym < 0){ Ppmd7_Free(&ppmd,&g_Alloc); return {}; }
+        out[i] = (uint8_t)sym;
+    }
+    Ppmd7_Free(&ppmd,&g_Alloc);
+    return out;
+}
+
+static std::vector<uint8_t> fse_decode(const uint8_t* src, size_t n, size_t rawlen){
+    if(!n || !rawlen) return {};
+    std::vector<uint8_t> out(rawlen);
+    size_t r = FSE_decompress(out.data(), rawlen, src, n);
+    if(FSE_isError(r) || r!=rawlen) return {};
+    return out;
+}
+
+// Mirror of RC/Model256. The decoder must update its models in exactly the same
+// order and by the same increments as the encoder, so the frequency tables stay
+// in lockstep -- that is what makes an adaptive coder invertible.
+struct RCD {
+    const uint8_t* p; const uint8_t* lim;
+    uint32_t range=0xFFFFFFFFu, code=0;
+    void init(){ p++; for(int i=0;i<4;++i) code=(code<<8)|(p<lim?*p++:0); }
+    uint32_t getFreq(uint32_t tot){ range/=tot; uint32_t v=code/range; return v>=tot?tot-1:v; }
+    void decode(uint32_t lo,uint32_t hi){
+        code-=lo*range; range*=(hi-lo);
+        while(range<(1u<<24)){ code=(code<<8)|(p<lim?*p++:0); range<<=8; }
+    }
+};
+struct Model256D {
+    uint16_t f[256]; uint32_t tot;
+    Model256D(){ for(int i=0;i<256;++i) f[i]=1; tot=256; }
+    uint8_t decode(RCD& rc){
+        uint32_t target=rc.getFreq(tot), lo=0; int s=0;
+        for(; s<256; ++s){ if(lo+f[s]>target) break; lo+=f[s]; }
+        if(s==256) s=255;
+        rc.decode(lo, lo+f[s]);
+        f[s]+=32; tot+=32;
+        if(tot>60000){ tot=0; for(int i=0;i<256;++i){ f[i]=(uint16_t)((f[i]>>1)|1); tot+=f[i]; } }
+        return (uint8_t)s;
+    }
+};
+static std::vector<uint8_t> range_decode(const uint8_t* src, size_t n, size_t rawlen,
+                                         unsigned period=1){
+    if(!n || !rawlen) return {};
+    if(period<1) period=1;
+    std::vector<Model256D> m(period);
+    RCD rc; rc.p=src; rc.lim=src+n; rc.init();
+    std::vector<uint8_t> out(rawlen);
+    for(size_t i=0;i<rawlen;++i) out[i]=m[i%period].decode(rc);
+    return out;
+}
+
 } // namespace pgc

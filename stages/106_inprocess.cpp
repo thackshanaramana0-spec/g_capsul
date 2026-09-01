@@ -117,20 +117,53 @@ struct Streams {
 static Streams STR;
 
 // Archive writer: append a coded stream, then free the source immediately.
+// CAPSULE container.
+//
+// The archive was a bare sequence of (uint64 length, bytes) in whatever order
+// the job list happened to run, with the pseudogenome parameters written to a
+// separate pg_params.txt. Nothing identified the format, its version, or which
+// stream was which, so a decoder could only work by replicating the encoder's
+// job order exactly -- and any added stream (names, quality) would silently
+// shift every offset.
+//
+// Layout:
+//   magic   "CAPSULE" + '\0'            8 B
+//   version uint16                       2 B
+//   pg_len, main_pg_end  uint64 x2      16 B
+//   n_streams uint16                     2 B
+//   per stream: namelen u8, name, len u64, payload
+//
+// Streams are self-identifying, so the decoder matches by NAME and a new stream
+// is additive rather than a format break. Header cost is ~300 B against
+// archives of 2.6-27 MB (0.001-0.01%), and it is counted in ARCHIVE_TOTAL.
 struct Archive {
     FILE* out;
     size_t total=0;
     std::vector<std::pair<const char*,size_t>> parts;
-    explicit Archive(const char* path){ out=fopen(path,"wb"); }
+    Archive(const char* path, uint64_t pg_len, uint64_t main_end){
+        out=fopen(path,"wb");
+        if(!out) return;
+        fwrite("CAPSULE\0",1,8,out);
+        uint16_t ver=1; fwrite(&ver,2,1,out);
+        fwrite(&pg_len,8,1,out); fwrite(&main_end,8,1,out);
+        nstream_pos=ftell(out);
+        uint16_t ns=0; fwrite(&ns,2,1,out);       // patched in finish()
+        total += 8+2+8+8+2;
+    }
+    long nstream_pos=0; uint16_t nstreams=0;
     void put(const char* name, const std::vector<uint8_t>& coded){
         // (timing is recorded by the caller via tput)
         uint64_t n=coded.size();
+        uint8_t nl=(uint8_t)strlen(name);
+        fwrite(&nl,1,1,out); fwrite(name,1,nl,out);
         fwrite(&n,8,1,out);
         if(n) fwrite(coded.data(),1,n,out);
-        total += 8 + n;
+        total += 1 + nl + 8 + n;
+        ++nstreams;
         parts.emplace_back(name,n);
     }
     void finish(){
+        if(out){ fseek(out,nstream_pos,SEEK_SET); fwrite(&nstreams,2,1,out); }
         if(out) fclose(out);
         out=nullptr;
         for(auto& p:parts) fprintf(stderr,"  [archive] %-14s %10zu B\n",p.first,p.second);
@@ -2173,7 +2206,7 @@ int main(int argc,char** argv){
     // by paying 361 MB of disk I/O per 456 MB of input.
     {
         const char* apath = getenv("ARCHIVE") ? getenv("ARCHIVE") : "out.arcs2";
-        Archive ar(apath);
+        Archive ar(apath, (uint64_t)pg.size(), (uint64_t)main_pg_end);
         auto __t0 = std::chrono::steady_clock::now();
         auto CODED = [&](const char* nm){
             auto n = std::chrono::steady_clock::now();

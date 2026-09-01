@@ -526,8 +526,13 @@ static std::vector<uint8_t> best_encode(const uint8_t* d, size_t n, bool u32shap
             auto c = encode_method(d, n, m);
             if(!c.empty() && c.size() < bs){ bs = c.size(); keep = std::move(c); km = m; }
         }
-        std::vector<uint8_t> out; out.reserve(bs+1);
+        // [method:1][raw_len:8][payload]. FSE, PPMd and the range coder cannot
+        // recover the uncompressed length from their own output, so a decoder
+        // has no way back without it. LZMA's xz container carries it, but the
+        // field is written uniformly so one decode path serves every method.
+        std::vector<uint8_t> out; out.reserve(bs+9);
         out.push_back((uint8_t)km);
+        uint64_t rl=n; out.insert(out.end(),(uint8_t*)&rl,(uint8_t*)&rl+8);
         out.insert(out.end(), keep.begin(), keep.end());
         return out;
     }
@@ -535,8 +540,9 @@ static std::vector<uint8_t> best_encode(const uint8_t* d, size_t n, bool u32shap
         fprintf(stderr,"  [pick] n=%-10zu u32=%d -> method %d\n", n, (int)u32shaped, best);
     auto coded = encode_method(d, n, best);
     if(coded.empty()) coded = xz_compress(d,n), best = 0;
-    std::vector<uint8_t> out; out.reserve(coded.size()+1);
+    std::vector<uint8_t> out; out.reserve(coded.size()+9);
     out.push_back((uint8_t)best);
+    uint64_t rl=n; out.insert(out.end(),(uint8_t*)&rl,(uint8_t*)&rl+8);
     out.insert(out.end(), coded.begin(), coded.end());
     return out;
 }
