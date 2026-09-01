@@ -2172,7 +2172,38 @@ int main(int argc,char** argv){
         jobs.push_back({"n_indices",   [&]{ return best_encode(v_ni.data(), v_ni.size(), true); }});
         jobs.push_back({"n_cnt",       [&]{ return best_encode(v_nc.data(), v_nc.size()); }});
         jobs.push_back({"read_lengths",[&]{ return best_encode(v_rl.data(), v_rl.size()); }});
-        jobs.push_back({"orig2uid",    [&]{ return best_encode(v_o2u.data(), v_o2u.size(), true); }});
+        // B3: orig2uid mixes two different signals in one stream. Measured on
+        // E. coli: 79.55% of its deltas are ZERO (the reads that are not
+        // duplicates) and 20.45% are sparse alias payloads over 273,172
+        // distinct values. Its order-0 floor is 855,909 B against the 6,213,036
+        // we hand the coder, and no single model fits both halves -- which is
+        // precisely why this stream needed a 7-way probe and became the coding
+        // pool's floor at 4.53 s, longer than `literal` which is BIGGER but
+        // understood (0.38 s through the DNA coder).
+        //
+        // PgRC2 splits exactly this shape rather than searching for a coder
+        // that copes; their log shows "Mismatches counts (zero flags)" and
+        // "(non-zero values)" as separate streams. We already do it for mm_cnt.
+        // Splitting hands the coder the structure instead of making it discover
+        // it, and drops the data through the probe from 6.21 MB to ~1.46 MB.
+        {
+            const size_t cnt = v_o2u.size()/4;
+            std::vector<uint8_t> ofl((cnt+7)/8, 0), ova;
+            ova.reserve(v_o2u.size()/4);
+            for(size_t i=0;i<cnt;++i){
+                uint32_t x; memcpy(&x, v_o2u.data()+i*4, 4);
+                if(x){
+                    ofl[i>>3] |= (uint8_t)(0x80u >> (i&7));
+                    ova.insert(ova.end(), v_o2u.data()+i*4, v_o2u.data()+i*4+4);
+                }
+            }
+            jobs.push_back({"orig2uid_flags",[&,ofl]{
+                return best_encode(ofl.data(), ofl.size()); }});
+            jobs.push_back({"orig2uid_vals", [&,ova]{
+                return best_encode(ova.data(), ova.size(), true); }});
+            fprintf(stderr,"  [b3] orig2uid %zu B -> flags %zu B + vals %zu B (%zu nonzero of %zu)\n",
+                    v_o2u.size(), ofl.size(), ova.size(), ova.size()/4, cnt);
+        }
 
         results.resize(jobs.size());
         {
