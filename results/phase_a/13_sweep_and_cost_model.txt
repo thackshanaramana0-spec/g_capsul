@@ -43,3 +43,44 @@ against the values the ADAPTIVE SEARCH picks gave a 7.3x spread and rho = 0.536.
 That test was confounded -- the search only ever chooses between two ceilings
 (L/13 and L/5), so it was a continuous formula against a 2-point grid. The fine
 sweep is what made the real answer visible.
+
+---
+
+THIRD ATTEMPT: per-read pricing (LZMA GetOptimum style). ALSO FAILED.
+
+Replaced the global ceiling entirely with a per-read price comparison:
+  price_map(i)    = m_i * bytes_per_mismatch
+  price_append(i) = (L / (k_i + 1)) * bytes_per_base + 2*log2(pg)/8
+where k_i is seed multiplicity among append candidates, and the byte rates were
+MEASURED in-run on a bounded sample rather than assumed.
+
+Result, against the swept true optima:
+  halo   3,078,279 vs 2,615,204   +463,075  (17.7% worse)
+  ecoli  8,827,480 vs 7,857,809   +969,671  (12.3% worse)
+  sulfo  3,214,714 vs 3,191,341    +23,373
+
+Diagnostic: it demoted almost nothing (1,903 / 15,311 / 171 reads). With
+bpm ~ 0.69 and bpb ~ 0.25 the map price only exceeds the append price above ~54
+mismatches, so it effectively ran at the permissive ceiling L/3 -- which the
+sweep already shows is far past optimal.
+
+WHY IT CANNOT WORK, stated precisely: the decisions are COUPLED. Mapping read i
+removes it from the append pool, which destroys redundancy for every OTHER
+leftover -- which is exactly why r_second collapses 93% -> 8% as MAXMAP rises.
+Appending is cheap only BECAUSE other similar reads are also appended.
+
+This breaks the LZ optimal-parsing analogy that motivated the attempt. In LZ
+parsing, positions are independent given a fixed model, so per-item pricing is
+optimal. Here they are not. This is a coupled combinatorial problem and no
+per-read price function can express it, regardless of which terms are added.
+
+Three attempts, three failures, all recorded rather than patched:
+  1. m* = L(1-r)*bpb/bpm                      55.5% error, systematic under-predict
+  2. + mem_triples reference cost             45.3% error, errors mixed in sign
+  3. per-read pricing, measured rates         12-18% WORSE than the swept optimum
+
+What survives: total_size(MAXMAP) is unimodal on all three datasets tested
+(strictly descending then ascending, no violations). That is a real structural
+property and it licenses a search method -- ternary search reaches the true
+optimum in ~6 encodes against the current grid's 4, recovering 30,476 B on
+E. coli. It costs 2 more encodes, so it trades speed for size.
