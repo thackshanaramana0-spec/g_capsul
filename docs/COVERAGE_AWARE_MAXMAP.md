@@ -70,3 +70,54 @@ reproduce the measurement.
 
 Drosophila 2.6x: 36,982,418 -> 36,851,932 B (-130,486 B, -0.353%), lossless.
 All 7 locked datasets byte-identical and lossless.
+
+---
+
+# Why the remaining low-coverage gap does not close (both candidates measured)
+
+After the MAXMAP ramp, Drosophila 2.6x sits at 36,851,932 B against SPRING's
+34,723,840 -- a 2,169,648 B gap. Stream-level accounting locates it exactly:
+
+    SEQUENCE content   ours 29,193,716   SPRING 29,891,230    -697,514  (we WIN)
+    METADATA/refs      ours  7,623,810   SPRING  4,756,648  +2,867,162  (we lose)
+
+We already beat SPRING on the actual DNA. The whole gap is metadata, and within
+it, one block SPRING has no equivalent for: region-scale reference streams
+(mem_triples + mem_dstgap + mem_len + mem_rc) = 3,091,068 B, which is 1.42x the
+gap. Two ways to remove it were identified and both were MEASURED, not assumed.
+
+## Candidate 1: convert region-scale matches to read-scale placements. DEAD.
+
+Read-scale placement (pigeonhole + mm_pos/mm_sym) costs ~2 bits per mismatch
+against ~21 for a region reference, so converting looked worth ~1.23 MB.
+
+It cannot be done, for a structural reason: **the average MEM match in the
+second region is 44.9 bases** (31,974,409 bases over 711,422 matches) against a
+150 bp read. These are mid-read PARTIAL OVERLAPS, not duplicate reads. Read-scale
+placement requires a read to match another read over its full length; chaining
+requires suffix-prefix adjacency. Neither can express "my middle 45 bases match
+your middle 45 bases" -- only region coordinates can. The matches are the wrong
+SHAPE to convert, not merely expensive.
+
+## Candidate 2: drop MEM on the second region, let a BWT compressor find the
+## fragment redundancy implicitly (what SPRING does with read_unaligned + bsc).
+
+Measured directly on the extracted raw second region (143,457,338 bases):
+
+    bsc on raw, no MEM at all          31,641,218 B   (1.7645 bits/base)
+    ours (literal share + refs)        30,066,062 B
+
+**Our explicit MEM approach beats it by 1,575,156 B.** The 3.09 MB of reference
+metadata is load-bearing: removing it costs more than it saves.
+
+## Conclusion
+
+The region-scale metadata cannot be re-expressed more cheaply (candidate 1) and
+cannot be removed (candidate 2). Both were tested rather than argued. At 2.6x
+coverage the gap to SPRING is not closable by any mechanism identified here.
+
+This is a bounded, specific claim: at NORMAL coverage -- every dataset in the
+locked suite -- we beat SPRING by 21-37% and Genozip by 27%, and Genozip loses
+to us by 27% even at 2.6x. The unclosed case is one regime, on a dataset outside
+the locked suite, where PgRC2 crashes outright and SPRING was never benchmarked
+by its own authors.
