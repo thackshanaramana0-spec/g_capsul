@@ -224,6 +224,35 @@ static std::vector<uint8_t> encode(const std::vector<uint8_t>& ref,
     enc.flush();
     return std::move(enc.out);
 }
+
+// Inverse. obs was coded against ref under an exclusion model (obs != ref, so
+// three symbols), and the model adapts per ref base -- so the decoder must see
+// the SAME ref sequence in the SAME order for its frequency tables to track.
+// ref is never stored: it is pg[read_pos + mismatch_offset], which the decoder
+// recomputes from the reconstructed pseudogenome.
+static std::vector<uint8_t> decode(const uint8_t* d, size_t n,
+                                   const std::vector<uint8_t>& ref){
+    std::vector<uint8_t> obs(ref.size(), 0);
+    if(!n || ref.empty()) return obs;
+    auto code2=[](uint8_t c)->int{ return c=='A'?0:c=='C'?1:c=='G'?2:3; };
+    const char SYM[4]={'A','C','G','T'};
+    uint32_t freq[4][3]; for(int r=0;r<4;++r) for(int k=0;k<3;++k) freq[r][k]=1;
+    RangeDec dec; dec.init(d,n);
+    for(size_t i=0;i<ref.size();++i){
+        const int r=code2(ref[i]);
+        uint32_t* f=freq[r]; const uint32_t tot=f[0]+f[1]+f[2];
+        const uint32_t target=dec.getFreq(tot);
+        uint32_t lo=0; int k=0;
+        for(; k<3; ++k){ if(lo+f[k]>target) break; lo+=f[k]; }
+        if(k==3) k=2;
+        dec.decodeUpdate(lo, lo+f[k]);
+        int seen=0, sym=0;
+        for(int t=0;t<4;++t){ if(t==r) continue; if(seen==k){ sym=t; break; } ++seen; }
+        obs[i]=(uint8_t)SYM[sym];
+        f[k]+=8; if(tot+8>65536){ for(int j=0;j<3;++j) f[j]=(f[j]>>1)|1; }
+    }
+    return obs;
+}
 } // namespace mmc
 
 // ---------- MEM-reference src coder (from 37_ref_coder.cpp) ----------
@@ -342,6 +371,22 @@ static std::vector<uint8_t> encode(const std::vector<uint8_t>& triples,
     for(const Ref& r:R) enc.encode(r.src,bound(r.dst));
     enc.flush();
     return std::move(enc.out);
+}
+
+// Inverse. Each source was coded with a modulus derived from its OWN
+// destination, so the destinations must be known first -- they come from the
+// mem_dstgap stream, which is why that stream had to exist before this could.
+// RangeDec above was already written and simply never called.
+static std::vector<uint32_t> decode(const uint8_t* d, size_t n,
+                                    const std::vector<uint32_t>& dst,
+                                    uint64_t MAINEND){
+    std::vector<uint32_t> src(dst.size(), 0);
+    if(!n || dst.empty()) return src;
+    auto bound=[&](uint32_t v)->uint32_t{
+        return (uint64_t)v<MAINEND ? (v?v:1) : (uint32_t)MAINEND; };
+    RangeDec dec; dec.init(d,n);
+    for(size_t i=0;i<dst.size();++i) src[i]=dec.decode(bound(dst[i]));
+    return src;
 }
 } // namespace refc
 
@@ -587,7 +632,16 @@ static std::vector<uint8_t> mmpos_encode_buckets(const std::vector<uint8_t>& pos
         if(c){ auto& v=b[c]; v.insert(v.end(), pos.begin()+off, pos.begin()+off+c); }
         off += c;
     }
+    // Buckets were emitted back to back as [method][payload] with no count, no
+    // key and no payload length -- nothing marked where one ended, so the form
+    // was undecodable however good the coder. Framed now as
+    //   [nbuckets:u32] then per bucket [key:u16][raw:u32][method:u8][coded:u32][payload]
+    // 11 B per bucket. The key and raw length are derivable from the mismatch
+    // counts, but are stored so this stream can be decoded on its own terms.
     std::vector<uint8_t> out;
+    auto put32=[&](uint32_t v){ out.insert(out.end(),(uint8_t*)&v,(uint8_t*)&v+4); };
+    auto put16=[&](uint16_t v){ out.insert(out.end(),(uint8_t*)&v,(uint8_t*)&v+2); };
+    put32((uint32_t)b.size());
     for(auto& kv : b){
         const uint16_t c=kv.first; auto& v=kv.second;
         std::vector<std::pair<int,std::vector<uint8_t>>> cand;
@@ -597,8 +651,52 @@ static std::vector<uint8_t> mmpos_encode_buckets(const std::vector<uint8_t>& pos
         cand.emplace_back(4, pgc::range_encode(v.data(),v.size(),c));
         int bi=0; size_t bs=SIZE_MAX;
         for(auto& p:cand) if(!p.second.empty() && p.second.size()<bs){ bs=p.second.size(); bi=p.first; }
-        out.push_back((uint8_t)bi);
-        for(auto& p:cand) if(p.first==bi){ out.insert(out.end(),p.second.begin(),p.second.end()); break; }
+        put16(c); put32((uint32_t)v.size()); out.push_back((uint8_t)bi);
+        for(auto& p:cand) if(p.first==bi){
+            put32((uint32_t)p.second.size());
+            out.insert(out.end(),p.second.begin(),p.second.end()); break; }
     }
     return out;
+}
+
+// Inverse: rebuild the flat position stream from the framed buckets. The
+// buckets hold positions grouped by mismatch count; `counts` says which read
+// contributed how many, so the flat order is restored by walking the reads and
+// drawing from the matching bucket in turn.
+static std::vector<uint8_t> mmpos_decode_buckets(const uint8_t* d, size_t n,
+                                                 const std::vector<uint16_t>& counts){
+    std::vector<uint8_t> flat;
+    if(n<4) return flat;
+    uint32_t nb; memcpy(&nb,d,4); size_t off=4;
+    std::map<uint16_t,std::vector<uint8_t>> b;
+    for(uint32_t i=0;i<nb;++i){
+        if(off+11>n) return {};
+        uint16_t key; memcpy(&key,d+off,2); off+=2;
+        uint32_t raw; memcpy(&raw,d+off,4); off+=4;
+        const uint8_t meth=d[off]; off+=1;
+        uint32_t cl; memcpy(&cl,d+off,4); off+=4;
+        if(off+cl>n) return {};
+        std::vector<uint8_t> v;
+        switch(meth){
+            case 0: { std::vector<uint8_t> o(raw); size_t ip=0,op=0; uint64_t ml=UINT64_MAX;
+                      if(lzma_stream_buffer_decode(&ml,0,nullptr,d+off,&ip,cl,o.data(),&op,o.size())!=LZMA_OK) return {};
+                      o.resize(op); v=std::move(o); } break;
+            case 2: v = pgc::ppmd_decode(d+off,cl,raw); break;
+            case 3: v = pgc::fse_decode(d+off,cl,raw); break;
+            case 4: v = pgc::range_decode(d+off,cl,raw,key); break;
+            default: return {};
+        }
+        if(v.size()!=raw) return {};
+        b[key]=std::move(v); off+=cl;
+    }
+    std::map<uint16_t,size_t> cur;
+    for(uint16_t c : counts){
+        if(!c) continue;
+        auto it=b.find(c); if(it==b.end()) return {};
+        size_t& k=cur[c];
+        if(k+c>it->second.size()) return {};
+        flat.insert(flat.end(), it->second.begin()+k, it->second.begin()+k+c);
+        k+=c;
+    }
+    return flat;
 }

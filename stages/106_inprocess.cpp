@@ -140,15 +140,19 @@ struct Archive {
     FILE* out;
     size_t total=0;
     std::vector<std::pair<const char*,size_t>> parts;
-    Archive(const char* path, uint64_t pg_len, uint64_t main_end){
+    Archive(const char* path, uint64_t pg_len, uint64_t main_end, uint32_t minmem){
         out=fopen(path,"wb");
         if(!out) return;
         fwrite("CAPSULE\0",1,8,out);
-        uint16_t ver=1; fwrite(&ver,2,1,out);
+        uint16_t ver=2; fwrite(&ver,2,1,out);
         fwrite(&pg_len,8,1,out); fwrite(&main_end,8,1,out);
+        // MINMEM: mem_len stores (match length - MINMEM), and destination gaps
+        // are measured from the END of the previous match, so both the lengths
+        // and the destinations are unrecoverable without it.
+        fwrite(&minmem,4,1,out);
         nstream_pos=ftell(out);
         uint16_t ns=0; fwrite(&ns,2,1,out);       // patched in finish()
-        total += 8+2+8+8+2;
+        total += 8+2+8+8+4+2;
     }
     long nstream_pos=0; uint16_t nstreams=0;
     void put(const char* name, const std::vector<uint8_t>& coded){
@@ -2224,7 +2228,7 @@ int main(int argc,char** argv){
     // by paying 361 MB of disk I/O per 456 MB of input.
     {
         const char* apath = getenv("ARCHIVE") ? getenv("ARCHIVE") : "out.arcs2";
-        Archive ar(apath, (uint64_t)pg.size(), (uint64_t)main_pg_end);
+        Archive ar(apath, (uint64_t)pg.size(), (uint64_t)main_pg_end, (uint32_t)MINMEM);
         auto __t0 = std::chrono::steady_clock::now();
         auto CODED = [&](const char* nm){
             auto n = std::chrono::steady_clock::now();
@@ -2338,10 +2342,18 @@ int main(int argc,char** argv){
         jobs.push_back({"pos_abs",     [&]{ return best_encode(v_pos.data(), v_pos.size(), true); }});
         jobs.push_back({"pos_strand",  [&]{ return best_encode(v_str.data(), v_str.size(), false); }});
         jobs.push_back({"mm_sym",      [&]{ return mmc::encode(v_mr, v_mo); }});
+        // mm_pos: the encoder picks whichever of the flat and bucketed forms is
+        // smaller, but emitted no flag saying which -- the decoder had no way to
+        // know. One leading byte fixes it: 0 = flat, 1 = bucketed.
         jobs.push_back({"mm_pos",      [&]{
             auto flat = best_encode(v_mp.data(), v_mp.size());
             auto buck = mmpos_encode_buckets(v_mp, mmcounts);
-            return (!buck.empty() && buck.size() < flat.size()) ? buck : flat; }});
+            const bool useB = (!buck.empty() && buck.size()+1 < flat.size()+1);
+            std::vector<uint8_t> o; o.reserve((useB?buck.size():flat.size())+1);
+            o.push_back(useB?1:0);
+            const auto& src = useB?buck:flat;
+            o.insert(o.end(), src.begin(), src.end());
+            return o; }});
         jobs.push_back({"mm_cnt",      [&]{
             std::vector<uint8_t> cf, cv;
             if(mmcnt_split(mmcounts, cf, cv) && mmcnt_join(cf,cv,mmcounts.size())==mmcounts){
