@@ -1906,27 +1906,34 @@ int main(int argc,char** argv){
         // forward scan. This is the same exact-size-CSR fix already carried into
         // ARCS from this progression.
         lap("  [diag] entering MEM matching, before seed index");
+        // The seed index was built inline over pg[0, main_pg_end) and could not
+        // be rebuilt, so no pass could ever use a different source text. Wrapped
+        // as a lambda over (T, tlen); calling it with pg.data()/main_pg_end
+        // reproduces the original index exactly.
         std::vector<uint64_t> skey; std::vector<uint32_t> spos;
-        {
+        std::vector<uint32_t> htab;
+        size_t tsize=1; uint64_t TMASK=0;
+        auto hmix=[](uint64_t x){ x^=x>>33; x*=0xff51afd7ed558ccdULL; x^=x>>33; return x; };
+        auto build_index=[&](const char* T,size_t tlen){
             std::vector<std::pair<uint64_t,uint32_t>> tmp;
-            tmp.reserve(main_pg_end/STEP+16);
-            for(size_t p=0;p+MEMSEED<=main_pg_end;p+=STEP){
-                uint64_t k; if(packM(pg.data()+p,k)) tmp.push_back({k,(uint32_t)p});
+            tmp.reserve(tlen/STEP+16);
+            for(size_t p=0;p+MEMSEED<=tlen;p+=STEP){
+                uint64_t k; if(packM(T+p,k)) tmp.push_back({k,(uint32_t)p});
             }
             std::sort(tmp.begin(),tmp.end());
             skey.resize(tmp.size()); spos.resize(tmp.size());
             for(size_t i=0;i<tmp.size();++i){ skey[i]=tmp[i].first; spos[i]=tmp[i].second; }
-        }
-        size_t tsize=1; while(tsize < skey.size()*2+1) tsize<<=1;
-        const uint64_t TMASK=tsize-1;
-        std::vector<uint32_t> htab(tsize,UINT32_MAX);
-        auto hmix=[](uint64_t x){ x^=x>>33; x*=0xff51afd7ed558ccdULL; x^=x>>33; return x; };
-        for(size_t i=0;i<skey.size();++i){
-            if(i && skey[i]==skey[i-1]) continue;       // first occurrence only
-            size_t h=hmix(skey[i])&TMASK;
-            while(htab[h]!=UINT32_MAX) h=(h+1)&TMASK;
-            htab[h]=(uint32_t)i;
-        }
+            tsize=1; while(tsize < skey.size()*2+1) tsize<<=1;
+            TMASK=tsize-1;
+            htab.assign(tsize,UINT32_MAX);
+            for(size_t i=0;i<skey.size();++i){
+                if(i && skey[i]==skey[i-1]) continue;   // first occurrence only
+                size_t h=hmix(skey[i])&TMASK;
+                while(htab[h]!=UINT32_MAX) h=(h+1)&TMASK;
+                htab[h]=(uint32_t)i;
+            }
+        };
+        build_index(pg.data(), main_pg_end);
         auto lookup=[&](uint64_t k)->uint32_t{
             size_t h=hmix(k)&TMASK;
             while(htab[h]!=UINT32_MAX){ if(skey[htab[h]]==k) return htab[h]; h=(h+1)&TMASK; }
@@ -2158,6 +2165,32 @@ int main(int argc,char** argv){
                 std::string R=Q; rc_inplace(R);
                 nm_second+=run(R.data(),qlen,CROSS,cr2,true,main_pg_end);
                 for(size_t i=0;i<qlen;++i) if(cr2[i]) c2[qlen-1-i]=1;
+                // The second region is matched against the MAIN pg only, so it
+                // can never reference itself. Where the main pg is large that is
+                // invisible; where it is small nothing is removed. SARS-CoV-2:
+                // 14.8 MB second region, 2.4% removed, against 74.3% repeat
+                // 32-mers -- the redundancy is there and unreachable by
+                // construction.
+                //
+                // Decodability: the decoder applies references in dst order, so
+                // a source must already be reconstructed, i.e. src+len <= dst.
+                // SELF_FWD enforces exactly that at match time (s<qp, capL=qp-s)
+                // in region-local coordinates, and DSTBASE/SRCBASE shift source
+                // and destination by the same main_pg_end, so the invariant
+                // survives the lift into pseudogenome coordinates.
+                if(getenv("SECOND_SELF")){
+                    const int SSMODE=atoi(getenv("SECOND_SELF"));  // 1=fwd only, 2=fwd+rc
+                    std::vector<uint8_t> c3(qlen,0), cr3(qlen,0);
+                    build_index(Q.data(), qlen);              // index the second region
+                    nm_second+=run(Q.data(),qlen,SELF_FWD,c3,false,main_pg_end,
+                                   Q.data(),qlen,main_pg_end);
+                    if(SSMODE>=2){ std::string R3=Q; rc_inplace(R3);
+                      nm_second+=run(R3.data(),qlen,SELF_RC,cr3,true,main_pg_end,
+                                     Q.data(),qlen,main_pg_end); }
+                    for(size_t i=0;i<qlen;++i) if(cr3[i]) c3[qlen-1-i]=1;
+                    for(size_t i=0;i<qlen;++i) if(c3[i]) c2[i]=1;
+                    build_index(pg.data(), main_pg_end);      // restore
+                }
                 for(size_t i=0;i<qlen;++i) if(c2[i]) ++rem_second;
             }
         }

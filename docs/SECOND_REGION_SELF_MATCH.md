@@ -70,3 +70,60 @@ the whole change was reverted rather than gated.
    attempted earlier this session and all three failed.
 
 The opportunity is real and quantified. The implementation is not correct yet.
+
+---
+
+# Third attempt (this session): it works structurally, and is still lossy
+
+The refactor was done in steps that each had to be byte-identical, so a
+regression could not hide inside it:
+
+| step | change | H. salinarum / E. coli / S. acidocaldarius |
+|---|---|---|
+| A | parse_range takes (S, slen); 3 hardcoded pg/main_pg_end sites removed | BYTE-IDENTICAL |
+| B | run() takes (S, slen, SRCBASE); src lifted like dst already was | BYTE-IDENTICAL |
+| C | seed index build wrapped as a rebuildable lambda over (T, tlen) | BYTE-IDENTICAL |
+| D | second-region SELF_FWD/SELF_RC pass behind SECOND_SELF | flag off: BYTE-IDENTICAL |
+
+## What it proves
+
+The redundancy is reachable. On SARS-CoV-2 the second region goes from
+**2.7% removed to 94.8% removed** -- 11,661,006 -> 604,544 bases -- which
+matches the 74.3% repeat-32-mer measurement. The pass finds what was predicted.
+
+## What is still wrong
+
+**It is lossy, and NOT for the reason the previous attempt recorded.** That note
+said "the RC path with a non-zero SRCBASE is the first place to look". Bisected
+with SECOND_SELF=1 (forward only) versus 2 (forward + RC):
+
+    SECOND_SELF=1  fwd only  archive 920,083  LOSSY  94.8% removed
+    SECOND_SELF=2  fwd+rc    archive 927,119  LOSSY  94.8% removed
+
+Forward alone is lossy, so the RC path is not the cause and that hypothesis is
+withdrawn.
+
+Two things were checked and are NOT the cause:
+
+- **The decodability invariant holds.** The decoder applies references in dst
+  order, so a source must already be reconstructed: src+len <= dst. Measured
+  over all 100,675 emitted references: **0 violations**, forward and RC alike.
+- **The pseudogenome reconstructs structurally.** 11,665,734 bytes from 100,675
+  references with the literal fully consumed (617,465 bytes, exact). The
+  reference stream is self-consistent; the reads come out 45.4% correct, so the
+  references copy the wrong CONTENT, not from the wrong place.
+
+That combination -- correct ordering, exact literal accounting, wrong bases --
+is the remaining puzzle. The next thing to test is whether the encoder's own
+dumps reconstruct, which isolates encoder-side references from the archive path.
+That test was attempted here and did not run: the DUMP_* files were not written
+to the working directory, so its verdict is void, not evidence.
+
+## The economics are also unresolved, separately from correctness
+
+Even at 94.8% removal the archive GREW: 850,670 -> 920,083 B. Removing ~11 MB of
+literal cost 100,675 references. So even once correct, this needs the "when to
+run it" rule the earlier attempt also lacked -- and the earlier clean
+discriminator (unremoved-after-cross: SARS 97.8%, S. acidocaldarius 39.2%,
+E. coli 12.7%) is measurable at the right moment but is a threshold, and three
+cost models were already tried and failed.
