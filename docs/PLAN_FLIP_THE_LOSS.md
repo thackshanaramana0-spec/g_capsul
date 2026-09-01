@@ -110,3 +110,50 @@ is elsewhere -- report and revert, do not patch with a threshold.
 - Eliminating the second region: only 6% of span on this file, worth 7,752 B.
 - Copying their 3-way split: we already beat them on the main region
   (2,368,666 vs 2,450,403 surviving).
+
+---
+
+# RESULT: min-degree-first matching REFUTED
+
+Implemented and measured. Output byte-identical -- links 219,688, mean overlap
+0.896, chains 13,436, pg 9,134,100, archive 3,191,341, all unchanged.
+
+The reordering was verified to be happening (516,888 of 516,904 positions
+reordered at L=250). It changed nothing because the premise was wrong:
+
+    ccnt histogram at L=250, w=516,904 tails
+      0 candidates : 500,145  (96.8%)
+      1 candidate  :  13,330  ( 2.6%)
+      2+           :   3,429  ( 0.66%)
+
+**There is no contention to resolve.** 97% of open tails have no candidate at a
+given overlap level, and under 1% have more than one. Matching order is
+irrelevant when nearly every edge is uncontested.
+
+## What this reveals instead
+
+The assembly is **candidate-starved, not contended**. A tail links at the
+highest L where a partner exists at all, and for 97% of tails no partner exists
+at that L. So the lever is candidate GENERATION -- finding overlaps that exist
+but are not detected -- not the order in which found candidates are consumed.
+
+Three things bound generation, none yet measured:
+1. the round-2 seed is SW=16 exact bases at one offset; a single sequencing
+   error inside that window hides the overlap entirely
+2. `rcmp` then requires the FULL L-base overlap to match exactly, so one error
+   anywhere in a 225-base overlap kills the link
+3. CCAP=8 is not binding here (97% have zero, not eight)
+
+At ~1% error rate a 225-base exact overlap survives with probability ~0.99^450,
+so long overlaps are detectable only between error-free read pairs. PgRC2's
+`compareSuffixWithPrefix` is also exact, so this is not by itself the
+difference -- but it bounds how much any matching-order change could ever have
+achieved, which is zero, as measured.
+
+## Status of the diagnosis
+
+The diagnosis stands and is verified: our pg is 9,134,100 against their
+5,106,918 for near-identical read counts, and that drives both the reference
+(+89,579) and position (+61,451) losses. What is NOT yet identified is the
+mechanism by which their chaining reaches 21.1 bases/read where ours reaches
+39.2. Four hypotheses have now been tested and refuted; this one is the fourth.
