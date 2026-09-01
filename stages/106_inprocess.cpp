@@ -1110,12 +1110,40 @@ int main(int argc,char** argv){
     prc.assign(n,0);
     std::vector<uint32_t> leftovers;
     uint32_t multi=0;
+    const bool BOTHSIDE = getenv("BOTHSIDE") != nullptr;
     for(uint32_t i=0;i<n;++i){
         if(!admit[i]){ leftovers.push_back(i); continue; }   // excluded in round 1
         if(contained[i]) continue;                 // stage 42: its container carries it
         if(prv[i]!=NONE) continue;
         if(nxt[i]==NONE){ leftovers.push_back(i); continue; }
         ++multi;
+        // PgRC2 admits a read to the pseudogenome only if it is overlapped on
+        // BOTH sides (getBothSidesOverlappedReads, AbstractOverlapPseudoGenome
+        // Generator.cpp:64-85): a read with both a predecessor and a successor
+        // stays; everything else moves to the LQ set and is mapped instead. We
+        // emit whole chains, endpoints included, which is why our pseudogenome
+        // is 2.65x theirs on S. acidocaldarius -- 6,757,250 bases against
+        // 2,546,054 -- and every read position costs log2(span) more.
+        //
+        // The rule is uniform; its EFFECT is data-dependent. On long chains it
+        // drops almost nothing; on short chains it drops most reads. A chain of
+        // length 2 contributes nothing, both reads being endpoints.
+        if(BOTHSIDE){
+            uint32_t len=1; for(uint32_t c=i; nxt[c]!=NONE; c=nxt[c]) ++len;
+            if(len<3){
+                for(uint32_t c=i;;){ leftovers.push_back(c);
+                                     if(nxt[c]==NONE) break; c=nxt[c]; }
+                continue;
+            }
+            leftovers.push_back(i);                       // head: one side only
+            uint32_t cur=nxt[i];
+            ppos[cur]=pg.size(); rappend(pg,cur,0);
+            while(nxt[cur]!=NONE && nxt[nxt[cur]]!=NONE){
+                uint32_t o=ovl[cur]; cur=nxt[cur];
+                ppos[cur]=pg.size()-o; rappend(pg,cur,o); }
+            if(nxt[cur]!=NONE) leftovers.push_back(nxt[cur]);   // tail
+            continue;
+        }
         uint32_t cur=i; ppos[cur]=pg.size(); rappend(pg,cur,0);
         while(nxt[cur]!=NONE){ uint32_t o=ovl[cur]; cur=nxt[cur];
                                ppos[cur]=pg.size()-o; rappend(pg,cur,o); }
