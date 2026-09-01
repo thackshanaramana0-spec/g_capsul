@@ -177,7 +177,7 @@ Each was implemented and measured, not argued away.
 
 **Withdrawn conclusions:** libgomp barrier spin is NOT our bottleneck -- PgRC2
 spins MORE (24.21% vs 22.50%) and still finishes in a third the time. The real
-差 was page faults (1,089,328 vs 169,421), caused by a 64 MB LZMA dictionary
+differentiator was page faults (1,089,328 vs 169,421), caused by a 64 MB LZMA dictionary
 requested regardless of stream size.
 
 ---
