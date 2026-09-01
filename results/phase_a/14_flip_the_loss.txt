@@ -1,0 +1,71 @@
+Flipping S. acidocaldarius: sweep from L=Lmax, not L=Lmax-1
+
+## The defect
+
+A suffix-prefix overlap of exactly the read length IS an exact duplicate, and it
+is the ONLY length at which one can appear. Two identical 251-base reads do not
+overlap at L=250: that compares A[1..251) against B[0..250), equal only for a
+periodic read. The sweep started at Lmax-1, so duplicates were invisible to
+chaining.
+
+That forced duplicates into a separate pre-assembly dedup pass, which costs an
+orig2uid array over every ORIGINAL read. Two bad options, so a threshold was
+added to choose between them (dedup ON above 15% duplication, OFF below).
+
+S. acidocaldarius measures 9.4% duplication -> dedup OFF -> all 48,694 duplicate
+reads were carried into the pseudogenome. PgRC2's log on the same file:
+"Found 48694 duplicates" -- the identical count, removed for free, because in
+their chain mechanism a duplicate is simply a 100%-length overlap.
+
+The code's own comment had already identified this ("who pay nothing there -- a
+duplicate is just a 100%-length overlap in their chain mechanism") and worked
+around it with the threshold instead of implementing it.
+
+## The change
+
+    for(uint32_t L=Lmax; ...)      // was Lmax-1
+
+At L = rlen[a] the offset is 0, so the seed is the read's own prefix and rcmp
+compares the two reads in full -- exactly the duplicate test. The existing
+ch_h[a]==b guard already prevents a 2-cycle. One token; the domain of the sweep
+now includes the case that expresses duplication.
+
+## Effect on S. acidocaldarius
+
+    pg after chains   9,134,100 -> 6,157,270   (-32.6%)
+    chains               13,436 ->     6,619   (halved)
+    links               219,688 ->   242,511
+    archive           3,191,341 -> 3,104,624
+    vs PgRC2            -2.46%  ->   +0.33%    LOSS FLIPPED TO WIN
+
+## All 7 files, no regressions
+
+    sulfo   -86,717      paeru  -85,361      lmajor -59,874      halo -8,381
+    ecoli         0      pfalc        0      saureus      0
+    total  -240,333 B
+
+The three unchanged files are exactly those whose duplication exceeds 15%, so
+dedup was already ON and duplicates were already collapsed. The fix corrects
+precisely the case the threshold got wrong.
+
+## Standing
+
+    ecoli    7,855,707 vs  8,864,420  +11.38%
+    halo     2,606,073 vs  3,050,477  +14.57%
+    pfalc   16,293,690 vs 17,219,695   +5.38%
+    saureus 13,083,080 vs 13,595,003   +3.77%
+    lmajor  27,472,930 vs 28,272,652   +2.83%
+    paeru    8,876,933 vs  9,043,181   +1.84%
+    sulfo    3,104,624 vs  3,114,782   +0.33%
+    AGGREGATE 79,293,037 vs 83,160,210 +4.65%   (was +4.36%)
+
+7 of 7 wins. Lossless verified on S. acidocaldarius, E. coli, SARS-CoV-2,
+H. salinarum, P. aeruginosa and L. major.
+
+## How it was found
+
+Four structural hypotheses were tested and refuted first (per-region MINMEM,
+region-split positions, MINOV as a span lever, minimum-degree-first matching).
+The diagnosis that survived all four -- our pg 9,134,100 against their 5,106,918
+at near-identical read counts -- was then checked against PgRC2's own run log
+rather than inferred, and the duplicate counts were sitting there side by side.
