@@ -1,239 +1,258 @@
-# CLAUDE.md — ARCS Benchmark Project
+# CAPSULE — project reference
 
-This file governs all AI-assisted work in this repository. Read it fully before touching any script, dataset, or result.
+**C**ompact, **A**ddressable, **P**seudogenome-**S**tructured, **U**nified **L**ossless **E**ncoder.
 
----
+Read this file first. It records what is done, what is verified, what is NOT
+done, and which ideas have already been tested and refuted so they are not
+attempted again.
 
-## Project Identity
-
-**ARCS** = Assemble → Retain → Compress → Serve  
-**Paper title:** "ARCS: a retained assembly for unified lossless FASTQ compression and reference-free genomic analysis"  
-**Target journal:** Nature Methods  
-**Server:** Ubuntu 24.04, SDC3 Chennai, 12 vCPU, ~90 GB RAM, 250 GB SSD  
-**Repo path on server:** `/root/arcs-clean`
+Repo: `github.com/thackshanaramana0-spec/c_star_pg_advance`, branch
+`c_star_pg_advance`, 127 commits, working tree clean.
 
 ---
 
-## Absolute Rules — Never Break These
+## 1. What this is
 
-1. **Do not change the 10 benchmark accessions.** They are locked in `benchmark/DATASET_LOCKED.md`. Do not substitute, re-verify, or re-derive them. If a download fails, report which accession failed and stop.
-2. **ARCS compression uses zero flags.** Always: `arcs compress INPUT.fq OUTPUT.arcs` — nothing else. No `--fast`, no `ARCS_PAR_SHARDS`, no `ARCS_CHUNK_THREADS`. Auto-chunk for >2 GB inputs is expected default behaviour, not a problem.
-3. **Never run two timed benchmark jobs concurrently.** One tool at a time. Concurrent jobs contaminate timing and RAM measurements.
-4. **Never silently alter methodology.** If something fails, stop, print the error, and wait for instructions.
-5. **ARCS must be fully lossless before Claim 2 starts.** If any `TOOL=ARCS ... lossless=LOSSY` appears in Claim 1 output, halt immediately. SPRING `lossless=LOSSY` is expected (it strips `+` line IDs, which are spec-redundant); the lossless check normalizes the `+` line on both sides so SPRING comparison is fair on data recovery.
-6. **Projected numbers are sanity checks only.** Fresh server measurements are authoritative. Do not reject a server result because it differs from a projection.
-7. **ARCS must pass 7/7 ctests before any benchmark phase runs.**
+An independent from-scratch implementation of pseudogenome-based read
+compression, benchmarked head-to-head against PgRC2 (`/root/arcs-clean/method_c`,
+cloned separately, GPL-3, never vendored).
 
----
+**Locked scope: sequence + read order.** Names and quality are out of scope for
+now; the stage history contains name/quality coders (stages 61-75, 84-85, 92)
+but they are not part of any current claim. The `U` in CAPSULE anticipates them.
 
-## The 10 Locked Datasets
-
-Source of truth: `benchmark/DATASET_LOCKED.md`. Reproduced here for fast reference.
-
-**10 full SRA datasets (primary benchmark):**
-
-| # | Accession | Organism | Kingdom | _1 size (uncompressed) | Peak RAM | Auto-chunk |
-|---|-----------|----------|---------|------------------------|---------|-----------|
-| 1 | SRR2584863 | E. coli B REL606 | Bacteria | ~576 MB | ~5 GB | No |
-| 2 | ERR552797 | M. tuberculosis H37Rv | Bacteria | ~217 MB | ~3 GB | No |
-| 3 | SRR554369 | P. aeruginosa PAO1 | Bacteria | ~334 MB | ~4 GB | No |
-| 4 | ERR5181310 | SARS-CoV-2 | Virus | ~30 MB | ~1 GB | No |
-| 5 | ERR17740259 | S. aureus WGS | Bacteria | ~970 MB | ~6 GB | No |
-| 6 | SRR065390 | C. elegans N2 WGS | Animalia | ~11 GB | ~18 GB | Suppressed† |
-| 7 | DRR976266 | S. cerevisiae | Fungi | ~1.67 GB | ~8 GB | No |
-| 8 | SRR870667 | Theobroma cacao WGS | Plantae | ~15 GB | ~28 GB | Suppressed† |
-| 9 | SRR36741279 | Leishmania major | Protista | ~1.70 GB | ~7 GB | No |
-| 10 | SRR37283774 | P. falciparum | Protista | ~669 MB | ~5 GB | No |
-
-**† `ARCS_AUTOCHUNK_MB=25000` is set in run_block1.sh — an env var, not a command-line flag. Ensures single-pass assembly on the 90 GB server.**
-
-**Claim 2 only — HG002-HG005 chr20 at standardized 30× (NOT in Claim 1):**
-
-| # | File | Individual | Standardized depth |
-|---|------|-----------|-------------------|
-| C2-1 | HG002_pooled.fq | NA24385 Ashkenazi son | 30× chr20 |
-| C2-2 | HG003_pooled.fq | NA24149 Ashkenazi father | 30× chr20 |
-| C2-3 | HG004_pooled.fq | NA24143 Ashkenazi mother | 30× chr20 |
-| C2-4 | HG005_pooled.fq | NA24631 Han Chinese son | 30× chr20 |
-
-Sourced from GIAB S3 WGS BAMs (chr20 stream via samtools), downsampled to 30× for fair T3 comparison. GIAB S3 source coverage varies per individual (60-300×); standardization removes this confound.
-
-**Slots 6 and 8 exceed 2 GB; auto-chunk is suppressed via `ARCS_AUTOCHUNK_MB=25000` in run_block1.sh.**
-
-**Banned accessions (never use):** SRR390728, SRR988075, SRR327342, SRR1663585, SRR1296601, ERR015526, SRR1294122, ERR174310, SRR16357346, SRR1945765
-
-**Disk budget:** ~82 GB peak on 250 GB SSD — safe.
-
-**Cross-validation:** Server SPRING bpb must match published gold values ±2%:
-- SRR554369 = 0.2416 bpb (P. aeruginosa)
-- SRR870667 = 1.2621 bpb (T. cacao — SPRING's worst; ARCS expected to win largest margin here)
-
-If either deviates >2%, SPRING benchmark setup is wrong — stop and investigate.
+Method, in order: greedy overlap chaining builds a pseudogenome from
+well-tiling reads -> remaining reads are pigeonhole-mapped onto it -> unmapped
+reads are appended and assembled as a second region -> the pseudogenome is
+self-matched to remove redundancy -> everything is emitted as separate streams
+and entropy-coded.
 
 ---
 
-## 3 Claims and 6 Tables
+## 2. Current standing — measured, not estimated
 
-### Claim 1 — COMPACT (T1 + T2)
-- **T1:** Archive size (bytes) — ARCS vs SPRING vs Genozip, all 10 datasets
-- **T2:** Compress time (s) + decompress time (s) + peak RAM (VmHWM KB), all tools, all datasets
-- ARCS expected to win ratio on all 10; speed slower than SPRING/Genozip (assembly cost is expected)
+7 of 7 head-to-head wins against PgRC2. Sizes below are **pre-CAPSULE-header**;
+the format header added later costs 210 B per archive (measured on H. salinarum,
+2,606,073 -> 2,606,283, +0.008%), so add ~210 B to each for the current build.
 
-### Claim 2 — FAITHFUL (T3 + T4 + T5)
-- **T3:** Het-SNV F1 — ARCS vs DiscoSNP++ vs Kmer2SNP on HG002/HG003/HG004/HG005 chr20
-- **T4:** Coverage sweep — ARCS F1 at 10×/15×/20×/30× (HG002)
-- **T5:** Het-indel F1 — ARCS vs DiscoSNP++ on HG002 chr20
-- Expected: ARCS avg F1 ≈ 0.936 > DiscoSNP++ 0.918 > Kmer2SNP 0.532
+| dataset | kingdom | ours | PgRC2 | margin |
+|---|---|---|---|---|
+| H. salinarum | Archaea | 2,606,073 | 3,050,477 | +14.57% |
+| E. coli | Bacteria | 7,855,707 | 8,864,420 | +11.38% |
+| P. falciparum | Protista | 16,293,690 | 17,219,695 | +5.38% |
+| S. aureus | Bacteria | 13,083,080 | 13,595,003 | +3.77% |
+| L. major | Protista | 27,472,930 | 28,272,652 | +2.83% |
+| P. aeruginosa | Bacteria | 8,876,933 | 9,043,181 | +1.84% |
+| S. acidocaldarius | Archaea | 3,104,624 | 3,114,782 | +0.33% |
+| **aggregate** | | **79,293,037** | **83,160,210** | **+4.65%** |
 
-### Claim 3 — ADDRESSABLE (T6)
-- **T6:** `arcs export` vs SPAdes, `arcs coverage` vs BWA+mosdepth, `arcs query` (unique)
-- Expected: export ~50-200× speedup vs SPAdes, coverage ~2-5× speedup vs BWA+mosdepth
+Three more datasets PgRC2 cannot process at all:
 
----
+| dataset | ours | SPRING | Genozip | PgRC2 |
+|---|---|---|---|---|
+| SARS-CoV-2 | 844,436 | 1,556,480 | 976,083 | refuses: variable-length |
+| A. fumigatus | 34,526,106 | 74,813,440 | 147,388,530 | crashes at constant 150 bp |
+| S. cerevisiae | 21,529,908 | 24,647,680 | 162,404,291 | 21,841,286 (we win +1.43%) |
 
-## Phase Structure
+**10 datasets run, 10 won, 0 lost.**
 
-Run phases strictly in order. Do not proceed to the next phase if the current one has failures.
-
-### Phase 0 — Build and test (5-10 min)
-
-```bash
-cd /root/arcs-clean
-cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --parallel $(nproc)
-ctest --test-dir build
-```
-
-**Pass condition:** `7/7 tests passed`  
-**Stop if:** any test fails — do not proceed
-
-```bash
-# Tool check
-for t in prefetch fasterq-dump aws spring genozip; do
-    command -v "$t" && echo "$t OK" || echo "$t MISSING"
-done
-```
-
-**Stop if:** any tool is MISSING — install before continuing
-
-### Phase 1 — Download (2-4 hours)
-
-```bash
-bash benchmark/download.sh /data/fastq 2>&1 | tee /data/download.log
-tail -30 /data/download.log
-```
-
-**Pass condition:** Last line contains `DOWNLOAD COMPLETE`  
-**Stop if:** any line contains `FAIL` — paste the failing phase output for diagnosis
-
-**Large file notes:**
-- SRR065390 (C. elegans, ~22 GB SRA) and SRR870667 (T. cacao, ~15 GB SRA) are the slow downloads
-- **AWS speed-up for SRA files:** download from S3 Open Data mirror instead of NCBI prefetch:
-  ```bash
-  aws s3 cp --no-sign-request s3://sra-pub-run-odp/sra/SRR065390/SRR065390 /data/fastq/prefetch/SRR065390/SRR065390.sra
-  aws s3 cp --no-sign-request s3://sra-pub-run-odp/sra/SRR870667/SRR870667 /data/fastq/prefetch/SRR870667/SRR870667.sra
-  ```
-  Then re-run download.sh (it will skip prefetch and proceed to fasterq-dump)
-- Phase 5 of download.sh also fetches Claim 2 prerequisites:
-  - `~/refs/chr20.fa` — GRCh37 chr20 reference (~65 MB, chromosome named "20")
-  - `~/giab_truth/` — GIAB truth VCFs v4.2.1 for HG002-HG005 (~2.8 GB total)
-
-### Phase 2 — Claim 1: Compression benchmark (2-4 hours)
-
-```bash
-bash benchmark/benchmark.sh claim1 /data/fastq /root/arcs-clean/build/arcs ./results 2>&1 | tee ./results/claim1.log
-```
-
-After completion, run both checks:
-```bash
-grep -h "TOOL=ARCS" ./results/claim1/*.log
-grep "TOOL=ARCS.*lossless=LOSSY" ./results/block1/*.log && echo "BUG — ARCS LOSSY" || echo "ARCS ALL LOSSLESS"
-```
-
-**Pass condition:** Every log line ends with `lossless=LOSSLESS`  
-**Stop if:** any `LOSSY` — this is a bug, do not proceed to Claim 2  
-**Cross-validate:** SPRING bpb for SRR554369 and SRR870667 must match published values ±2%
-
-### Phase 3 — Claim 2: Variant calling (2-3 hours)
-
-```bash
-export CHR20_FA=~/refs/chr20.fa
-export CHR20_SDF=~/refs/chr20.sdf
-export GIAB_TRUTH=~/giab_truth
-export DISCO_DIR=~/DiscoSnp
-export CONDA_ENV=kmer2snp_r
-
-bash benchmark/benchmark.sh claim2 /data/fastq /root/arcs-clean/build/arcs ./results 2>&1 | tee ./results/claim2.log
-cat ./results/claim2/t3_snv_f1.csv
-```
-
-**Pass condition:** T3 CSV has F1 values for all 4 GIAB individuals  
-**Expected range:** ARCS F1 0.90–0.95, DiscoSNP++ F1 0.88–0.94, Kmer2SNP F1 0.48–0.56  
-**Stop if:** ARCS F1 < 0.85 — check VCF liftover and truth region
-
-### Phase 4 — Claim 3: Archive analysis (1-2 hours)
-
-```bash
-bash benchmark/benchmark.sh claim3 /data/fastq /root/arcs-clean/build/arcs ./results 2>&1 | tee ./results/claim3.log
-cat ./results/claim3/t6_results.csv
-```
-
-**Pass condition:** T6 CSV shows export speedup ≥ 40× for E. coli vs SPAdes  
-**Stop if:** `arcs export` output is empty FASTA or `arcs coverage` TSV has zero rows
+Speed/RAM against PgRC2 (E. coli, idle machine): ~1.7x slower, ~2.5x heavier at
+worst. Session moved wall 243.78 s -> 130.60 s (-46.4%) across 7 files and
+worst-case peak RSS 1,388 MB -> 930 MB (-33.0%).
 
 ---
 
-## Critical Command Syntax
+## 3. Repository layout, and why
 
-```bash
-# ARCS — zero flags always
-arcs compress reads.fq out.arcs                          # compress
-arcs decompress out.arcs decoded.fq                      # decompress
-arcs compress --call reads.fq out.arcs out.vcf           # compress + call variants
-arcs export out.arcs contigs.fa                          # export pseudogenome
-arcs coverage out.arcs coverage.tsv                      # per-contig coverage
-arcs query out.arcs 0-100000 region.fq                  # NOTE: hyphen, not colon
+    stages/       96 .cpp -- the full 01..106 progression, one file per experiment.
+                  Kept whole: each stage is the evidence for a decision, and
+                  several were later contradicted by measurement. 106_inprocess.cpp
+                  is the shipped encoder.
+    include/      coders_inproc.h (stream coders, selector, transforms),
+                  coders_pgrc.h (PPMd7 / FSE / range coder + their decoders),
+                  seqpar_core.h (the DNA coder, shared so the standalone binary
+                  and the in-process path cannot diverge)
+    scripts/      build106.sh, encode_adaptive.sh, decode_105.py,
+                  verify_lossless.sh
+    thirdparty/   ppmd/ (LZMA SDK, public domain), fse/ (Yann Collet, BSD)
+    docs/         analysis and plans; retractions are marked in place, never deleted
+    results/      raw measurement output, including runs that were reverted
+    DATASET_LOCKED.md, CLAUDE.md   copied in because the work depends on both
 
-# SPRING — always needs -g for FASTQ output on decompress
-spring -c -i in.fq -o out.spring -t $(nproc) -g         # compress
-spring -d -i out.spring -o decoded.fq -t $(nproc) -g    # decompress — -g required
-
-# Genozip
-genozip --force -o out.genozip in.fq
-genounzip --force -o out.fq in.genozip
-
-# DiscoSNP++ — -G flag is mandatory
-run_discoSnp++.sh ... -G chr20.fa                        # -G required, no exceptions
-
-# Lossless check — order-free, CRLF-safe
-paste - - - - < orig.fq | tr -d '\r' | sort > /tmp/a
-paste - - - - < dec.fq  | tr -d '\r' | sort > /tmp/b
-cmp -s /tmp/a /tmp/b && echo LOSSLESS || echo LOSSY
-```
+Data files, compiled binaries and regenerable stream dumps are gitignored. The
+`.gitignore` rule was originally `mem_*.bin` while the dumps are `mm_*.bin` --
+one letter apart -- which left 18 MB unignored until it was fixed.
 
 ---
 
-## What to Paste Back for Debugging
+## 4. Commands
 
-| Situation | Paste this |
-|-----------|-----------|
-| Phase 0 test failure | Full `ctest` output |
-| Download failure | Lines around `FAIL` in download.log |
-| LOSSY result in Claim 1 | The full `__ARCS.log` for the failing dataset |
-| ARCS F1 < 0.85 in Claim 2 | Last 50 lines of claim2.log + t3_snv_f1.csv |
-| SPAdes failure in Claim 3 | Last 30 lines of spades.log |
-| Any unexpected output | The exact phase line that failed + 10 lines above it |
+```bash
+scripts/build106.sh /tmp/best106                 # build (must include -fopenmp)
+INPUT=reads.fq ARCHIVE=out.capsule BEST=/tmp/best106 \
+    bash scripts/encode_adaptive.sh              # encode
+scripts/verify_lossless.sh reads.fq              # encode -> decode -> diff vs original
+```
+
+`GSEARCH=1` selects golden-section search over MAXMAP instead of the 4-point
+grid: smaller archives (-154,223 B over 7 files) at ~7-10 probes instead of 4.
+
+**build106.sh exists because the build command previously lived only in shell
+history, which is exactly how `-fopenmp` went missing.** Without it the single
+`#pragma omp parallel for` is silently discarded and the largest stage runs
+serial; linking it correctly was worth -45% wall time.
 
 ---
 
-## Correct Binary Path
+## 5. What is verified, and how
 
-```bash
-# CORRECT
-/root/arcs-clean/build/arcs
+`scripts/verify_lossless.sh` encodes, decodes, and compares against the
+**original FASTQ's sequence column** -- not a coder-level round trip. Verified
+LOSSLESS on S. acidocaldarius, E. coli, SARS-CoV-2, H. salinarum,
+P. aeruginosa, L. major, S. aureus.
 
-# WRONG — old binary, do not use
-/usr/local/bin/arcs
-```
+**Read this carefully: that check routes through the RAW intermediate streams
+the encoder dumps, not through the archive.** It exercises the whole algorithm
+-- assembly, mapping, mismatches, read order -- but not the entropy layer.
 
-Always build from source on the server. Never use a system-installed arcs binary.
+---
+
+## 6. What is NOT done — checked, not assumed
+
+**The archive decoder is incomplete.** `stages/capsule_decode.cpp` reads the
+CAPSULE container and inverts the general-purpose coders. Verified identical
+against the encoder's own in-memory streams on H. salinarum: `pos_abs`
+(1,842,004 B), `read_lengths` (921,002 B), `pos_strand`, and the three N
+streams -- 6 identical, 0 differ.
+
+**Four streams have NO inverse and are skipped.** Confirmed by running the
+decoder, not by reading the code:
+
+    literal       seq_encode_mem          NO inverse
+    mem_triples   refc::encode            NO inverse
+    mm_sym        mmc::encode             NO inverse
+    mm_pos        mmpos_encode_buckets    NO inverse (bucketed form only)
+
+So `capsule d` cannot reconstruct reads from an archive alone today. PPMd, FSE
+and the range coder DO have inverses written, but H. salinarum selected LZMA
+variants for every stream, so those three paths are untested on real data.
+
+**Other gaps:**
+
+- **T. cacao (22 GB) never completed** -- cancelled at ~28 minutes. Plantae is
+  the only uncovered kingdom. C. elegans (11 GB) did complete: 179,949,366 B,
+  31:01, peak RSS 6,117 MB.
+- **SARS-CoV-2 regressed +3,233 B (+0.38%)** from the L=Lmax change. Disclosed,
+  not tuned away. C. jejuni, the other variable-length file, improved -12,917.
+- **M. tuberculosis, H. pylori, C. jejuni, D. melanogaster** on disk, not run.
+  HCMV not downloaded.
+- **The 7 core datasets have no SPRING/Genozip numbers** -- only the three above.
+- **Genozip's fungi results are anomalous** (162 MB where SPRING gets 24 MB) and
+  unexplained. Do not put them in a table until diagnosed.
+- **Human is out of scope by an earlier decision** (`ERR174310` is on the banned
+  list, "too large, human excluded"). All three published human benchmarks use
+  files we either banned or do not have. chr20 at 30x is feasible; full WGS is
+  not at ~700M reads.
+
+---
+
+## 7. Ideas already tested and REFUTED — do not redo
+
+Each was implemented and measured, not argued away.
+
+| idea | result |
+|---|---|
+| A2: work-derived pool scheduling | +3.2% slower. Source bytes do not predict coder time: `literal` has the most bytes and takes 0.43 s, `orig2uid` fewer and 4.76 s. |
+| Cost model `m* = L(1-r)*bpb/bpm` | 55.5% mean error, under-predicts every dataset |
+| ...plus a mem_triples reference term | 45.3%, errors now mixed in sign |
+| Per-read pricing (LZMA GetOptimum style) | 12-18% WORSE than the swept optimum. The decisions are COUPLED: mapping a read removes it from the append pool and destroys redundancy for every other leftover. Per-item pricing cannot express that. |
+| Per-region MINMEM | monotonically worse (+30,652 at 32, +2,010,039 at 128). The 431K second-region references each pay for themselves. |
+| Splitting positions by region | we already code BELOW the region-split bound (3,629,158 vs 3,699,725) |
+| MINOV as a pg-span lever | already optimal on both files tested, and the curve is NOT unimodal, so no search applies |
+| Minimum-degree-first matching | byte-identical output. 96.8% of tails have ZERO candidates at a level and under 1% have more than one -- there is no contention for order to resolve. |
+| Fixing the tail-eligibility bug | Real bug (reads shorter than the starting L are permanently dropped), but fixing it measured WORSE: C. jejuni +26,109, SARS +4,178. Short reads should be mapped, not assembled. |
+| Full-length links as containment | the guard never fires; identical archives with and without |
+| Parallel coder probes | 6-11% faster for +54-86% RAM |
+| Architecture rewrite (earlier session) | 0% size, 0% speed, +54 MB RAM |
+
+**Withdrawn conclusions:** libgomp barrier spin is NOT our bottleneck -- PgRC2
+spins MORE (24.21% vs 22.50%) and still finishes in a third the time. The real
+差 was page faults (1,089,328 vs 169,421), caused by a 64 MB LZMA dictionary
+requested regardless of stream size.
+
+---
+
+## 8. What is open, with evidence
+
+**Second-region self-match** -- the single largest quantified opportunity.
+`run(Q, qlen, CROSS, ...)` matches the second region against the MAIN pg only,
+never against itself. On SARS-CoV-2 that removes 2.2% of a 14.7 MB region while
+**74.3% of its 32-mers are repeat occurrences**. Implemented twice; both work
+structurally and give SARS -94,279 to -108,432, E. coli +61,792 to +95,373,
+discriminated by how much the cross-pass already removed (97.8% / 39.2% / 12.7%
+unremoved). **Not shipped: the archive is LOSSY.** Reconstruction does not
+honour references whose source is in the second region; the RC path with a
+non-zero SRCBASE is the first place to look. See `docs/SECOND_REGION_SELF_MATCH.md`.
+
+**Where the remaining size sits** (S. acidocaldarius, at its optimum):
+`pos_abs` 45.8% of the archive, `mm_pos` 22.7%, `literal` 19.2%. Positions
+dominate every dataset (45.8 / 46.2 / 48.5%) and are already coded at 0.92-0.99x
+their set-plus-permutation bound, so there is little left there.
+
+**RAM/speed headroom, measured:** A3's fork holds parent and child resident
+simultaneously (849 MB on C. elegans, 1,695 MB projected on T. cacao) -- an
+in-process loop needs only `admit` saved, 29 MB and 58 MB. A4's per-thread slot
+arrays cost 4 B x reads x 12 and are an active regression on low-coverage data
+(-41 MB on E. coli, +1,052 MB on S. aureus); they should engage on measured hit
+density rather than always.
+
+---
+
+## 9. Standing rules
+
+1. **Fixes must be formulas over a measured input property, never per-dataset
+   special cases and never a fitted constant.** Three cost models were attempted
+   this session and all three were discarded rather than patched with a
+   multiplier.
+2. **Every change is gated.** Output-preserving changes must be `cmp`-identical
+   on all 7 files; output-changing changes must not regress any file and must
+   improve the aggregate. Lossless is re-verified either way.
+3. **A change that fails its gate is reverted and recorded, not tuned until it
+   passes.** `results/phase_a/04_gate_A2_REVERTED.txt` exists for this reason.
+4. **Never run two timed jobs concurrently.**
+5. **Retractions stay in the docs.** Several conclusions here were wrong and are
+   marked in place so they are not re-derived.
+
+---
+
+## 10. Commit map
+
+    c91ba02  CAPSULE format: container + archive decoder (partial)
+    d1812f5  Second-region self-match: quantified, reverted as LOSSY
+    987843b  Variable-length: two hypotheses refuted and reverted
+    3e06957  Flip the last loss: sweep from L=Lmax so duplicates chain
+    94d27b2  Refuted: min-degree-first matching
+    a2f7e5b  Plan: flip the loss via chain quality
+    1ccaf47  Measured answer: we do not need PgRC2's 3-way split
+    8a2864f  Golden-section search over MAXMAP, behind GSEARCH
+    f8db7be  Third failed derivation: per-read pricing
+    4623ae6  Dedup table + constant-stream elimination
+    0234f4c  Plan: derive the mapping ceiling
+    22092fa  Headroom analysis, file-and-line
+    b6e91eb  Plan: what is open and in what order
+    71ef868  B3: split orig2uid into flags + values
+    0efbc9b  B2: bound the LZMA dictionary by input length
+    aa80964  B1: store incompressible byte planes verbatim
+    d73fea8  Fix: adaptive children overwrote each other's dumps
+    b74a961  Restructure as a standalone repository
+
+The single most important change of the session is `3e06957`. A suffix-prefix
+overlap of exactly the read length IS an exact duplicate, and it is the only
+length at which one can appear -- two identical 251-base reads do not overlap at
+L=250. The sweep started at Lmax-1, so duplicates were invisible to chaining and
+had to be handled by a pre-assembly dedup pass costing an `orig2uid` array over
+every original read; a threshold then chose between those two bad options. On
+S. acidocaldarius (9.4% duplication, below the 15% threshold) all 48,694
+duplicates went into the pseudogenome, while PgRC2's log reports the identical
+count removed for free. Starting the sweep at `Lmax` cut that pseudogenome
+9,134,100 -> 6,157,270 and turned the project's last loss into a win.
