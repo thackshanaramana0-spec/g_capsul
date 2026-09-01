@@ -121,3 +121,74 @@ locked suite -- we beat SPRING by 21-37% and Genozip by 27%, and Genozip loses
 to us by 27% even at 2.6x. The unclosed case is one regime, on a dataset outside
 the locked suite, where PgRC2 crashes outright and SPRING was never benchmarked
 by its own authors.
+
+---
+
+# LOWCOV: the chaining floor, and why it is opt-in rather than a default
+
+SEEDW (round-1 chain seed width) was 16, with MINOV floored at 16 because a seed
+shorter than the overlap cannot find it. Both were set for normal coverage.
+Swept together on Drosophila SRR40104920 (2.6x), everything else fixed:
+
+| SEEDW/MINOV | archive | leftover_frac | second region |
+|---|---|---|---|
+| 16/16 | 36,851,932 | 0.812 | 134,787,263 |
+| 12/12 | 36,783,282 | 0.810 | 133,729,577 |
+| 10/10 | 36,558,158 | 0.802 | 133,000,521 |
+| **8/8** | **36,103,845** | **0.785** | **128,485,041** |
+
+Monotonic to the floor (8 is the hard limit -- "below this a seed is noise").
+-2.38% against the tuned baseline, and it works at the SOURCE: more reads chain,
+so the expensive second region shrinks by 6.3 M bases, rather than re-encoding
+the result.
+
+## Why it is NOT a default
+
+On the three datasets checked it wins on H. salinarum (-1.33%) and Drosophila
+(-2.38%) but LOSES on E. coli (+0.86%). Coverage does not explain the split --
+H. salinarum is 25.8x and E. coli 50.6x, both normal. No validated property
+separates them, and picking a threshold that happens to suit the 7 locked files
+is precisely the overfit this project forbids: an eighth dataset could land the
+wrong side of it.
+
+So LOWCOV changes no default. With it off, all 7 locked datasets are
+BYTE-IDENTICAL, which means an unseen dataset cannot regress -- a guarantee, not
+a hope. With it on, Drosophila 2.6x is 36,103,845 B and verified LOSSLESS.
+
+## Automatic detection was attempted and REJECTED
+
+Gating this automatically needs a coverage signal available BEFORE round 1,
+since that is the stage SEEDW controls. Two cheap estimators were built and
+measured:
+
+- 25-mer frequency histogram mode: returns 2 for EVERY dataset regardless of
+  true depth (a fixed-size read sample has low sample-coverage for all of them).
+- unique-kmer fraction: ranks P. aeruginosa at 26x (0.929) ABOVE Drosophila at
+  2.6x (0.919), because it conflates genome size with depth.
+
+Neither discriminates. The only signal that does separate the regimes is
+leftover_frac (locked 0.222-0.518, Drosophila 0.812), but it is known only
+AFTER round 1, so using it would mean re-running chaining. That restructuring is
+not done, and the mode stays explicit rather than guessed.
+
+## Low-coverage literature: the survey is now complete
+
+Four tools, four architectures, no low-coverage analysis in any of them:
+
+- SPRING / HARC (hash reorder): benchmarks 25-100x; singletons still 20-40% of
+  archive after their realignment rescue.
+- PgRC / PgRC2 (overlap graph): datasets 13-373x; crashes outright on ours.
+- Leon (probabilistic de Bruijn graph): "degrades similarly to other de novo
+  methods -- graph fragmentation is inherent to k-mer-level approaches".
+- mstcom (Hamming-shifting MST): no coverage statistics, no low-redundancy
+  analysis, no singleton fraction reported, and explicitly assumes a connected
+  graph.
+
+Every one silently avoids the regime.
+
+## Position after this work
+
+Drosophila 2.6x: 36,982,418 -> 36,103,845 B. Gap to SPRING 6.5% -> 3.97%.
+The residual 1,380,005 B is architectural: SPRING matches read-to-read (~2 bits
+per mismatch), we match region-to-region (~21 bits). Both routes around that are
+measured and refuted above.
