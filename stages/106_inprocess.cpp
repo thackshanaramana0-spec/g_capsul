@@ -276,7 +276,40 @@ int main(int argc,char** argv){
     FILE* ncf = STR.n_cnt.f;
     {
         std::ifstream f(argv[1]); std::string a,b,c,d;
-        std::unordered_map<uint64_t,std::vector<uint32_t>> seen; seen.reserve(1u<<21);
+        // Dedup index. This used to be
+        //     unordered_map<uint64_t, vector<uint32_t>>
+        // which costs a 48 B hash node PLUS a separately heap-allocated inner
+        // vector (~32 B of malloc header before a single id is stored) for every
+        // distinct read -- 80 B/read, and 1.24M individual allocations on
+        // E. coli. Measured: named structures at load total 119 MB against a
+        // 228 MB peak, and this map is the entire 109 MB difference; on L. major
+        // it projects to 362 MB of a 459 MB load peak.
+        //
+        // PgRC2 has no such structure at all: it sorts read INDICES into blocks
+        // by leading symbol and compares neighbours, one flat vector<uint32_t>
+        // (ParallelGreedySwiping...Generator.cpp:160-194). We cannot adopt that
+        // shape directly -- unique ids here must follow FIRST-OCCURRENCE order,
+        // which sorting destroys, and it would force packing duplicate reads too.
+        //
+        // What carries over is the principle: a flat array, no per-key
+        // allocation. Open addressing with a 32-bit hash tag beside the id, so a
+        // probe rejects a mismatch without unpacking the stored read. Semantics
+        // are unchanged -- same equivalence classes, same representative, same
+        // orig2uid -- so the archive must stay byte-identical.
+        struct DedupTable {
+            std::vector<uint32_t> uid;      // UINT32_MAX = empty
+            std::vector<uint32_t> tag;      // low 32 bits of the FNV hash
+            size_t mask = 0, used = 0;
+            void init(size_t cap){ size_t c=1; while(c<cap) c<<=1;
+                uid.assign(c,UINT32_MAX); tag.assign(c,0); mask=c-1; used=0; }
+            void grow(){ std::vector<uint32_t> ou=uid, ot=tag; size_t oc=uid.size();
+                uid.assign(oc*2,UINT32_MAX); tag.assign(oc*2,0); mask=oc*2-1;
+                for(size_t i=0;i<oc;++i) if(ou[i]!=UINT32_MAX){
+                    size_t j=ot[i]&mask;
+                    while(uid[j]!=UINT32_MAX) j=(j+1)&mask;
+                    uid[j]=ou[i]; tag[j]=ot[i]; } }
+        } seen;
+        seen.init(1u<<20);
         std::vector<uint64_t> tmpw; char ubuf[1024];
         auto packstr=[&](const char* q,uint32_t L,std::vector<uint64_t>& out){
             out.clear();
@@ -335,9 +368,14 @@ int main(int argc,char** argv){
                 rlen.push_back((uint16_t)b.size());
                 continue;
             }
-            auto& bk=seen[fnv(b.data(),(uint32_t)b.size())];
-            for(uint32_t id:bk){
-                if(rlen[id]!=(uint16_t)b.size()) continue;
+            const uint64_t h64=fnv(b.data(),(uint32_t)b.size());
+            const uint32_t htag=(uint32_t)h64;
+            size_t slot=htag&seen.mask;
+            for(;;){
+                const uint32_t id=seen.uid[slot];
+                if(id==UINT32_MAX) break;                 // empty: not present
+                if(seen.tag[slot]!=htag){ slot=(slot+1)&seen.mask; continue; }
+                if(rlen[id]!=(uint16_t)b.size()){ slot=(slot+1)&seen.mask; continue; }
                 const uint64_t* w=&rpk[woff[id]];
                 const uint32_t nw=((uint32_t)rlen[id]+31)/32;
                 for(uint32_t t=0;t<nw;++t){
@@ -347,10 +385,12 @@ int main(int argc,char** argv){
                     }
                 }
                 if(memcmp(ubuf,b.data(),b.size())==0){ dup=true; orig2uid.push_back(id); break; }
+                slot=(slot+1)&seen.mask;
             }
             if(!dup){
                 orig2uid.push_back((uint32_t)rlen.size());
-                bk.push_back((uint32_t)rlen.size());
+                seen.uid[slot]=(uint32_t)rlen.size(); seen.tag[slot]=htag;
+                if(++seen.used*2 > seen.uid.size()) seen.grow();
                 packstr(b.data(),(uint32_t)b.size(),tmpw);
                 woff.push_back(rpk.size());
                 rpk.insert(rpk.end(),tmpw.begin(),tmpw.end());
