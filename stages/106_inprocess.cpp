@@ -671,6 +671,7 @@ int main(int argc,char** argv){
     std::vector<uint64_t> seed(n,0);
     std::vector<uint8_t>  ok(n,0);
     std::vector<uint32_t> tails;
+    std::vector<uint32_t> open_tails;   // still-open tails, independent of level
     size_t links=0, probes=0;
     // `admit` selects which reads take part; everything else is reset per round.
     // Round 1 only LABELS reads (which ones sit interior to a chain), so its
@@ -687,7 +688,9 @@ int main(int argc,char** argv){
         std::fill(ovl.begin(),ovl.end(),0);    std::fill(ok.begin(),ok.end(),0);
         for(uint32_t i=0;i<n;++i){ ch_h[i]=i; ch_t[i]=i; }
         tails.clear(); tails.reserve(n);
-        for(uint32_t i=0;i<n;++i) if(admit[i]&&rlen[i]>=sweep_minov) tails.push_back(i);
+        open_tails.clear(); open_tails.reserve(n);
+        for(uint32_t i=0;i<n;++i) if(admit[i]&&rlen[i]>=sweep_minov) open_tails.push_back(i);
+        tails = open_tails;
     // STAGE 19. The sweep splits cleanly into a search and a commit.
     //
     // Everything expensive here -- the seed roll, the hash probe, and the
@@ -739,16 +742,38 @@ int main(int argc,char** argv){
     for(uint32_t L=Lmax; L>=sweep_minov && L>=SW; --L){
         #pragma omp single
         {
-        // compact to tails still open and still long enough at this L
-        size_t w=0;
-        for(uint32_t a:tails){
-            if(nxt[a]!=NONE) continue;                       // already extended
-            if(rlen[a]<L) continue;
+        // Two different filters were being applied to the same array, and only
+        // one of them is permanent.
+        //
+        //   nxt[a]!=NONE   the tail was extended -- it is done for good
+        //   rlen[a]<L      the read is shorter than THIS level's overlap
+        //
+        // The second is not permanent: L decreases every iteration, so a read
+        // too short at L becomes eligible at L-1. Dropping it from `tails`
+        // removed it from every remaining level too. On constant-length reads
+        // the test never fires and nothing is lost, which is why all 7
+        // benchmark datasets are byte-identical either way -- they are all
+        // constant length. On variable-length reads it discards nearly the
+        // whole file at the first level: SARS-CoV-2 has 103 distinct lengths
+        // from 31 to 221, so at L=221 every read but the longest was dropped
+        // permanently.
+        //
+        // `open_tails` now holds the permanent filter and the per-level length
+        // test selects into `tails` without destroying anything.
+        size_t ow=0;
+        for(uint32_t a:open_tails){
+            if(nxt[a]!=NONE) continue;                       // extended: done for good
+            open_tails[ow++]=a;
+        }
+        open_tails.resize(ow);
+        tails.clear();
+        for(uint32_t a:open_tails){
+            if(rlen[a]<L) continue;                          // not at THIS level; keep for later
             const uint32_t off=(uint32_t)rlen[a]-L;          // grows by 1 per length
             if(off+SW>rlen[a]) continue;
-            tails[w++]=a;                                    // still open: keep
+            tails.push_back(a);
         }
-        tails.resize(w);
+        const size_t w=tails.size(); (void)w;
         // `break` cannot leave an OpenMP structured block, so the exit
         // condition becomes a shared flag tested after the implicit barrier.
         if(tails.empty()) sweep_done=true;
@@ -1120,6 +1145,7 @@ int main(int argc,char** argv){
     // RSS is set. It is next needed by the survivor sweep, which runs over ~13k
     // reads rather than 851k, so it is cheaper to drop it here and rebuild a
     // small one there than to carry the full one through.
+    phase("greedy-sweep");
     // STAGE 41: return the freed arena to the OS.
     //
     // Three targeted reductions in a row measured ZERO -- ppos uint64->uint32
