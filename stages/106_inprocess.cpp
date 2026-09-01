@@ -660,7 +660,25 @@ int main(int argc,char** argv){
     size_t pr_total=0;
     #pragma omp parallel
     {
-    for(uint32_t L=Lmax-1; L>=sweep_minov && L>=SW; --L){
+    // Start at Lmax, not Lmax-1. A suffix-prefix overlap of exactly the read
+    // length IS an exact duplicate, and it is the only length at which one can
+    // appear: two identical 251-base reads do NOT overlap at L=250, because
+    // that compares A[1..251) against B[0..250), equal only for a periodic read.
+    // Excluding L=Lmax therefore made duplicates invisible to chaining, which is
+    // why they had to be handled by a separate pre-assembly dedup pass -- and
+    // that pass costs an orig2uid array over every ORIGINAL read, which is why a
+    // threshold was then needed to decide between two bad options.
+    //
+    // PgRC2 needs no such pass and no such threshold: a duplicate is simply a
+    // 100%-length overlap in their chain mechanism, contributing zero bases.
+    // Measured on S. acidocaldarius, they remove 48,694 duplicates this way
+    // while our dedup threshold (9.4% < 15%) turned dedup OFF and carried all
+    // 48,694 into the pseudogenome.
+    //
+    // At L = rlen[a] the offset is 0, so the seed is the read's own prefix and
+    // rcmp compares the two reads in full -- exactly the duplicate test. The
+    // existing ch_h[a]==b guard already prevents a 2-cycle.
+    for(uint32_t L=Lmax; L>=sweep_minov && L>=SW; --L){
         #pragma omp single
         {
         // compact to tails still open and still long enough at this L
