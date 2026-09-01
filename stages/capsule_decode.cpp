@@ -92,13 +92,13 @@ std::vector<uint8_t> capsule_decode_stream(const std::vector<uint8_t>& in, size_
 // ---- container walk ---------------------------------------------------------
 struct Stream { std::string name; std::vector<uint8_t> coded; };
 static bool read_capsule(const char* path, uint64_t& pg_len, uint64_t& main_end,
-                         std::vector<Stream>& out){
+                         uint32_t& minmem, std::vector<Stream>& out){
     FILE* f=fopen(path,"rb"); if(!f) return false;
     char magic[8]; if(fread(magic,1,8,f)!=8 || memcmp(magic,"CAPSULE\0",8)){ fclose(f); return false; }
     uint16_t ver=0, ns=0;
-    if(fread(&ver,2,1,f)!=1 || fread(&pg_len,8,1,f)!=1 || fread(&main_end,8,1,f)!=1
-       || fread(&ns,2,1,f)!=1){ fclose(f); return false; }
-    if(ver!=1){ fprintf(stderr,"capsule: unsupported version %u\n",ver); fclose(f); return false; }
+    if(fread(&ver,2,1,f)!=1 || fread(&pg_len,8,1,f)!=1 || fread(&main_end,8,1,f)!=1){ fclose(f); return false; }
+    if(ver!=2){ fprintf(stderr,"capsule: unsupported version %u (expect 2)\n",ver); fclose(f); return false; }
+    if(fread(&minmem,4,1,f)!=1 || fread(&ns,2,1,f)!=1){ fclose(f); return false; }
     for(uint16_t i=0;i<ns;++i){
         uint8_t nl=0; if(fread(&nl,1,1,f)!=1) break;
         std::string nm(nl,'\0'); if(nl && fread(&nm[0],1,nl,f)!=nl) break;
@@ -110,10 +110,11 @@ static bool read_capsule(const char* path, uint64_t& pg_len, uint64_t& main_end,
     fclose(f); return out.size()==ns;
 }
 
+#ifndef CAPSULE_NO_MAIN
 int main(int argc,char** argv){
     if(argc<3){ fprintf(stderr,"usage: %s <in.capsule> <outdir> [--verify dumpdir]\n",argv[0]); return 2; }
-    uint64_t pg_len=0, main_end=0; std::vector<Stream> ss;
-    if(!read_capsule(argv[1],pg_len,main_end,ss)){ fprintf(stderr,"capsule: bad archive\n"); return 1; }
+    uint64_t pg_len=0, main_end=0; uint32_t minmem=0; std::vector<Stream> ss;
+    if(!read_capsule(argv[1],pg_len,main_end,minmem,ss)){ fprintf(stderr,"capsule: bad archive\n"); return 1; }
     const std::string outdir=argv[2];
     const char* verify = (argc>4 && !strcmp(argv[3],"--verify")) ? argv[4] : nullptr;
     fprintf(stderr,"capsule v1  pg_len=%llu main_pg_end=%llu  streams=%zu\n",
@@ -152,3 +153,4 @@ int main(int argc,char** argv){
     if(verify) fprintf(stderr,"entropy round-trip: %zu identical, %zu differ, %zu not yet implemented\n",ok,bad,skipped);
     return bad?1:0;
 }
+#endif  // CAPSULE_NO_MAIN

@@ -286,9 +286,54 @@ static std::vector<uint8_t> seq_encode_mem(const std::vector<uint8_t>& sym,
         for(unsigned t=0;t<NTHREADS;++t) pool.emplace_back(worker);
         for(auto& th:pool) th.join();
     }
+    // CHUNK TABLE. The chunks were concatenated with no boundaries, so a
+    // decoder could not tell where one ended and the next began -- the archive
+    // was undecodable for this stream regardless of the coder. Emit
+    //   [nchunks:u32][total_syms:u64] then per chunk [raw_syms:u32][coded:u32]
+    // before the payloads. 8 + 8*nchunks bytes; at the default 4 chunks that is
+    // 40 B against a literal of 0.6-7.8 MB.
     std::vector<uint8_t> all;
     size_t tot=0; for(auto& b:chunkOut) tot+=b.size();
-    all.reserve(tot);
+    all.reserve(tot + 16 + 8*NCHUNKS);
+    auto put32=[&](uint32_t v){ all.insert(all.end(),(uint8_t*)&v,(uint8_t*)&v+4); };
+    auto put64=[&](uint64_t v){ all.insert(all.end(),(uint8_t*)&v,(uint8_t*)&v+8); };
+    put32((uint32_t)NCHUNKS); put64((uint64_t)n);
+    for(unsigned c=0;c<NCHUNKS;++c){
+        const size_t st=(size_t)c*chunkSz, en=std::min(n,st+chunkSz);
+        put32((uint32_t)(en>st?en-st:0));
+        put32((uint32_t)chunkOut[c].size());
+    }
     for(auto& b:chunkOut){ all.insert(all.end(), b.begin(), b.end()); b.clear(); b.shrink_to_fit(); }
+    return all;
+}
+
+// Inverse of seq_encode_mem. Reads the chunk table, then replays run_chunk in
+// decode mode over each chunk. run_chunk already had a `decode` parameter and a
+// BinDec; it had simply never been called from an archive path.
+static std::vector<uint8_t> seq_decode_mem(const uint8_t* d, size_t n){
+    initStretch();
+    if(n < 12) return {};
+    uint32_t nch; memcpy(&nch,d,4);
+    uint64_t total; memcpy(&total,d+4,8);
+    if(!nch || nch > (1u<<20)) return {};
+    const size_t tabOff = 12;
+    if(n < tabOff + (size_t)nch*8) return {};
+    std::vector<uint32_t> rawN(nch), codN(nch);
+    for(uint32_t c=0;c<nch;++c){
+        memcpy(&rawN[c], d+tabOff+(size_t)c*8,   4);
+        memcpy(&codN[c], d+tabOff+(size_t)c*8+4, 4);
+    }
+    size_t off = tabOff + (size_t)nch*8;
+    std::vector<std::vector<uint8_t>> got(nch);
+    for(uint32_t c=0;c<nch;++c){
+        if(!rawN[c]){ off += codN[c]; continue; }
+        if(off + codN[c] > n) return {};
+        std::vector<uint8_t> dummy_out;
+        run_chunk(nullptr, rawN[c], true, d+off, codN[c], dummy_out, got[c]);
+        off += codN[c];
+    }
+    std::vector<uint8_t> all; all.reserve(total);
+    for(auto& g : got) all.insert(all.end(), g.begin(), g.end());
+    if(all.size()!=total) return {};
     return all;
 }
