@@ -176,7 +176,28 @@ struct Archive {
     }
 };
 
+// ---- phase timing (CAPS_PHASE=1) --------------------------------------------
+// Speed work needs to know which phase owns the wall clock. perf attributes 60%
+// to coder threads and 9% to libgomp, but that does not say how much of the run
+// is assembly versus coding, which is the number that decides where to look.
+static const bool CAPS_PHASE = getenv("CAPS_PHASE") != nullptr;
+static std::chrono::steady_clock::time_point g_t0, g_tp;
+static void phase_init(){ g_t0 = g_tp = std::chrono::steady_clock::now(); }
+static void phase(const char* name){
+    if(!CAPS_PHASE) return;
+    auto now = std::chrono::steady_clock::now();
+    double d = std::chrono::duration<double>(now - g_tp).count();
+    double tot = std::chrono::duration<double>(now - g_t0).count();
+    long rss = 0;
+    if(FILE* f=fopen("/proc/self/status","r")){ char b[256];
+        while(fgets(b,sizeof b,f)) if(!strncmp(b,"VmHWM:",6)){ sscanf(b+6,"%ld",&rss); break; }
+        fclose(f); }
+    fprintf(stderr,"[PHASE] %-14s %7.2fs  cum %7.2fs  peakRSS %6ld MB\n", name, d, tot, rss/1024);
+    g_tp = now;
+}
+
 int main(int argc,char** argv){
+    phase_init();
     // RAM FIX -- confirmed real driver of the C. elegans-scale RSS gap
     // after three application-level hypotheses were measured and ruled
     // out (allrefs/cleanRefs double-holding, c/cr scope overlap, res[]
@@ -1293,6 +1314,8 @@ int main(int argc,char** argv){
         size_t msize=1; while(msize < ment.size()*2+1) msize<<=1;
         const uint64_t MMASK=msize-1;
         std::vector<uint32_t> mtab(msize,UINT32_MAX);
+        fprintf(stderr,"[MEMRPT] ment %zu entries = %zu MB   mtab %zu slots = %zu MB\n",
+                ment.size(), ment.size()*8/1000000, msize, msize*4/1000000);
         auto mmix=[](uint64_t x){ x^=x>>33; x*=0xff51afd7ed558ccdULL; x^=x>>33; return x; };
         for(size_t i=0;i<ment.size();++i){
             if(i && MKEY(i)==MKEY(i-1)) continue;
@@ -1763,7 +1786,7 @@ int main(int argc,char** argv){
         }
         fprintf(stderr,"[ORDER+POS] unique_placed=%zu (of %u unique reads)  positions raw=%zu B  strand raw=%zu B  lengths raw=%zu B  pos>255=%zu\n",
                 placed,n,dl.size(),sb.size(),lenarr.size()*2,bigd);
-        fprintf(stderr,"[POS] PgRC2 pays 683,370 B coded for its reads-list offsets\n");
+        fprintf(stderr,"[POS] PgRC2 pays 683,370 B coded for its reads-list offsets\n"); phase("MEM+positions");
     }
 
     // Nothing below this point reads the reads, the prefix index, or any of the
@@ -1839,7 +1862,7 @@ int main(int argc,char** argv){
             uint64_t k=0;
             for(size_t i=0;i<MEMSEED;++i){ int v=b2(q[i]); if(v<0) return false; k=(k<<2)|(uint64_t)v; }
             o=k; return true; };
-        fprintf(stderr,"[MEM] MINMEM=%zu seed=%zu step=%zu\n",MINMEM,MEMSEED,STEP);
+        fprintf(stderr,"[MEM] MINMEM=%zu seed=%zu step=%zu\n",MINMEM,MEMSEED,STEP); phase("assemble+map");
         // Candidates are scanned in index order and the LONGEST is kept, so a cap
         // does not merely bound work -- it can hide the best match entirely. Our
         // matches average 179 bases at MINMEM 45 against copMEM's 250, and a
@@ -2326,6 +2349,7 @@ int main(int argc,char** argv){
         // seqpar is itself threaded; give it fewer threads so it does not
         // oversubscribe against the other jobs running alongside it.
         unsigned HW = std::thread::hardware_concurrency(); if(!HW) HW = 12;
+
         // seqpar splits the literal into NCHUNKS coded independently, so the chunk
         // count is a COMPRESSION parameter, not just a threading one -- fewer
         // chunks means more context per chunk. Measured on E. coli literal:
@@ -2418,6 +2442,7 @@ int main(int argc,char** argv){
             unsigned NT = HW; if(NT > jobs.size()) NT = (unsigned)jobs.size();
             std::vector<double> jsec(jobs.size(),0.0);
             auto POOL0 = std::chrono::steady_clock::now();
+            phase("pre-coding");
             std::vector<std::thread> pool;
             for(unsigned t=0;t<NT;++t) pool.emplace_back([&]{
                 for(;;){ size_t i = next++; if(i >= jobs.size()) break;
@@ -2460,6 +2485,7 @@ int main(int argc,char** argv){
 
         ar.finish();
         lap("stream coding");
+        phase("CODING");
         fprintf(stderr,"[archive] rss before coding %zu MB, after %zu MB, peak %zu MB\n",
                 rss_before,rss_mb(),hwm_mb());
     }
