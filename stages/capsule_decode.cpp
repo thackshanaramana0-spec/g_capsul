@@ -16,6 +16,8 @@
 #include <map>
 #include <lzma.h>
 #include "coders_pgrc.h"
+#include "seqpar_core.h"
+#include "coders_inproc.h"
 
 // ---- inverse of xz_compress / xz_compress_lzma (both write .xz containers) --
 static std::vector<uint8_t> xz_decompress(const uint8_t* d, size_t n, size_t hint){
@@ -40,7 +42,6 @@ static std::vector<uint8_t> u32_unplane(const std::vector<uint8_t>& bp){
         for(size_t k=0;k<4;++k) out[i*4+k] = bp[k*cnt+i];
     return out;
 }
-static const uint8_t CONST_MARKER = 0xC0;
 
 // ---- inverse of best_encode / const_or_encode -------------------------------
 // Layout written by the encoder: [method:1][raw_len:8][payload]
@@ -110,47 +111,166 @@ static bool read_capsule(const char* path, uint64_t& pg_len, uint64_t& main_end,
     fclose(f); return out.size()==ns;
 }
 
+// Decode every stream, rebuild the pseudogenome, and write the raw streams the
+// read-reconstruction step consumes. The ONLY input is the archive.
+//
+// mm_sym is coded against ref under an adaptive model, and ref is never stored:
+// it is pg[read position + mismatch offset]. So the order is forced -- rebuild
+// the pseudogenome first, derive every ref in the encoder's own order (unique
+// read ascending, mismatch offset ascending), then decode the observed bases.
+static void put_file(const std::string& p, const void* d, size_t n){
+    FILE* f=fopen(p.c_str(),"wb"); if(!f) return;
+    if(n) fwrite(d,1,n,f); fclose(f);
+}
+static std::vector<uint64_t> varints(const std::vector<uint8_t>& v){
+    std::vector<uint64_t> o; size_t i=0;
+    while(i<v.size()){ uint64_t x=0; int sh=0;
+        while(i<v.size()){ uint8_t b=v[i++]; x|=(uint64_t)(b&0x7f)<<sh; sh+=7; if(!(b&0x80)) break; }
+        o.push_back(x); }
+    return o;
+}
+
+int capsule_decode_all(const char* arcpath, const std::string& outdir){
+    uint64_t PGLEN=0, MAINEND=0; uint32_t MINMEM=0; std::vector<Stream> ss;
+    if(!read_capsule(arcpath,PGLEN,MAINEND,MINMEM,ss)){ fprintf(stderr,"bad archive\n"); return 1; }
+    std::map<std::string,std::vector<uint8_t>> S;
+    for(auto& x:ss) S[x.name]=std::move(x.coded);
+    auto has=[&](const char* n){ return S.count(n)>0; };
+    auto dec=[&](const char* n,size_t w=1){ return has(n)?capsule_decode_stream(S[n],w):std::vector<uint8_t>(); };
+
+    // ---- literal: 2-bit codes -> ACGT --------------------------------------
+    auto litcode = seq_decode_mem(S["literal"].data(), S["literal"].size());
+    std::vector<uint8_t> literal(litcode.size());
+    { const char M[4]={'A','C','G','T'};
+      for(size_t i=0;i<litcode.size();++i) literal[i]=(uint8_t)M[litcode[i]&3]; }
+
+    // ---- references --------------------------------------------------------
+    auto gaps = varints(dec("mem_dstgap"));
+    auto lraw = varints(dec("mem_len"));
+    auto rcb  = dec("mem_rc");
+    const size_t NR = gaps.size();
+    std::vector<uint32_t> dst(NR), mlen(NR);
+    { uint64_t prev=0;
+      for(size_t i=0;i<NR;++i){ uint64_t d=prev+gaps[i]; dst[i]=(uint32_t)d;
+          mlen[i]=(uint32_t)(lraw[i]+MINMEM); prev=d+mlen[i]; } }
+    auto src = refc::decode(S["mem_triples"].data(), S["mem_triples"].size(), dst, MAINEND);
+
+    // ---- rebuild the pseudogenome -----------------------------------------
+    std::vector<uint8_t> pg(PGLEN,0);
+    { size_t li=0, pos=0;
+      const char CB[256]={0}; (void)CB;
+      auto comp=[](uint8_t b)->uint8_t{ return b=='A'?'T':b=='C'?'G':b=='G'?'C':'A'; };
+      for(size_t i=0;i<NR;++i){
+          const size_t d=dst[i], L=mlen[i];
+          if(d>pos){ memcpy(&pg[pos],&literal[li],d-pos); li+=d-pos; }
+          if(rcb.size()>i && rcb[i]){ for(size_t k=0;k<L;++k) pg[d+k]=comp(pg[src[i]+L-1-k]); }
+          else memcpy(&pg[d],&pg[src[i]],L);
+          pos=d+L;
+      }
+      if(PGLEN>pos){ memcpy(&pg[pos],&literal[li],PGLEN-pos); li+=PGLEN-pos; }
+      if(li!=literal.size()){ fprintf(stderr,"literal not fully consumed: %zu vs %zu\n",li,literal.size()); return 1; }
+    }
+    fprintf(stderr,"  pg rebuilt: %llu bytes from %zu refs\n",(unsigned long long)PGLEN,NR);
+
+    // ---- per-read streams --------------------------------------------------
+    auto posb=dec("pos_abs"), lenb=dec("read_lengths",2), strb=dec("pos_strand");
+    auto o2f=dec("orig2uid_flags"), o2v=dec("orig2uid_vals");
+    auto cf=dec("mm_cnt_flags"), cv=dec("mm_cnt_vals"), cflat=dec("mm_cnt");
+    std::vector<uint32_t> positions(posb.size()/4);
+    memcpy(positions.data(),posb.data(),positions.size()*4);
+    std::vector<uint16_t> lengths(lenb.size()/2);
+    memcpy(lengths.data(),lenb.data(),lengths.size()*2);
+    const size_t NU=positions.size();
+    std::vector<uint8_t> strand(NU,0);
+    for(size_t i=0;i<NU;++i){ size_t B=i>>3,b=i&7; if(B<strb.size()) strand[i]=(strb[B]>>(7-b))&1; }
+    // orig2uid: delta coded
+    std::vector<uint32_t> o2u;
+    { std::vector<uint8_t> raw;
+      if(!o2v.empty()||!o2f.empty()){
+          size_t k=0; const size_t NO=lengths.size();
+          for(size_t i=0;i<NO;++i){
+              bool nz = (i>>3)<o2f.size() ? ((o2f[i>>3]>>(7-(i&7)))&1) : 0;
+              int32_t d=0; if(nz && k+4<=o2v.size()){ memcpy(&d,&o2v[k],4); k+=4; }
+              o2u.push_back((uint32_t)d);
+          }
+      } }
+    { uint32_t exp=0; for(auto& v:o2u){ int32_t d=(int32_t)v; if(d==0){ v=exp; ++exp; } else v=exp-d; } }
+    // mm counts
+    std::vector<uint16_t> mmcount;
+    if(!cf.empty()||!cv.empty()) mmcount = mmcnt_join(cf,cv,NU);
+    else { mmcount.resize(cflat.size()/2); memcpy(mmcount.data(),cflat.data(),mmcount.size()*2); }
+    // mm positions (flat or bucketed)
+    std::vector<uint8_t> mmpos;
+    { auto& raw=S["mm_pos"];
+      if(!raw.empty()){
+          const uint8_t form=raw[0];
+          std::vector<uint8_t> body(raw.begin()+1, raw.end());
+          mmpos = form ? mmpos_decode_buckets(body.data(),body.size(),mmcount)
+                       : capsule_decode_stream(body,1);
+      } }
+
+    // ---- derive ref, then decode obs --------------------------------------
+    uint16_t Lmax=0; for(auto L:lengths) if(L>Lmax) Lmax=L;
+    const bool MMDELTA = (Lmax<=256);
+    std::vector<uint16_t> rlenU(NU,0);
+    for(size_t o=0;o<o2u.size() && o<lengths.size();++o) if(o2u[o]<NU && !rlenU[o2u[o]]) rlenU[o2u[o]]=lengths[o];
+    std::vector<uint8_t> refs; refs.reserve(mmpos.size());
+    { size_t off=0;
+      auto comp=[](uint8_t b)->uint8_t{ return b=='A'?'T':b=='C'?'G':b=='G'?'C':'A'; };
+      for(size_t u=0;u<NU;++u){
+          const uint16_t cnt = u<mmcount.size()?mmcount[u]:0;
+          if(!cnt) continue;
+          const int64_t RL=rlenU[u]; const bool rc=strand[u];
+          // pos_abs already holds the coordinate the mismatch loop needs: the
+          // encoder converts RC positions once, when writing the stream
+          // (q = PL - ppos - rl), so no further conversion belongs here.
+          // Verified directly against the encoder's mm_ref: for the first
+          // mismatch-carrying read (u=0, rc=1, pos=1,538,107, j=137, ref='T')
+          // only pg[pos + RL-1-j] = pg[1,538,120] gives 'T'. Converting with
+          // main_pg_end or the full pg length both give the wrong base.
+          const int64_t q = (int64_t)positions[u];
+          uint32_t prevj=0;
+          for(uint16_t m=0;m<cnt;++m){
+              uint32_t j = off+m<mmpos.size()?mmpos[off+m]:0;
+              if(MMDELTA){ j=prevj+j; prevj=j; }
+              int64_t idx = rc ? q+RL-1-(int64_t)j : q+(int64_t)j;
+              refs.push_back((idx>=0 && idx<(int64_t)PGLEN) ? pg[idx] : 'A');
+          }
+          off+=cnt;
+      } }
+    auto obs = mmc::decode(S["mm_sym"].data(), S["mm_sym"].size(), refs);
+
+    // ---- emit what the read-reconstruction step reads ----------------------
+    std::string O=outdir;
+    put_file(O+"/literal.txt", literal.data(), literal.size());
+    { std::vector<uint8_t> tri(NR*13);
+      for(size_t i=0;i<NR;++i){ uint8_t* p=&tri[i*13];
+          memcpy(p,&dst[i],4); memcpy(p+4,&src[i],4); memcpy(p+8,&mlen[i],4);
+          p[12]=(rcb.size()>i)?rcb[i]:0; }
+      put_file(O+"/mem_triples.bin",tri.data(),tri.size()); }
+    put_file(O+"/pos_abs.bin",posb.data(),posb.size());
+    put_file(O+"/pos_strand.bin",strb.data(),strb.size());
+    put_file(O+"/read_lengths.bin",lenb.data(),lenb.size());
+    { std::vector<int32_t> d(o2u.size()); uint32_t exp=0;
+      for(size_t i=0;i<o2u.size();++i){ d[i]= (o2u[i]==exp)?0:(int32_t)(exp-o2u[i]); if(o2u[i]==exp) ++exp; }
+      put_file(O+"/orig2uid.bin",d.data(),d.size()*4); }
+    put_file(O+"/mm_count_per_read.bin",mmcount.data(),mmcount.size()*2);
+    put_file(O+"/mm_ref.bin",refs.data(),refs.size());
+    put_file(O+"/mm_obs.bin",obs.data(),obs.size());
+    put_file(O+"/mm_pos.bin",mmpos.data(),mmpos.size());
+    { auto a=dec("n_pos"),b=dec("n_indices"),c=dec("n_cnt");
+      put_file(O+"/n_pos.bin",a.data(),a.size());
+      put_file(O+"/n_indices.bin",b.data(),b.size());
+      put_file(O+"/n_cnt.bin",c.data(),c.size()); }
+    { FILE* f=fopen((O+"/pg_params.txt").c_str(),"w");
+      if(f){ fprintf(f,"%llu %llu\n",(unsigned long long)PGLEN,(unsigned long long)MAINEND); fclose(f);} }
+    fprintf(stderr,"  streams written to %s\n",O.c_str());
+    return 0;
+}
+
 #ifndef CAPSULE_NO_MAIN
 int main(int argc,char** argv){
-    if(argc<3){ fprintf(stderr,"usage: %s <in.capsule> <outdir> [--verify dumpdir]\n",argv[0]); return 2; }
-    uint64_t pg_len=0, main_end=0; uint32_t minmem=0; std::vector<Stream> ss;
-    if(!read_capsule(argv[1],pg_len,main_end,minmem,ss)){ fprintf(stderr,"capsule: bad archive\n"); return 1; }
-    const std::string outdir=argv[2];
-    const char* verify = (argc>4 && !strcmp(argv[3],"--verify")) ? argv[4] : nullptr;
-    fprintf(stderr,"capsule v1  pg_len=%llu main_pg_end=%llu  streams=%zu\n",
-            (unsigned long long)pg_len,(unsigned long long)main_end,ss.size());
-    { std::string pp=outdir+"/pg_params.txt"; FILE* g=fopen(pp.c_str(),"w");
-      if(g){ fprintf(g,"%llu %llu\n",(unsigned long long)pg_len,(unsigned long long)main_end); fclose(g);} }
-
-    // streams produced by best_encode / const_or_encode, and the dump each maps to
-    const std::map<std::string,std::pair<std::string,size_t>> M = {
-        {"pos_abs",       {"pos_abs.bin",1}},   {"pos_strand",{"pos_strand.bin",1}},
-        {"n_pos",         {"n_pos.bin",1}},     {"n_indices", {"n_indices.bin",1}},
-        {"n_cnt",         {"n_cnt.bin",1}},     {"read_lengths",{"read_lengths.bin",2}},
-        {"orig2uid_flags",{"orig2uid_flags.bin",1}},
-        {"orig2uid_vals", {"orig2uid_vals.bin",1}},
-        {"mm_cnt_flags",  {"mm_cnt_flags.bin",1}},
-        {"mm_cnt_vals",   {"mm_cnt_vals.bin",1}},
-    };
-    size_t ok=0, bad=0, skipped=0;
-    for(auto& s : ss){
-        auto it=M.find(s.name);
-        if(it==M.end()){ ++skipped; fprintf(stderr,"  %-16s SKIP (coder inverse not yet written)\n",s.name.c_str()); continue; }
-        auto raw = capsule_decode_stream(s.coded, it->second.second);
-        std::string fp = outdir+"/"+it->second.first;
-        FILE* g=fopen(fp.c_str(),"wb"); if(g){ if(!raw.empty()) fwrite(raw.data(),1,raw.size(),g); fclose(g); }
-        if(verify){
-            std::string vp = std::string(verify)+"/"+it->second.first;
-            FILE* v=fopen(vp.c_str(),"rb");
-            if(!v){ fprintf(stderr,"  %-16s %10zu B  (no dump to compare)\n",s.name.c_str(),raw.size()); continue; }
-            fseek(v,0,SEEK_END); long vn=ftell(v); fseek(v,0,SEEK_SET);
-            std::vector<uint8_t> ref(vn); if(vn) { if(fread(ref.data(),1,vn,v)!=(size_t)vn){} } fclose(v);
-            bool same = (ref.size()==raw.size()) && (raw.empty() || !memcmp(ref.data(),raw.data(),raw.size()));
-            fprintf(stderr,"  %-16s %10zu B  %s\n",s.name.c_str(),raw.size(), same?"IDENTICAL":"DIFFER");
-            same?++ok:++bad;
-        }
-    }
-    if(verify) fprintf(stderr,"entropy round-trip: %zu identical, %zu differ, %zu not yet implemented\n",ok,bad,skipped);
-    return bad?1:0;
+    if(argc<3){ fprintf(stderr,"usage: capsule_decode <in.capsule> <outdir>\n"); return 2; }
+    return capsule_decode_all(argv[1], argv[2]);
 }
 #endif  // CAPSULE_NO_MAIN
