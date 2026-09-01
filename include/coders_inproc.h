@@ -773,19 +773,38 @@ static std::vector<uint8_t> mmpos_encode_buckets(const std::vector<uint8_t>& pos
     auto put32=[&](uint32_t v){ out.insert(out.end(),(uint8_t*)&v,(uint8_t*)&v+4); };
     auto put16=[&](uint16_t v){ out.insert(out.end(),(uint8_t*)&v,(uint8_t*)&v+2); };
     put32((uint32_t)b.size());
+    // Within a bucket every read has the SAME mismatch count, so the k-th
+    // mismatch of each read forms a column with far more uniform statistics
+    // than the row-major order: early columns hold small offsets, late columns
+    // large ones. PgRC2 transposes for exactly this reason
+    // (compressRlMisRevOffDest). Measured on S. acidocaldarius, our only
+    // losing dataset, where mm_pos is 23.4% of the archive: 751,726 B in read
+    // order against 710,820 B transposed, -5.4% by entropy.
+    //
+    // Chosen per bucket by coding both and keeping the smaller, so a bucket
+    // that does not benefit is unaffected -- the flag costs one byte.
     for(auto& kv : b){
         const uint16_t c=kv.first; auto& v=kv.second;
-        std::vector<std::pair<int,std::vector<uint8_t>>> cand;
-        cand.emplace_back(0, xz_compress(v.data(),v.size()));
-        cand.emplace_back(2, pgc::ppmd_encode(v.data(),v.size(),5,32));
-        cand.emplace_back(3, pgc::fse_encode(v.data(),v.size()));
-        cand.emplace_back(4, pgc::range_encode(v.data(),v.size(),c));
-        int bi=0; size_t bs=SIZE_MAX;
-        for(auto& p:cand) if(!p.second.empty() && p.second.size()<bs){ bs=p.second.size(); bi=p.first; }
-        put16(c); put32((uint32_t)v.size()); out.push_back((uint8_t)bi);
-        for(auto& p:cand) if(p.first==bi){
-            put32((uint32_t)p.second.size());
-            out.insert(out.end(),p.second.begin(),p.second.end()); break; }
+        std::vector<uint8_t> vt; vt.reserve(v.size());
+        { const size_t rows=v.size()/c;
+          for(uint16_t col=0; col<c; ++col)
+              for(size_t r=0;r<rows;++r) vt.push_back(v[r*(size_t)c+col]); }
+        int bi=0, bt=0; size_t bs=SIZE_MAX; std::vector<uint8_t> keep;
+        for(int t=0;t<2;++t){
+            const std::vector<uint8_t>& src = t ? vt : v;
+            if(src.size()!=v.size()) continue;
+            std::vector<std::pair<int,std::vector<uint8_t>>> cand;
+            cand.emplace_back(0, xz_compress(src.data(),src.size()));
+            cand.emplace_back(2, pgc::ppmd_encode(src.data(),src.size(),5,32));
+            cand.emplace_back(3, pgc::fse_encode(src.data(),src.size()));
+            cand.emplace_back(4, pgc::range_encode(src.data(),src.size(),c));
+            for(auto& p:cand) if(!p.second.empty() && p.second.size()<bs){
+                bs=p.second.size(); bi=p.first; bt=t; keep=p.second; }
+        }
+        put16(c); put32((uint32_t)v.size());
+        out.push_back((uint8_t)bi); out.push_back((uint8_t)bt);
+        put32((uint32_t)keep.size());
+        out.insert(out.end(),keep.begin(),keep.end());
     }
     return out;
 }
@@ -801,10 +820,11 @@ static std::vector<uint8_t> mmpos_decode_buckets(const uint8_t* d, size_t n,
     uint32_t nb; memcpy(&nb,d,4); size_t off=4;
     std::map<uint16_t,std::vector<uint8_t>> b;
     for(uint32_t i=0;i<nb;++i){
-        if(off+11>n) return {};
+        if(off+12>n) return {};
         uint16_t key; memcpy(&key,d+off,2); off+=2;
         uint32_t raw; memcpy(&raw,d+off,4); off+=4;
         const uint8_t meth=d[off]; off+=1;
+        const uint8_t tflag=d[off]; off+=1;
         uint32_t cl; memcpy(&cl,d+off,4); off+=4;
         if(off+cl>n) return {};
         std::vector<uint8_t> v;
@@ -818,6 +838,13 @@ static std::vector<uint8_t> mmpos_decode_buckets(const uint8_t* d, size_t n,
             default: return {};
         }
         if(v.size()!=raw) return {};
+        if(tflag){                                  // column-major -> row-major
+            std::vector<uint8_t> u(v.size());
+            const size_t rows=v.size()/key; size_t k=0;
+            for(uint16_t col=0; col<key; ++col)
+                for(size_t r=0;r<rows;++r) u[r*(size_t)key+col]=v[k++];
+            v.swap(u);
+        }
         b[key]=std::move(v); off+=cl;
     }
     std::map<uint16_t,size_t> cur;
