@@ -2160,6 +2160,10 @@ int main(int argc,char** argv){
                 auto a = best_encode(cf.data(), cf.size());
                 auto b = best_encode(cv.data(), cv.size());
                 auto flat = best_encode(mmcnt_flat.data(), mmcnt_flat.size());
+                if(getenv("LOG_STREAMS"))
+                    fprintf(stderr,"  [mmcnt] split=%zu (flags %zu + vals %zu)  flat=%zu  -> %s\n",
+                            a.size()+b.size(), a.size(), b.size(), flat.size(),
+                            (a.size()+b.size()<flat.size())?"SPLIT":"flat");
                 if(a.size()+b.size() < flat.size()){
                     mmcnt_is_split = true;
                     mmcnt_flags = std::move(a); mmcnt_vals = std::move(b);
@@ -2171,7 +2175,10 @@ int main(int argc,char** argv){
         jobs.push_back({"n_pos",       [&]{ return best_encode(v_np.data(), v_np.size()); }});
         jobs.push_back({"n_indices",   [&]{ return best_encode(v_ni.data(), v_ni.size(), true); }});
         jobs.push_back({"n_cnt",       [&]{ return best_encode(v_nc.data(), v_nc.size()); }});
-        jobs.push_back({"read_lengths",[&]{ return best_encode(v_rl.data(), v_rl.size()); }});
+        // read_lengths is uint16 per original read; on constant-length data that
+        // is one value repeated millions of times (E. coli: 3,106,518 B of "150",
+        // entropy 0). Detected exactly, so variable-length input is unaffected.
+        jobs.push_back({"read_lengths",[&]{ return const_or_encode(v_rl.data(), v_rl.size(), 2); }});
         // B3: orig2uid mixes two different signals in one stream. Measured on
         // E. coli: 79.55% of its deltas are ZERO (the reads that are not
         // duplicates) and 20.45% are sparse alias payloads over 273,172
@@ -2244,6 +2251,9 @@ int main(int argc,char** argv){
                 ar.put("mm_cnt_flags", mmcnt_flags);
                 ar.put("mm_cnt_vals",  mmcnt_vals);
             } else {
+                if(getenv("LOG_STREAMS"))
+                    fprintf(stderr,"  [stream] %-18s coded=%zu B\n",
+                            jobs[i].name, results[i].size());
                 ar.put(jobs[i].name, results[i]);
             }
         }
