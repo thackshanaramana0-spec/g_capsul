@@ -74,6 +74,24 @@ static std::vector<uint8_t> xz_compress_lzma(const void* data, size_t n,
     lzma_options_lzma opt;
     if(lzma_lzma_preset(&opt, preset)) return {};
     opt.lc=lc; opt.lp=lp; opt.pb=pb;
+    // B2: a dictionary larger than the input is unusable. LZMA matches can only
+    // reference data already seen within this buffer, so any dict_size above n
+    // reserves memory that no match can ever address. preset 9 asks for 64 MB
+    // regardless of stream size, and with seven probes over six large streams
+    // that is ~2.7 GB of allocate-touch-free per file -- measured as 1,089,328
+    // minor page faults against PgRC2's 169,421 (6.4x), which is essentially
+    // all of our 3.18 s system time.
+    //
+    // PgRC2 sizes dictionaries per stream by hand (1 MB, 8 MB, 16 MB, 64 MB).
+    // The bound here is derived from the data instead: round n up to a power of
+    // two, never above what the preset asked for, never below LZMA's minimum.
+    // The .xz container records dict_size in the block header, so a decoder
+    // adapts on its own, and the match set is unchanged by construction.
+    if(opt.dict_size > n){
+        uint32_t d = 1u<<12;                        // LZMA_DICT_SIZE_MIN
+        while(d < n && d < opt.dict_size) d <<= 1;
+        opt.dict_size = d;
+    }
     lzma_filter filters[2];
     filters[0].id=LZMA_FILTER_LZMA2; filters[0].options=&opt;
     filters[1].id=LZMA_VLI_UNKNOWN;  filters[1].options=nullptr;
