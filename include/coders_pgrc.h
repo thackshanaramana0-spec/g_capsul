@@ -150,6 +150,13 @@ static std::vector<uint8_t> ppmd_decode(const uint8_t* src, size_t n, size_t raw
 
 static std::vector<uint8_t> fse_decode(const uint8_t* src, size_t n, size_t rawlen){
     if(!n || !rawlen) return {};
+    // FSE_compress returns 1 for RLE -- a single repeated symbol, emitted as one
+    // byte. fse_encode accepts that (its own comment says "1 = RLE" but only
+    // excludes 0 and r>=n), and FSE_decompress cannot read it: it expects a
+    // table header. A constant stream therefore encoded fine and decoded to
+    // nothing. Measured: orig2uid_flags, 57,563 zero bytes -> 1 byte -> decode
+    // failure -> zero reads reconstructed.
+    if(n==1){ return std::vector<uint8_t>(rawlen, src[0]); }
     std::vector<uint8_t> out(rawlen);
     size_t r = FSE_decompress(out.data(), rawlen, src, n);
     if(FSE_isError(r) || r!=rawlen) return {};
