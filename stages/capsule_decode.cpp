@@ -18,6 +18,7 @@
 #include "coders_pgrc.h"
 #include "seqpar_core.h"
 #include "coders_inproc.h"
+#include "names_coder.h"
 
 // ---- inverse of xz_compress / xz_compress_lzma (both write .xz containers) --
 static std::vector<uint8_t> xz_decompress(const uint8_t* d, size_t n, size_t hint){
@@ -367,6 +368,23 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
         FILE* of=fopen(outreads.c_str(),"wb");
         if(of){ fwrite(flat.data(),1,flat.size(),of); fclose(of); }
         fprintf(stderr,"  reads written: %zu\n", NO);
+    }
+
+    // ---- names / read-ID column (Phase 2) ----------------------------------
+    // Present only when the archive was written with CAPS_NAMES=1; absent
+    // archives decode exactly as before. Streams block-by-block straight to
+    // the output file so the decoder keeps the encoder's bounded-memory
+    // property instead of materializing every name.
+    if(has("names_body")){
+        const std::string npath = outreads.empty() ? (outdir+"/names.txt") : (outreads+".names");
+        FILE* nf=fopen(npath.c_str(),"wb");
+        if(nf){
+            auto ndict = dec("names_dict");
+            auto nindex= dec("names_index");
+            const uint64_t nw = nmc::decode_to_file(S["names_body"], ndict, nindex, nf, false);
+            fclose(nf);
+            fprintf(stderr,"  names written: %llu -> %s\n",(unsigned long long)nw,npath.c_str());
+        }
     }
 
     // ---- emit what the read-reconstruction step reads ----------------------
