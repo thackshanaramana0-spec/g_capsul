@@ -60,6 +60,25 @@ std::vector<uint8_t> capsule_decode_stream(const std::vector<uint8_t>& in, size_
     uint64_t rawlen; memcpy(&rawlen,&in[1],8);
     const uint8_t* p = in.data()+9; const size_t pn = in.size()-9;
     switch(m){
+        case 7: {
+            // Chunked: each chunk is itself a complete best_encode output, so
+            // this recurses rather than duplicating the per-method logic.
+            if(pn < 4) return {};
+            uint32_t nc; memcpy(&nc,p,4);
+            size_t off = 4;
+            if((uint64_t)off + 4ull*nc > pn) return {};
+            std::vector<uint32_t> lens(nc);
+            for(uint32_t c=0;c<nc;++c){ memcpy(&lens[c], p+off, 4); off+=4; }
+            std::vector<uint8_t> all; all.reserve(rawlen);
+            for(uint32_t c=0;c<nc;++c){
+                if((uint64_t)off + lens[c] > pn) return {};
+                std::vector<uint8_t> part(p+off, p+off+lens[c]);
+                auto dec = capsule_decode_stream(part, width);
+                all.insert(all.end(), dec.begin(), dec.end());
+                off += lens[c];
+            }
+            return all;
+        }
         case 0: case 1: return xz_decompress(p,pn,rawlen);
         case 2: return pgc::ppmd_decode(p,pn,rawlen);
         case 3: return pgc::fse_decode(p,pn,rawlen);

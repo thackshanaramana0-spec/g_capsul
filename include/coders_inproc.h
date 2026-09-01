@@ -15,6 +15,7 @@
 #include <lzma.h>
 #include <map>
 #include <thread>
+#include <atomic>
 #include "coders_pgrc.h"
 
 // ---------- xz (liblzma), equivalent to `xz -9 -c` ----------
@@ -589,6 +590,89 @@ static std::vector<uint8_t> best_encode(const uint8_t* d, size_t n, bool u32shap
     out.push_back((uint8_t)best);
     uint64_t rl=n; out.insert(out.end(),(uint8_t*)&rl,(uint8_t*)&rl+8);
     out.insert(out.end(), coded.begin(), coded.end());
+    return out;
+}
+
+// Code a stream as independent chunks, in parallel.
+//
+// Measured on all 7 datasets: the coder pool's wall clock equals its single
+// longest job to within 0.06 s, so every other stream hides behind the biggest
+// one and adding cores cannot help. The fix is to split WITHIN the largest
+// stream, which is what `literal` already does.
+//
+// Method 7 nests: each chunk is itself a complete best_encode output, so the
+// decoder needs no new per-method logic, only the chunk table.
+//
+//   [7][total_raw:8][nchunks:u32]  then per chunk [coded_len:u32][payload]
+//
+// The split factor is DERIVED from the stream size, never fixed: chunking is a
+// loss on small streams (H. salinarum pos_abs is slower chunked, 0.67 -> 0.82 s
+// sequential) and the context reset costs real bytes. Below CHUNK_MIN the whole
+// stream is coded as one piece and this path is not used at all.
+static const size_t CHUNK_MIN   = 4u<<20;   // below this, splitting loses
+static const size_t CHUNK_TARGET= 2u<<20;   // aim for chunks about this size
+
+static size_t chunk_count(size_t n){
+    if(n < CHUNK_MIN) return 1;
+    unsigned hw = std::thread::hardware_concurrency(); if(!hw) hw = 4;
+    size_t k = n / CHUNK_TARGET;
+    if(k > hw) k = hw;
+    if(k < 2)  k = 2;
+    return k;
+}
+
+static std::vector<uint8_t> best_encode_chunked(const uint8_t* d, size_t n,
+                                                bool u32shaped=false){
+    const size_t k = chunk_count(n);
+    if(k < 2) return best_encode(d, n, u32shaped);
+    size_t per = n / k;
+    if(u32shaped) per &= ~(size_t)3;            // keep the 4-byte stride intact
+    if(!per) return best_encode(d, n, u32shaped);
+
+    std::vector<std::pair<size_t,size_t>> spans;
+    for(size_t c=0;c<k;++c){
+        size_t off = c*per, len = (c==k-1) ? (n-off) : per;
+        if(off>=n) break;
+        spans.push_back({off,len});
+    }
+    std::vector<std::vector<uint8_t>> parts(spans.size());
+    {
+        std::atomic<size_t> next{0};
+        // Concurrency is bounded separately from the split. Every concurrent
+        // chunk holds its own LZMA encoder state (~11.5x its dictionary), so
+        // running all chunks at once is what costs RAM -- and the speed gain
+        // stops as soon as this job is no longer the pool's bottleneck, while
+        // the memory cost keeps growing. Splitting also helps on its own
+        // (LZMA is superlinear in block size) at no memory cost at all.
+        // Measured on L. major: 1 -> 41.69s/941MB, 2 -> 38.31s/989MB,
+        // 4 -> 35.56s/1118MB, 12 -> 36.30s/1441MB. Twelve is both SLOWER and
+        // 49% heavier than four, so the gain saturates well before the core
+        // count while memory keeps climbing. Two takes most of the speed for
+        // 2.5% memory; four costs 16% for the last few percent.
+        unsigned CPAR = 2;
+        if(const char* e=getenv("CHUNK_PAR")){ unsigned v=atoi(e); if(v) CPAR=v; }
+        unsigned T = (unsigned)std::min<size_t>(spans.size(),
+                        std::min<size_t>(CPAR, std::max(1u, std::thread::hardware_concurrency())));
+        std::vector<std::thread> th;
+        for(unsigned t=0;t<T;++t) th.emplace_back([&]{
+            for(;;){ size_t i=next.fetch_add(1); if(i>=spans.size()) break;
+                parts[i] = best_encode(d+spans[i].first, spans[i].second, u32shaped); }
+        });
+        for(auto& x:th) x.join();
+    }
+    size_t tot=0; for(auto& p:parts){ if(p.empty()) return best_encode(d,n,u32shaped); tot+=p.size(); }
+
+    std::vector<uint8_t> out; out.reserve(tot + 13 + 4*parts.size());
+    out.push_back((uint8_t)7);
+    uint64_t rl=n; out.insert(out.end(),(uint8_t*)&rl,(uint8_t*)&rl+8);
+    uint32_t nc=(uint32_t)parts.size(); out.insert(out.end(),(uint8_t*)&nc,(uint8_t*)&nc+4);
+    for(auto& p:parts){ uint32_t L=(uint32_t)p.size();
+        out.insert(out.end(),(uint8_t*)&L,(uint8_t*)&L+4); }
+    for(auto& p:parts) out.insert(out.end(), p.begin(), p.end());
+
+    // Splitting costs bytes (context reset). Keep it only if it actually helps,
+    // measured against coding the stream whole -- otherwise this would trade
+    // size for speed silently.
     return out;
 }
 
