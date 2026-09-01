@@ -179,21 +179,58 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
     auto src = refc::decode(S["mem_triples"].data(), S["mem_triples"].size(), dst, MAINEND, selfflags);
 
     // ---- rebuild the pseudogenome -----------------------------------------
+    // Extension mismatches: a reference may carry positions where the plain
+    // copy is WRONG relative to the true content. Two passes, because the
+    // "ref" side of the mismatch coder (mmc) is "what the plain copy places",
+    // which is only known once that copy has actually happened -- exactly
+    // mirroring the encoder, which reads it from `pg` at final emission time.
+    // Pass 1: copy everything as before, AND read off ref_bytes right after
+    // each ref's own copy (before any override). Pass 2: decode obs against
+    // those ref_bytes in one call (the coder is adaptive and order-dependent),
+    // then apply each override.
     std::vector<uint8_t> pg(PGLEN,0);
-    { size_t li=0, pos=0;
+    auto extmmcnt = dec("mem_extmm_cnt");
+    auto extmmposraw = has("mem_extmm_pos") ? dec("mem_extmm_pos") : std::vector<uint8_t>();
+    auto extmmpos = varints(extmmposraw);
+    { size_t li=0, pos=0, mmi=0, applied=0;
       const char CB[256]={0}; (void)CB;
       auto comp=[](uint8_t b)->uint8_t{ return b=='A'?'T':b=='C'?'G':b=='G'?'C':'A'; };
+      // A later match's SOURCE can fall inside an EARLIER match's DESTINATION
+      // -- exactly what happens through a tandem repeat, where these
+      // mismatches concentrate. A batch decode-then-apply (compute every ref
+      // byte, decode all obs in one call, apply afterwards) reads the earlier
+      // match's un-corrected byte in that case: verified directly on
+      // Drosophila SRR40104920, ref i=7 (dst=15789): encoder ref=G obs=C,
+      // batch-decoder ref=C obs=T -- same entry, wrong ref because an earlier
+      // ref's own override at that source position hadn't been applied yet.
+      // So each override is applied immediately, before the NEXT ref's copy
+      // can read it, and the range coder is driven one symbol at a time
+      // through the SAME adaptive state `decode()` uses (mmc::StreamDecoder).
+      mmc::StreamDecoder msd;
+      if(has("mem_extmm_obs")) msd.init(S["mem_extmm_obs"].data(), S["mem_extmm_obs"].size());
       for(size_t i=0;i<NR;++i){
           const size_t d=dst[i], L=mlen[i];
           if(d>pos){ memcpy(&pg[pos],&literal[li],d-pos); li+=d-pos; }
           if(rcb.size()>i && rcb[i]){ for(size_t k=0;k<L;++k) pg[d+k]=comp(pg[src[i]+L-1-k]); }
           else memcpy(&pg[d],&pg[src[i]],L);
+          const uint8_t cnt = (i<extmmcnt.size())?extmmcnt[i]:0;
+          for(uint8_t k=0;k<cnt && mmi<extmmpos.size();++k,++mmi){
+              const uint32_t off=(uint32_t)extmmpos[mmi];
+              if(off>=L) continue;
+              const uint8_t refb = pg[d+off];        // what the copy just placed, NOW, fully up to date
+              pg[d+off] = msd.next(refb);
+              ++applied;
+          }
           pos=d+L;
       }
       if(PGLEN>pos){ memcpy(&pg[pos],&literal[li],PGLEN-pos); li+=PGLEN-pos; }
       if(li!=literal.size()){ fprintf(stderr,"literal not fully consumed: %zu vs %zu\n",li,literal.size()); return 1; }
+      if(applied) fprintf(stderr,"  extension mismatches applied: %zu\n", applied);
     }
     fprintf(stderr,"  pg rebuilt: %llu bytes from %zu refs\n",(unsigned long long)PGLEN,NR);
+    if(getenv("DUMP_PG")){
+        FILE* f=fopen("pg_full_dec.txt","wb"); fwrite(pg.data(),1,pg.size(),f); fclose(f);
+    }
 
     // ---- per-read streams --------------------------------------------------
     auto posb=dec("pos_abs"), lenb=dec("read_lengths",2), strb=dec("pos_strand");
