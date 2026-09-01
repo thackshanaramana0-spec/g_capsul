@@ -172,7 +172,10 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir){
     { uint64_t prev=0;
       for(size_t i=0;i<NR;++i){ uint64_t d=prev+gaps[i]; dst[i]=(uint32_t)d;
           mlen[i]=(uint32_t)(lraw[i]+MINMEM); prev=d+mlen[i]; } }
-    auto src = refc::decode(S["mem_triples"].data(), S["mem_triples"].size(), dst, MAINEND);
+    // mem_self marks references whose source lives in the second region; their
+    // sources were coded relative to main_pg_end. Absent stream == none.
+    auto selfflags = has("mem_self") ? dec("mem_self") : std::vector<uint8_t>();
+    auto src = refc::decode(S["mem_triples"].data(), S["mem_triples"].size(), dst, MAINEND, selfflags);
 
     // ---- rebuild the pseudogenome -----------------------------------------
     std::vector<uint8_t> pg(PGLEN,0);
