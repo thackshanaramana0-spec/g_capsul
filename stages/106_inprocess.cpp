@@ -86,6 +86,7 @@ static inline bool pack(const char* p,uint64_t& out){
 #include <functional>
 #include "coders_inproc.h"
 #include "seqpar_core.h"
+#include "names_coder.h"
 
 struct MemStream {
     FILE*  f    = nullptr;
@@ -183,6 +184,18 @@ struct Archive {
 static const bool CAPS_PHASE = getenv("CAPS_PHASE") != nullptr;
 static std::chrono::steady_clock::time_point g_t0, g_tp;
 static void phase_init(){ g_t0 = g_tp = std::chrono::steady_clock::now(); }
+
+// ---- names / read-ID column (CAPS_NAMES=1) ----------------------------------
+// Phase 2. Off by default so every Phase-1 archive stays byte-identical and
+// the locked size result is provably untouched (standing rule 2: an
+// output-preserving change must be cmp-identical on all 7 files). The coder
+// re-reads the ID column straight from the input FASTQ rather than being fed
+// headers captured during the main parse: capturing them would hold every
+// header resident (~5 GB on T. cacao) and defeat the bounded-memory design
+// that names_coder.h exists to provide. Two extra streaming passes over the
+// ID column cost ~1 s per 5 M reads and no RAM.
+static const bool CAPS_NAMES = getenv("CAPS_NAMES") != nullptr;
+static std::string g_input_path;
 static void phase(const char* name){
     if(!CAPS_PHASE) return;
     auto now = std::chrono::steady_clock::now();
@@ -198,6 +211,7 @@ static void phase(const char* name){
 
 int main(int argc,char** argv){
     phase_init();
+    if(argc>1) g_input_path = argv[1];
     // RAM FIX -- confirmed real driver of the C. elegans-scale RSS gap
     // after three application-level hypotheses were measured and ruled
     // out (allrefs/cleanRefs double-holding, c/cr scope overlap, res[]
@@ -2708,6 +2722,26 @@ int main(int argc,char** argv){
         // the knee: within 2.5 KB of the single-chunk optimum while still
         // parallel, and it also gained 15,862 B on P. aeruginosa.
         const unsigned SEQT = getenv("SEQT") ? (unsigned)atoi(getenv("SEQT")) : 4;
+
+        // Names (Phase 2). Computed once here, emitted as three streams: the
+        // block-coded body (already entropy coded, stored as-is), the global
+        // dictionary and the block index. The latter two are RAW out of the
+        // coder specifically so they go through best_encode() like every
+        // other stream instead of carrying an ad-hoc serialization -- and so
+        // their cost is real archive bytes, not an estimate. The block index
+        // is what lets the decoder find block boundaries from the archive
+        // alone; without it a decoder would need the original file, which is
+        // exactly the shortcut that left mem_triples undecodable.
+        static nmc::Encoded NM;
+        if(CAPS_NAMES && !g_input_path.empty()){
+            NM = nmc::encode_from_fastq(g_input_path.c_str());
+            fprintf(stderr,"  [names] %llu names in %llu blocks: body %zu B, dict %zu B raw, index %zu B raw\n",
+                    (unsigned long long)NM.n_names,(unsigned long long)NM.n_blocks,
+                    NM.body.size(), NM.dict.size(), NM.index.size());
+            jobs.push_back({"names_body",  [&]{ return NM.body; }});
+            jobs.push_back({"names_dict",  [&]{ return best_encode(NM.dict.data(),  NM.dict.size());  }});
+            jobs.push_back({"names_index", [&]{ return best_encode(NM.index.data(), NM.index.size()); }});
+        }
 
         jobs.push_back({"literal",     [&]{ return seq_encode_mem(litsym, SEQT, SEQT); }});
         jobs.push_back({"mem_triples", [&]{ return refc::encode(v_tri, PGLEN_, MAINEND_); }});
