@@ -354,6 +354,33 @@ struct RangeDec {
 };
 
 struct Ref { uint32_t dst,src,len; };
+// A reference whose source sits past main_pg_end is a second-region self match;
+// its source is coded relative to main_pg_end so it stays inside the model.
+static inline uint32_t bound_sel(uint32_t dst, bool self, uint64_t MAINEND){
+    if(self){ uint32_t b=(uint32_t)((uint64_t)dst-MAINEND); return b?b:1; }
+    return (uint64_t)dst<MAINEND ? (dst?dst:1) : (uint32_t)MAINEND;
+}
+static inline uint32_t bound_for(uint32_t dst, uint32_t src, uint64_t MAINEND){
+    return bound_sel(dst, (uint64_t)src>=MAINEND && (uint64_t)dst>=MAINEND, MAINEND);
+}
+// One flag per reference, in the coder's own dst-sorted order. All zero whenever
+// no self pass ran, so it costs nothing on every existing dataset.
+static std::vector<uint8_t> encode_self(const std::vector<uint8_t>& triples, uint64_t MAINEND){
+    const size_t n=triples.size()/13;
+    std::vector<Ref> R(n);
+    for(size_t i=0;i<n;++i){ const uint8_t* p=&triples[i*13];
+        memcpy(&R[i].dst,p,4); memcpy(&R[i].src,p+4,4); memcpy(&R[i].len,p+8,4); }
+    std::sort(R.begin(),R.end(),[](const Ref&a,const Ref&b){
+        if(a.dst!=b.dst) return a.dst<b.dst;
+        if(a.src!=b.src) return a.src<b.src;
+        return a.len<b.len; });   // total order: std::sort is not stable, and the
+                                  // flag pass and the source pass must agree exactly
+    std::vector<uint8_t> f(n,0); bool any=false;
+    for(size_t i=0;i<n;++i)
+        if((uint64_t)R[i].src>=MAINEND && (uint64_t)R[i].dst>=MAINEND){ f[i]=1; any=true; }
+    if(!any) return {};            // absent stream == no self references
+    return f;
+}
 // triples: raw mem_triples.bin bytes, 13 B/record (dst,src,len,is_rc).
 static std::vector<uint8_t> encode(const std::vector<uint8_t>& triples,
                                    uint64_t PGLEN, uint64_t MAINEND){
@@ -364,12 +391,29 @@ static std::vector<uint8_t> encode(const std::vector<uint8_t>& triples,
         const uint8_t* p=&triples[i*13];
         memcpy(&R[i].dst,p,4); memcpy(&R[i].src,p+4,4); memcpy(&R[i].len,p+8,4);
     }
-    std::sort(R.begin(),R.end(),[](const Ref&a,const Ref&b){ return a.dst<b.dst; });
-    auto bound=[&](uint32_t dst)->uint32_t{
-        return (uint64_t)dst<MAINEND ? (dst?dst:1) : (uint32_t)MAINEND;
-    };
+    std::sort(R.begin(),R.end(),[](const Ref&a,const Ref&b){
+        if(a.dst!=b.dst) return a.dst<b.dst;
+        if(a.src!=b.src) return a.src<b.src;
+        return a.len<b.len; });   // total order: std::sort is not stable, and the
+                                  // flag pass and the source pass must agree exactly
+    // The rule above -- "a destination past main_pg_end implies a source inside
+    // the main pg, so nothing extra need be stored" -- is an assumption about
+    // WHICH passes exist, baked into the coder. A second-region self-match
+    // breaks it: such a reference has dst >= main_pg_end AND src >= main_pg_end,
+    // so its source is outside the model's range entirely and cannot be
+    // represented. The reference then decodes to a legal-looking but wrong
+    // position, which is why the destinations, the ordering invariant and the
+    // literal accounting can all be exact while the recovered bases are wrong.
+    //
+    // A self reference is coded relative to main_pg_end instead, so its source
+    // lands in [0, dst-main_pg_end). Whether a reference is one cannot be
+    // derived from dst alone any more, so it is stored -- see encode_self().
     RangeEnc enc; enc.out.reserve(n*4);
-    for(const Ref& r:R) enc.encode(r.src,bound(r.dst));
+    for(const Ref& r:R){
+        const bool self=((uint64_t)r.src>=MAINEND && (uint64_t)r.dst>=MAINEND);
+        const uint32_t v = self ? (uint32_t)((uint64_t)r.src-MAINEND) : r.src;
+        enc.encode(v, bound_sel(r.dst,self,MAINEND));
+    }
     enc.flush();
     return std::move(enc.out);
 }
@@ -380,13 +424,16 @@ static std::vector<uint8_t> encode(const std::vector<uint8_t>& triples,
 // RangeDec above was already written and simply never called.
 static std::vector<uint32_t> decode(const uint8_t* d, size_t n,
                                     const std::vector<uint32_t>& dst,
-                                    uint64_t MAINEND){
+                                    uint64_t MAINEND,
+                                    const std::vector<uint8_t>& selfflags={}){
     std::vector<uint32_t> src(dst.size(), 0);
     if(!n || dst.empty()) return src;
-    auto bound=[&](uint32_t v)->uint32_t{
-        return (uint64_t)v<MAINEND ? (v?v:1) : (uint32_t)MAINEND; };
     RangeDec dec; dec.init(d,n);
-    for(size_t i=0;i<dst.size();++i) src[i]=dec.decode(bound(dst[i]));
+    for(size_t i=0;i<dst.size();++i){
+        const bool self = (i<selfflags.size() && selfflags[i]);
+        const uint32_t v = dec.decode(bound_sel(dst[i],self,MAINEND));
+        src[i] = self ? (uint32_t)(v+MAINEND) : v;
+    }
     return src;
 }
 } // namespace refc

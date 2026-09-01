@@ -119,7 +119,57 @@ dumps reconstruct, which isolates encoder-side references from the archive path.
 That test was attempted here and did not run: the DUMP_* files were not written
 to the working directory, so its verdict is void, not evidence.
 
-## The economics are also unresolved, separately from correctness
+## FIXED -- and the bug was in the coder, not the matcher
+
+The assumption was written down in refc's own comment:
+
+    Cross-matches are the one exception: there the source lives in the main pg
+    while the destination is past main_pg_end, so the bound is main_pg_end
+    rather than dst. The decoder can tell the two apart from dst alone, so
+    nothing extra is stored to distinguish them.
+
+That is a claim about WHICH PASSES EXIST, baked into the range coder's model. A
+second-region self reference has dst >= main_pg_end AND src >= main_pg_end, so
+its source falls outside the model's range entirely and cannot be represented.
+It decodes to a legal-looking but wrong position -- which is exactly why the
+destinations, the src+len<=dst invariant and the literal accounting were all
+provably exact while the recovered bases were wrong. Three layers of correct
+work sat on top of one wrong assumption.
+
+Fix: a self reference is coded relative to main_pg_end, so its source lands in
+[0, dst-main_pg_end). Whether a reference is one can no longer be derived from
+dst, so a mem_self flag stream carries it -- emitted only when such references
+exist, so no existing archive gains even a byte. Two further defects were found
+while writing it: std::sort is not stable, so the flag pass and the source pass
+could tie-break differently (both now use a total order), and the source itself
+has to be shifted by main_pg_end, not just its bound.
+
+Result on SARS-CoV-2: LOSSLESS at 94.8% removal, both forward-only and
+forward+RC. All 7 benchmark datasets byte-identical and lossless with the flag
+off.
+
+## Now that it is correct, it can be measured -- and the idea LOSES
+
+    literal      348,375 -> 136,334   saved   212,041 B
+    mem_triples        0 -> 270,747   cost    270,747 B
+    mem_len            0 ->  98,677   cost     98,677 B
+    archive      850,670 -> 1,031,066         +180,396 B
+
+Removing 11,050,618 literal bases saved only 212 KB, because that literal was
+already coding at 0.24 bits/base -- amplicon data at ~98 repeated positions is
+almost free to LZMA. Each explicit reference costs 21.5 bits for its source
+alone.
+
+**LZMA was already exploiting the redundancy, more cheaply than explicit
+references can.** The 74.3% repeat-32-mer measurement established that the
+redundancy exists; it never established that it was unexploited. That was the
+flaw in the original motivation, and it could not be seen until the pass was
+correct enough to measure.
+
+The pass stays behind SECOND_SELF, off by default: correct, verified, and not
+worth running on the data measured so far.
+
+## The economics were the real question all along
 
 Even at 94.8% removal the archive GREW: 850,670 -> 920,083 B. Removing ~11 MB of
 literal cost 100,675 references. So even once correct, this needs the "when to

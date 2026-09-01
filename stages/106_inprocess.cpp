@@ -2431,6 +2431,14 @@ int main(int argc,char** argv){
 
         jobs.push_back({"literal",     [&]{ return seq_encode_mem(litsym, SEQT, SEQT); }});
         jobs.push_back({"mem_triples", [&]{ return refc::encode(v_tri, PGLEN_, MAINEND_); }});
+        // Emitted only when a second-region self pass actually produced
+        // references; absent otherwise, so every existing archive is unchanged.
+        // Pushed only when self references exist: an empty stream still costs
+        // its name and length in the container (17 B), and every existing
+        // archive must stay byte-identical.
+        { auto sf = refc::encode_self(v_tri, MAINEND_);
+          if(!sf.empty())
+              jobs.push_back({"mem_self", [&,sf]{ return best_encode(sf.data(), sf.size()); }}); }
         jobs.push_back({"mem_dstgap",  [&]{ return best_encode(ref_gaps.data(), ref_gaps.size()); }});
         jobs.push_back({"mem_len",     [&]{ return best_encode(ref_lens.data(), ref_lens.size()); }});
         jobs.push_back({"mem_rc",      [&]{ return best_encode(ref_rc.data(),   ref_rc.size());   }});
