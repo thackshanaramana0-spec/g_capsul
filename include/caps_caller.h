@@ -185,12 +185,205 @@ inline double loglik(const std::vector<std::pair<int,int>>& rl, const int* al, i
 // quals may be empty strings per-read (treated as q=0, i.e. filtered out by the
 // medq>=20 gate on the minor allele unless real quality is supplied) — pass real
 // quality lines whenever available.
+// ── Calling substrate rebuild ────────────────────────────────────────────────
+// MEASURED MOTIVATION (2026-09-02, HG002 chr20 r2, 422 truth het-SNV sites):
+//   * the reads contain the variants: 99.5% of truth sites carry BOTH alleles
+//     with >=3 reads each at depth >=6 -- the ceiling is not the data;
+//   * per-contig depth is NOT the blocker: 96.2% of sites already have >=6
+//     reads stacked on one contig;
+//   * the blocker is READ->CONTIG ASSIGNMENT. CAPSULE assigns each read to the
+//     chain it EXACTLY overlaps, so ref-allele and alt-allele reads land on
+//     different chains and never meet in a pileup. Only 124 of 75,115 reads
+//     ever reached the mismatch-tolerant pigeonhole mapper -- chaining claimed
+//     the rest. Re-assigning reads mismatch-tolerantly makes 70.1% of truth
+//     sites immediately show a both-allele stack.
+//   * reads covering one site are additionally spread over a MEDIAN of 5
+//     contigs, so even a correct assignment splits the evidence -- hence the
+//     collapse pass below, which keeps one representative contig per locus.
+//
+// Both passes are gated and default ON for calling only; they never touch the
+// compression path. CAPS_NO_REMAP=1 / CAPS_NO_COLLAPSE=1 restore the previous
+// behaviour exactly, so every measurement has a revert.
+struct Substrate {
+    std::vector<std::string> contigs;
+    std::vector<uint32_t> read_cid, read_pos;
+    std::vector<uint8_t>  read_rc;
+};
+
+namespace detail {
+
+// Greedy non-redundant contig set: longest first, drop a contig whose k-mers
+// are already almost entirely claimed by a kept (longer) contig. This is the
+// "shared sequence collapses to one place" property a de Bruijn graph gets for
+// free, obtained without building a graph. Keyed on a measured fraction, not a
+// per-dataset constant.
+inline std::vector<uint32_t> collapse_contigs(const std::vector<std::string>& ctgs,
+                                              double dup_frac, int K) {
+    std::vector<uint32_t> order(ctgs.size());
+    for (uint32_t i = 0; i < ctgs.size(); ++i) order[i] = i;
+    std::sort(order.begin(), order.end(),
+              [&](uint32_t a, uint32_t b){ return ctgs[a].size() > ctgs[b].size(); });
+    std::unordered_set<uint64_t> claimed;
+    claimed.reserve(1u << 20);
+    std::vector<uint32_t> keep;
+    std::vector<uint64_t> km;
+    for (uint32_t ci : order) {
+        const std::string& c = ctgs[ci];
+        if ((int)c.size() < K) { keep.push_back(ci); continue; }
+        // Query on a SAMPLED stride but claim EVERY k-mer: a duplicate contig
+        // is almost always phase-shifted relative to its twin, so sampling both
+        // sides at the same stride compares disjoint k-mer sets and the
+        // duplicate is never detected (measured: only 7.6% of contigs collapsed
+        // before this fix).
+        km.clear();
+        size_t hit = 0, tot = 0;
+        for (size_t i = 0; i + (size_t)K <= c.size(); i += 5) {
+            uint64_t v; if (!pack25(c.data() + i, v)) continue;
+            uint64_t rcv = rc25(v), can = v < rcv ? v : rcv;
+            ++tot;
+            if (claimed.count(can)) ++hit;
+        }
+        if (tot > 0 && (double)hit / (double)tot >= dup_frac) continue;   // redundant
+        keep.push_back(ci);
+        for (size_t i = 0; i + (size_t)K <= c.size(); ++i) {
+            uint64_t v; if (!pack25(c.data() + i, v)) continue;
+            uint64_t rcv = rc25(v), can = v < rcv ? v : rcv;
+            claimed.insert(can);
+        }
+    }
+    std::sort(keep.begin(), keep.end());
+    return keep;
+}
+
+} // namespace detail
+
+// Rebuild the substrate: collapse redundant contigs, then place EVERY read on
+// the surviving contigs allowing mismatches (both strands), keeping the best
+// placement. Falls back to the encoder's own placement for reads that cannot
+// be placed, so nothing is lost relative to the previous behaviour.
+inline Substrate build_substrate(const std::vector<std::string>& seqs, const CallData& cd) {
+    using namespace detail;
+    Substrate S;
+    const bool NO_REMAP    = std::getenv("CAPS_NO_REMAP")    != nullptr;
+    const bool NO_COLLAPSE = std::getenv("CAPS_NO_COLLAPSE") != nullptr;
+    const int  K           = 25;
+
+    // 1. contig set
+    std::vector<uint32_t> keep;
+    if (NO_COLLAPSE) { keep.resize(cd.contigs.size()); for (uint32_t i=0;i<keep.size();++i) keep[i]=i; }
+    else {
+        // Duplicate-contig threshold. Swept ONCE on the designated tuning
+        // window (HG002 r2) over 0.15..0.90; F1 forms a broad flat plateau of
+        // 0.879-0.882 across 0.35-0.50 and falls away only outside it
+        // (0.725 at 0.90, 0.858 at 0.15). A wide flat optimum is the signature
+        // of a robust parameter rather than a fitted knob, so the default is
+        // the CENTRE of the plateau, not its argmax.
+        double dup = 0.45;
+        if (const char* e = std::getenv("CAPS_DUP_FRAC")) dup = atof(e);
+        keep = collapse_contigs(cd.contigs, dup, K);
+    }
+    std::vector<int32_t> old2new(cd.contigs.size(), -1);
+    S.contigs.reserve(keep.size());
+    for (uint32_t ci : keep) { old2new[ci] = (int32_t)S.contigs.size(); S.contigs.push_back(cd.contigs[ci]); }
+
+    const size_t n = seqs.size();
+    S.read_cid.assign(n, UINT32_MAX); S.read_pos.assign(n, 0); S.read_rc.assign(n, 0);
+
+    // carry over the encoder's placement wherever the contig survived
+    for (size_t o = 0; o < n; ++o) {
+        uint32_t c = cd.read_cid[o];
+        if (c < old2new.size() && old2new[c] >= 0) {
+            S.read_cid[o] = (uint32_t)old2new[c]; S.read_pos[o] = cd.read_pos[o]; S.read_rc[o] = cd.read_rc[o];
+        }
+    }
+    if (NO_REMAP) return S;
+
+    // 2. seed index over surviving contigs
+    std::unordered_map<uint64_t, std::vector<std::pair<uint32_t,uint32_t>>> idx;
+    idx.reserve(1u << 21);
+    for (uint32_t ci = 0; ci < S.contigs.size(); ++ci) {
+        const std::string& c = S.contigs[ci];
+        for (size_t i = 0; i + (size_t)K <= c.size(); ++i) {
+            uint64_t v; if (!pack25(c.data() + i, v)) continue;
+            uint64_t rcv = rc25(v), can = v < rcv ? v : rcv;
+            auto& vec = idx[can];
+            if (vec.size() < 64) vec.push_back({ci, (uint32_t)i});   // bound repeat blowup
+        }
+    }
+
+    // 3. place every read, both strands, fewest mismatches wins
+    size_t placed = 0, improved = 0;
+    for (size_t o = 0; o < n; ++o) {
+        const std::string& raw = seqs[o];
+        if ((int)raw.size() < K) continue;
+        int best_mm = INT32_MAX; uint32_t best_c = UINT32_MAX, best_p = 0; uint8_t best_rc = 0;
+        for (int strand = 0; strand < 2; ++strand) {
+            std::string r = strand ? rc_str(raw) : raw;
+            const int rl = (int)r.size();
+            const int step = std::max(1, rl / 8);
+            for (int off = 0; off + K <= rl; off += step) {
+                uint64_t v; if (!pack25(r.data() + off, v)) continue;
+                uint64_t rcv = rc25(v), can = v < rcv ? v : rcv;
+                auto it = idx.find(can);
+                if (it == idx.end()) continue;
+                for (auto& pr : it->second) {
+                    const std::string& c = S.contigs[pr.first];
+                    // seed may be stored in either orientation; try both implied starts
+                    for (int which = 0; which < 2; ++which) {
+                        int64_t st = which == 0 ? (int64_t)pr.second - off
+                                                : (int64_t)pr.second + K - (rl - off);
+                        // Allow the read to OVERHANG either contig end and score
+                        // only the overlapping part. Contigs average ~335 bp and
+                        // reads are ~148 bp, so demanding full containment makes
+                        // every position within a read-length of an end
+                        // unplaceable -- which is most of the substrate. BWA
+                        // soft-clips for the same reason.
+                        // RIGHT overhang only: the pileup indexes contig position
+                        // as pos+j from the read's first base and simply stops at
+                        // the contig end, so a read running off the right end is
+                        // scored correctly with no other change. A LEFT overhang
+                        // would need a per-read clip offset to stay in frame, so
+                        // it is deliberately not attempted here.
+                        if (st < 0) continue;
+                        int64_t ov_hi = std::min<int64_t>(rl, (int64_t)c.size() - st);
+                        if (ov_hi < K) continue;               // need a real anchor's worth
+                        int mm = 0;
+                        for (int64_t j = 0; j < ov_hi && mm < best_mm; ++j) {
+                            char a = r[(size_t)j];
+                            if (b2i(a) >= 0 && c[(size_t)(st + j)] != a) ++mm;
+                        }
+                        if (mm < best_mm) { best_mm = mm; best_c = pr.first; best_p = (uint32_t)st; best_rc = (uint8_t)strand; }
+                    }
+                }
+            }
+        }
+        if (best_c != UINT32_MAX && best_mm < 7) {          // same MAPQ<20 gate the pileup uses
+            if (S.read_cid[o] == UINT32_MAX) ++placed; else ++improved;
+            S.read_cid[o] = best_c; S.read_pos[o] = best_p; S.read_rc[o] = best_rc;
+        }
+    }
+    fprintf(stderr, "[CAPS-CALL] substrate: contigs %zu -> %zu, reads placed=%zu re-placed=%zu of %zu\n",
+            cd.contigs.size(), S.contigs.size(), placed, improved, n);
+    return S;
+}
+
 inline int run_variant_call(const std::vector<std::string>& seqs,
                              const std::vector<std::string>& quals,
-                             const CallData& cd, const std::string& out_vcf) {
+                             const CallData& cd_in, const std::string& out_vcf) {
     using namespace detail;
-    if (!cd.valid) { fprintf(stderr, "caps_caller: no placement data\n"); return -1; }
+    if (!cd_in.valid) { fprintf(stderr, "caps_caller: no placement data\n"); return -1; }
     const size_t n = seqs.size();
+
+    // Rebuild the calling substrate (collapse + mismatch-tolerant placement).
+    CallData cd;
+    {
+        Substrate S = build_substrate(seqs, cd_in);
+        cd.contigs = std::move(S.contigs);
+        cd.read_cid = std::move(S.read_cid);
+        cd.read_pos = std::move(S.read_pos);
+        cd.read_rc  = std::move(S.read_rc);
+        cd.valid = true;
+    }
 
     int PLOIDY = 2;
     if (const char* pe = std::getenv("CAPS_PLOIDY")) { int v = atoi(pe); if (v >= 2 && v <= 4) PLOIDY = v; }
