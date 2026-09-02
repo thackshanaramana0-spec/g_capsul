@@ -198,3 +198,55 @@ information is destroyed upstream of all of them. The honest claim remains
 complementarity: on this window CAPSULE finds 46% more true indels overall
 (38 vs 26) with fewer false positives, while DiscoSNP++ owns 1 bp homopolymer
 events that our assembly cannot represent.
+
+---
+
+## 8. CORRECTION to §7 — the assembler does NOT collapse the haplotypes
+
+Section 7 concluded that exact-overlap chaining merges the two homopolymer
+haplotypes into one contig. **That is wrong**, and the link-scan channel
+(option 2: re-check every read against its own assembler placement, with a gap)
+disproves it directly.
+
+Instrumenting all 75,115 placed reads on HG002 r2:
+
+| outcome | reads |
+|---|---|
+| no placement | 0 |
+| read runs off the contig end | 503 |
+| **matches its contig PERFECTLY** | **63,081 (84%)** |
+| diverges, no gap explains it (ordinary SNV mismatches) | 6,905 |
+| left anchor too short / tail too short | 4,617 |
+| **gap-explainable divergence** | **9** |
+
+If the assembler were absorbing alt-haplotype reads into the wrong contig,
+those reads would mismatch heavily against it and appear in the last row.
+Instead 84% match perfectly: **every read is placed on a contig that already
+carries its own allele, so BOTH allele-contigs exist in the substrate.**
+
+### The actual failure, stated exactly
+
+1. Reads carry both alleles (15×7 / 16×5 run lengths) — §7 step 1 stands.
+2. The assembler builds a separate contig for each allele — §7 step 2 was wrong.
+3. **The two allele-contigs are never PAIRED.** Bubble detection pairs contigs
+   on a shared unique 25-mer, but near a homopolymer every 25-mer overlapping
+   the run differs between the two haplotypes, so the shared anchors that do
+   exist are far away — measured 213 to 135,453 bp from the event.
+4. Walking from such a distant anchor fails because contigs average ~335 bp:
+   multi-start extraction advanced ~1.03 bubbles per anchor pair before running
+   off the contig end, producing zero new events.
+
+So the limit is **substrate FRAGMENTATION plus anchor-based pairing**, not
+haplotype collapse. The information survives assembly; it is lost in pairing.
+
+### What would actually work
+
+Pair candidate contigs by **alignment** rather than by a shared anchor: for any
+two contigs sharing at least one anchor anywhere, align them and scan the whole
+alignment for indels, instead of walking outward from the anchor. That removes
+both the "anchor must be near the event" and the "contig long enough to walk"
+constraints in one step. It is bounded work (candidate pairs are already
+enumerated) and touches only the caller, so Claim 1 stays untouched.
+
+That is the next experiment, and unlike the previous five it is aimed at the
+stage the measurements actually implicate.
