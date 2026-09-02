@@ -1749,8 +1749,18 @@ int main(int argc,char** argv){
                 const char prevc = (j>0 && !rc) ? pg[q+j-1] :
                                     (j>0 &&  rc) ? comp(pg[q+RL-j]) : 'A';
                 fputc(refc,fr); fputc(obsc,fo);
+                // Above 256 the old code wrote `j>255?255:j` -- it CLAMPED,
+                // silently emitting a wrong position for every mismatch past
+                // base 255 and making the archive lossy for any read longer
+                // than 256. Two of the locked datasets are (ERR552797 at 301
+                // bp, SRR40271341 at 300 bp) and both failed to round trip.
+                // Now the same delta is written, as a varint instead of a
+                // byte, so any position is representable. The <=256 path is
+                // untouched, so every existing archive stays byte-identical.
                 if(MMDELTA){ fputc((uint8_t)(j-prevj),fp); prevj=j; }
-                else        fputc((uint8_t)(j>255?255:j),fp);
+                else { uint32_t d=j-prevj; prevj=j;
+                       while(d>=0x80){ fputc((uint8_t)(d|0x80),fp); d>>=7; }
+                       fputc((uint8_t)d,fp); }
                 fputc(prevc,fx);
                 ++emitted; ++mmcount[i];
             }
@@ -2797,7 +2807,11 @@ int main(int argc,char** argv){
         // know. One leading byte fixes it: 0 = flat, 1 = bucketed.
         jobs.push_back({"mm_pos",      [&]{
             auto flat = best_encode(v_mp.data(), v_mp.size());
-            auto buck = mmpos_encode_buckets(v_mp, mmcounts);
+            // The bucketed form indexes one BYTE per mismatch; with varint
+            // positions (Lmax>256) that mapping no longer holds, so the flat
+            // form is forced there. Lmax<=256 is unaffected.
+            auto buck = (Lmax<=256) ? mmpos_encode_buckets(v_mp, mmcounts)
+                                    : std::vector<uint8_t>();
             const bool useB = (!buck.empty() && buck.size()+1 < flat.size()+1);
             std::vector<uint8_t> o; o.reserve((useB?buck.size():flat.size())+1);
             o.push_back(useB?1:0);
