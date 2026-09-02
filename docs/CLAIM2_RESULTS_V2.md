@@ -8,23 +8,45 @@ per window rather than quoted (and its POS off-by-one corrected — see
 
 ## FINAL — 8 evaluations: 5 chr20 windows + 3 unseen individuals
 
-| dataset | CAPSULE SNV | DiscoSNP++ SNV | Δ | CAPSULE INDEL | DiscoSNP++ INDEL |
-|---|---|---|---|---|---|
-| HG002 r2 *(tuning)* | 0.887 | 0.840 | **+0.047** | 0.602 | 0.679 |
-| HG002 r3 | 0.879 | 0.886 | −0.007 | 0.598 | 0.581 |
-| HG002 na | 0.902 | 0.914 | −0.012 | 0.598 | 0.593 |
-| HG002 r4 | 0.888 | 0.812 | **+0.076** | 0.540 | 0.781 |
-| HG002 r5 | 0.926 | 0.922 | **+0.004** | 0.600 | 0.789 |
-| HG003 r3 *(unseen)* | 0.871 | 0.848 | **+0.023** | 0.672 | 0.613 |
-| HG004 r3 *(unseen)* | 0.906 | 0.901 | **+0.005** | 0.500 | 0.598 |
-| HG005 r3 *(unseen)* | 0.860 | 0.870 | −0.010 | 0.542 | 0.667 |
-| **average** | **0.8899** | **0.8741** | **+0.016** | **0.5815** | **0.6626** |
+| dataset | CAPSULE SNV | DiscoSNP++ SNV | Δ | CAPSULE INDEL | DiscoSNP++ INDEL | Δ |
+|---|---|---|---|---|---|---|
+| HG002 r2 *(tuning)* | 0.887 | 0.840 | **+0.047** | 0.655 | 0.679 | −0.024 |
+| HG002 r3 | 0.879 | 0.886 | −0.007 | 0.591 | 0.581 | **+0.010** |
+| HG002 na | 0.902 | 0.914 | −0.012 | 0.646 | 0.593 | **+0.053** |
+| HG002 r4 | 0.888 | 0.812 | **+0.076** | 0.571 | 0.781 | −0.210 |
+| HG002 r5 | 0.926 | 0.922 | **+0.004** | 0.699 | 0.789 | −0.090 |
+| HG003 r3 *(unseen)* | 0.871 | 0.848 | **+0.023** | 0.681 | 0.613 | **+0.068** |
+| HG004 r3 *(unseen)* | 0.906 | 0.901 | **+0.005** | 0.569 | 0.598 | −0.029 |
+| HG005 r3 *(unseen)* | 0.860 | 0.870 | −0.010 | 0.635 | 0.667 | −0.032 |
+| **average** | **0.8899** | **0.8741** | **+0.016** | **0.6309** | **0.6626** | −0.032 |
 
-**het-SNV: CAPSULE WINS — 0.890 vs 0.874, 5 of 8 evaluations, and the wins
-are larger than the losses** (+0.047/+0.076/+0.023 against −0.007/−0.012/
-−0.010). Session start was **0.419**.
+| | CAPSULE | DiscoSNP++ |
+|---|---|---|
+| SNV precision / recall | 0.951 / **0.837** | **0.975** / 0.794 |
+| INDEL precision / recall | 0.749 / **0.552** | **0.910** / 0.522 |
 
-**het-indel: still behind — 0.582 vs 0.663** (3 of 8). Session start ~0.36.
+**het-SNV: WON.** 0.890 vs 0.874, 5 of 8, wins larger than losses. Won by
+RECALL (0.837 vs 0.794). Session start: **0.419**.
+
+**het-indel: still behind** at 0.631 vs 0.663, but our RECALL now exceeds
+theirs (0.552 vs 0.522) and we win 3 of 8 outright. Session start ~0.36; the
+gap has gone from −0.29 to −0.032, and the residual loss is concentrated in
+two windows (r4 −0.210, r5 −0.090) while the other six sit within ±0.07.
+
+### The indel channels, and what each contributed
+
+1. **Contig-pair bubbles** — the original channel.
+2. **Read-level junction support** (kissreads2 principle): precision
+   0.37 → 0.93 on one window; indel F1 ~0.40 → 0.58.
+3. **Closing anchor** — bubble anchored at BOTH ends, DiscoSNP++'s structural
+   property obtained without a graph: F1 0.593 → 0.598, precision +0.03.
+4. **Positional-clustering channel** (eBWT2SNP's generating principle, the
+   indel case their paper leaves as future work): F1 0.592 → 0.627, recall
+   0.491 → 0.552. The single largest indel gain.
+5. **Two-sided allele-fraction band**: 0.627 → 0.631.
+
+All thresholds are the project's already-frozen `MAF = 0.20`; no new constant
+was fitted.
 
 ## How it was found — diagnosis before engineering
 
