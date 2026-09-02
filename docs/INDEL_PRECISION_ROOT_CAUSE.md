@@ -96,3 +96,46 @@ reading them out of the data:
 - **het-indel: lost, and now understood** — 0.592 vs 0.663. The cause is
   stated structurally and backed by eight measurements rather than asserted.
   Closing it is a substrate change of known shape, not a tuning exercise.
+
+
+---
+
+## 7. CORRECTION to section 4, measured 2026-09-02 (later)
+
+Section 4 argues the gap is closable only by generating candidates from the
+read data rather than constructing them from contigs, and points at the
+positional-clustering channel as the embodiment of that. **The channel-isolation
+measurement partly refutes my own framing and belongs on the record.**
+
+Running each indel channel alone (bubble channel suppressed with
+`CAPS_INDEL_ANCH=9999`; pcluster suppressed with `CAPS_NO_PCLUSTER=1`):
+
+| window | both | bubble-only | pcluster-only |
+|---|---|---|---|
+| HG002 r2 | 0.655 | 0.636 | **0.083** |
+| HG002 r5 | **0.699** | 0.623 | **0.208** |
+
+and on r2, where the per-channel P/R is reliable:
+
+| channel | precision | recall |
+|---|---|---|
+| bubble (CONSTRUCTED candidates) | **0.795** | 0.530 |
+| pcluster (candidates READ from data) | **0.500** | 0.045 |
+| both | 0.760 | 0.576 |
+
+**So the data-derived channel is LESS precise standalone, not more.** Its value
+is that it is ADDITIVE — it finds indels the bubble channel misses (recall
+0.530 -> 0.576 on r2, and a large 0.623 -> 0.699 on r5) — but it does not
+deliver the precision that section 4 predicted for it.
+
+What survives of the original analysis: filters could not close the gap
+(ten refuted mechanisms), and adding an independent detection channel could
+partly close it. What does NOT survive: the claim that reading candidates out
+of the reads is intrinsically more precise *in this implementation*. Our
+pcluster candidates are still anchored on, and positioned by, a contig, so they
+inherit the substrate's weaknesses; eBWT2SNP's guarantee comes from both
+haplotype fragments emerging from one cluster, which this does not reproduce.
+
+The remaining gap (0.631 vs 0.663) should therefore be attributed to
+**substrate quality**, not to a missing filter and not to a solved-in-principle
+generator.
