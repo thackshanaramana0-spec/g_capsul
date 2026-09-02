@@ -46,6 +46,27 @@ lift-and-score pipeline. The real picture:
 | ARCS, `ARCS_XSNV=1` | 0.981 | 0.635 | **0.771** | 0.710 |
 | **CAPSULE (this repo)** | 0.939 | 0.270 | **0.419** | 0.357 |
 
+## The competitor that actually sets the bar — DiscoSNP++, rerun here
+
+| tool (HG002 r2, same reads, same scoring) | SNV P | SNV R | **SNV F1** | INDEL F1 |
+|---|---|---|---|---|
+| **DiscoSNP++** (`-T -G`, POS-1 corrected) | 0.971 | 0.740 | **0.840** | 0.491 |
+| ARCS, `ARCS_XSNV=1` | 0.981 | 0.635 | **0.771** | **0.710** |
+| ARCS, default config | — | — | **0.000** | ~0.46 |
+| **CAPSULE (this repo)** | 0.939 | 0.270 | **0.419** | 0.357 |
+| Kmer2SNP | *running* | | | |
+
+**DiscoSNP++ sets the real bar at 0.840 SNV F1** — it is the strongest tool
+on this window, ahead of ARCS itself. CAPSULE's 0.419 is roughly half of it.
+Note DiscoSNP++'s POS is off by one (326 of 331 REF bases match the genome at
+`POS-1`, only 80 at `POS`); uncorrected it scores F1 0.004, so **any
+comparison that does not apply this correction is meaningless** — the outer
+project documented the same quirk.
+
+Note also that CAPSULE currently has the *best indel/SNV balance problem in
+reverse*: ARCS beats everything on indels (0.710) while DiscoSNP++ leads on
+SNVs (0.840).
+
 Two findings that matter more than the ranking:
 
 1. **ARCS's published 0.954 does not reproduce on this input.** Its default
