@@ -60,6 +60,14 @@ installed as the de-novo baseline.
 | HG002 r2 | 0.032 s | 8.14 s | **254×** | 0.052 s | 1.33 s | **26×** | 0.039 s |
 | HG002 r5 | 0.028 s | 8.78 s | **314×** | 0.049 s | 1.23 s | **25×** | 0.035 s |
 | HG005 r3 | 0.045 s | 12.31 s | **274×** | 0.064 s | 1.46 s | **23×** | 0.051 s |
+| E. coli | 0.465 s | SPAdes 258.15 s | **555×** | — | — | — | — |
+
+SPAdes (v4.0.0, default full pipeline: BayesHammer correction + K21/33/55/77
+iterative assembly + repeat resolution) is the spec-exact export baseline,
+installed and run 2026-09-03 — earlier figures used MEGAHIT as a substitute
+because SPAdes was not yet installed. 239 real contigs produced (largest
+243,716 bp), peak RAM 5.20 GB. **Gap #5 (export vs the spec-named tool) is now
+closed.**
 
 Both beat the spec's targets (≥40× export, 2–5× coverage) by a wide margin, and
 the coverage figure is **conservative** — the conventional side used a
