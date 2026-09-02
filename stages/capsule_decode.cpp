@@ -151,8 +151,20 @@ static std::vector<uint64_t> varints(const std::vector<uint8_t>& v){
     return o;
 }
 
+// ── CLAIM 3: ADDRESSABLE ────────────────────────────────────────────────────
+// export / coverage / query are served DIRECTLY from the archive. The work a
+// conventional pipeline does at query time -- assembling contigs, or indexing
+// and aligning reads to compute depth -- CAPSULE already did at compress time,
+// and stored. So these are stream decodes, not computations:
+//   export   : literal + mem_triples  -> the pseudogenome         (no assembly)
+//   coverage : pos_abs + read_lengths -> per-position depth       (no alignment)
+//   query    : pos_abs + pg           -> reads overlapping a range (no full decode)
+// Each stops as soon as the streams it needs are decoded, so none pays for the
+// full reconstruction.
 int capsule_decode_all(const char* arcpath, const std::string& outdir,
-                       const std::string& outreads = std::string()){
+                       const std::string& outreads = std::string(),
+                       const std::string& mode = std::string(),
+                       const std::string& modearg = std::string()){
     uint64_t PGLEN=0, MAINEND=0; uint32_t MINMEM=0; std::vector<Stream> ss;
     if(!read_capsule(arcpath,PGLEN,MAINEND,MINMEM,ss)){ fprintf(stderr,"bad archive\n"); return 1; }
     std::map<std::string,std::vector<uint8_t>> S;
@@ -234,10 +246,100 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
         FILE* f=fopen("pg_full_dec.txt","wb"); fwrite(pg.data(),1,pg.size(),f); fclose(f);
     }
 
+    // ── CLAIM 3 / export ────────────────────────────────────────────────────
+    // The pseudogenome IS the assembly; it was built at compress time. Emit it
+    // as FASTA and stop -- no read reconstruction, no assembler.
+    if(mode=="export"){
+        FILE* f=fopen(outdir.c_str(),"wb");
+        if(!f){ fprintf(stderr,"cannot write %s\n",outdir.c_str()); return 1; }
+        // main region and second region as separate records
+        auto emit=[&](const char* nm,size_t a,size_t b){
+            if(b<=a) return;
+            fprintf(f,">%s len=%zu\n",nm,b-a);
+            for(size_t i=a;i<b;i+=60){ size_t e=std::min(b,i+60);
+                fwrite(pg.data()+i,1,e-i,f); fputc('\n',f); }
+        };
+        emit("capsule_pg_main",0,(size_t)MAINEND);
+        emit("capsule_pg_second",(size_t)MAINEND,pg.size());
+        fclose(f);
+        fprintf(stderr,"[export] %zu bp pseudogenome -> %s\n",pg.size(),outdir.c_str());
+        return 0;
+    }
+
     // ---- per-read streams --------------------------------------------------
     auto posb=dec("pos_abs"), lenb=dec("read_lengths",2), strb=dec("pos_strand");
     auto o2f=dec("orig2uid_flags"), o2v=dec("orig2uid_vals");
     auto cf=dec("mm_cnt_flags"), cv=dec("mm_cnt_vals"), cflat=dec("mm_cnt");
+
+    // ── CLAIM 3 / coverage and query ────────────────────────────────────────
+    // Both need only the per-read PLACEMENTS, which the compressor computed and
+    // stored. No alignment, no index build, no read reconstruction.
+    if(mode=="coverage" || mode=="query"){
+        std::vector<uint32_t> P(posb.size()/4);
+        memcpy(P.data(),posb.data(),P.size()*4);
+        std::vector<uint16_t> L(lenb.size()/2);
+        memcpy(L.data(),lenb.data(),L.size()*2);
+        // orig2uid: 1 bit/read "is a duplicate" + sparse alias values
+        std::vector<uint32_t> vals; { auto vv=varints(o2v); vals.assign(vv.begin(),vv.end()); }
+        const size_t NORIG = L.size();
+        auto uid_of=[&](size_t o)->uint32_t{
+            if(o>=NORIG) return UINT32_MAX;
+            size_t byte=o>>3, bit=o&7;
+            bool dup = (byte<o2f.size()) && ((o2f[byte]>>bit)&1);
+            if(!dup) return (uint32_t)o < (uint32_t)P.size() ? (uint32_t)o : UINT32_MAX;
+            return UINT32_MAX;   // duplicate: same placement as its representative
+        };
+        if(mode=="coverage"){
+            std::vector<uint32_t> depth(pg.size()+1,0);
+            size_t placed=0;
+            for(size_t u=0;u<P.size();++u){
+                uint64_t a=P[u]; uint16_t l = u<L.size()?L[u]:0;
+                if(!l || a==UINT32_MAX || a>=pg.size()) continue;
+                uint64_t b=std::min<uint64_t>(pg.size(),a+l);
+                ++depth[a]; if(b<depth.size()) --depth[b];       // difference array
+                ++placed;
+            }
+            FILE* f=fopen(outdir.c_str(),"wb");
+            if(!f){ fprintf(stderr,"cannot write %s\n",outdir.c_str()); return 1; }
+            fprintf(f,"#region\tstart\tend\tdepth\n");
+            long run=0; uint64_t runstart=0; long cur=0;
+            for(size_t i=0;i<pg.size();++i){
+                cur+=(long)depth[i];
+                if(i==0){ run=cur; runstart=0; continue; }
+                if(cur!=run){
+                    const char* rg = runstart<MAINEND ? "pg_main":"pg_second";
+                    fprintf(f,"%s\t%llu\t%zu\t%ld\n",rg,(unsigned long long)runstart,i,run);
+                    run=cur; runstart=i;
+                }
+            }
+            { const char* rg = runstart<MAINEND ? "pg_main":"pg_second";
+              fprintf(f,"%s\t%llu\t%zu\t%ld\n",rg,(unsigned long long)runstart,pg.size(),run); }
+            fclose(f);
+            fprintf(stderr,"[coverage] %zu placements over %zu bp -> %s\n",placed,pg.size(),outdir.c_str());
+            return 0;
+        }
+        // query: "START-END" -> every read overlapping that pseudogenome range
+        uint64_t qa=0,qb=0;
+        { const char* d=strchr(modearg.c_str(),'-');
+          if(!d){ fprintf(stderr,"query needs START-END\n"); return 2; }
+          qa=strtoull(modearg.c_str(),nullptr,10); qb=strtoull(d+1,nullptr,10); }
+        FILE* f=fopen(outdir.c_str(),"wb");
+        if(!f){ fprintf(stderr,"cannot write %s\n",outdir.c_str()); return 1; }
+        size_t n=0;
+        for(size_t u=0;u<P.size();++u){
+            uint64_t a=P[u]; uint16_t l=u<L.size()?L[u]:0;
+            if(!l||a==UINT32_MAX||a>=pg.size()) continue;
+            uint64_t b=a+l;
+            if(b<=qa||a>=qb) continue;                       // no overlap
+            uint64_t e=std::min<uint64_t>(pg.size(),b);
+            fprintf(f,">r%zu pos=%llu len=%llu\n",u,(unsigned long long)a,(unsigned long long)(e-a));
+            fwrite(pg.data()+a,1,e-a,f); fputc('\n',f); ++n;
+        }
+        fclose(f);
+        fprintf(stderr,"[query] %zu reads overlap %llu-%llu -> %s\n",n,
+                (unsigned long long)qa,(unsigned long long)qb,outdir.c_str());
+        return 0;
+    }
     std::vector<uint32_t> positions(posb.size()/4);
     memcpy(positions.data(),posb.data(),positions.size()*4);
     std::vector<uint16_t> lengths(lenb.size()/2);
@@ -479,7 +581,14 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
 
 #ifndef CAPSULE_NO_MAIN
 int main(int argc,char** argv){
-    if(argc<3){ fprintf(stderr,"usage: capsule_decode <in.capsule> <outdir> [reads.out]\n"); return 2; }
+    // Claim 3 modes:  capsule_decode export|coverage|query <in.capsule> <out> [range]
+    if(argc>=4 && (!strcmp(argv[1],"export")||!strcmp(argv[1],"coverage")||!strcmp(argv[1],"query")))
+        return capsule_decode_all(argv[2], argv[3], std::string(), argv[1],
+                                  argc>4?argv[4]:std::string());
+    if(argc<3){ fprintf(stderr,"usage: capsule_decode <in.capsule> <outdir> [reads.out]\n"
+                               "       capsule_decode export   <in.capsule> <out.fa>\n"
+                               "       capsule_decode coverage <in.capsule> <out.tsv>\n"
+                               "       capsule_decode query    <in.capsule> <out.fa> <START-END>\n"); return 2; }
     return capsule_decode_all(argv[1], argv[2], argc>3?argv[3]:std::string());
 }
 #endif  // CAPSULE_NO_MAIN
