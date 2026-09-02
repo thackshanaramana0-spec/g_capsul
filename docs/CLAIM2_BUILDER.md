@@ -123,12 +123,24 @@ CAPS_CALL=1 CALL_VCF=/path/calls.vcf INPUT=/path/sim.fq \
 grep -v '^#' /path/calls.vcf | wc -l
 ```
 
-Note: `encode_adaptive.sh` forks 4 MAXMAP/MINOV candidates (A3) that all run
-`CAPS_CALL` and all write to the SAME `CALL_VCF` path — they overwrite each
-other rather than racing byte-for-byte (each write is a full, complete
-`fopen`+write+`fclose`), so the file left on disk is whichever candidate's
-write lands last, not necessarily the smallest-archive candidate's calls.
-**This is a real, currently-unaddressed interaction** — for anything beyond
-a smoke test, invoke the binary directly with one fixed MAXMAP/MINOV (skip
-the sweep) so there's no ambiguity about which candidate's VCF you're
-looking at.
+### The A3 candidate race — FIXED
+
+`encode_adaptive.sh` forks 4 MAXMAP/MINOV candidates (A3), and originally all
+4 ran `CAPS_CALL` and wrote to the SAME `CALL_VCF` path, so the file left on
+disk belonged to whichever child finished LAST — a scheduling race, not
+reproducible run to run, and not necessarily the winning (smallest-archive)
+candidate's calls.
+
+**Fixed** the same way the code already fixes it for `VERIFY_DUMP` stream
+files (see the comment block in `106_inprocess.cpp`'s child setup, which
+records the identical bug being found for the dumps earlier): each child now
+writes `<CALL_VCF>.cand<N>` and `<CAPS_DUMP_CONTIGS>.cand<N>` (resolved to
+absolute paths BEFORE the child's `chdir`, so a relative path still means what
+the caller meant), and the parent — which already picks the winner by archive
+size — promotes the winner's outputs to the requested paths and deletes the
+losers'. Logged as `[a3] promoted candidate N's calls -> <path>`.
+
+Verified: two consecutive sweep runs on the synthetic test produce a
+byte-identical VCF (same md5), promoted from candidate 0, which is also the
+candidate whose archive won (`MAXMAP=7 MINOV=16`), with no `.cand*` files
+left behind.

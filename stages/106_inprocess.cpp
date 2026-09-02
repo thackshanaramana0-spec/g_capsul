@@ -1123,6 +1123,31 @@ int main(int argc,char** argv){
                         closedir(dp); rmdir(d.c_str());
                     }
                 }
+                // Promote the WINNER's caller outputs to the paths the caller
+                // actually asked for, and drop the losers'. Without this the
+                // surviving VCF is whichever candidate finished last (a
+                // scheduling race, not reproducible) -- see the matching
+                // comment in the child block below.
+                if(CAPS_CALL){
+                    auto pabso=[&](const char* p)->std::string{
+                        std::string s(p);
+                        return (!s.empty() && s[0]=='/') ? s : (std::string(pcwd) + "/" + s);
+                    };
+                    const char* cve = getenv("CALL_VCF");
+                    const std::string cv = cve ? pabso(cve) : (std::string(pcwd) + "/out.vcf");
+                    for(size_t ci=0; ci<cands.size(); ++ci){
+                        std::string f = cv + ".cand" + std::to_string(ci);
+                        if(ci==bi) rename(f.c_str(), cv.c_str()); else remove(f.c_str());
+                    }
+                    if(const char* dce = getenv("CAPS_DUMP_CONTIGS")){
+                        const std::string dc = pabso(dce);
+                        for(size_t ci=0; ci<cands.size(); ++ci){
+                            std::string f = dc + ".cand" + std::to_string(ci);
+                            if(ci==bi) rename(f.c_str(), dc.c_str()); else remove(f.c_str());
+                        }
+                    }
+                    fprintf(stderr,"  [a3] promoted candidate %zu's calls -> %s\n", bi, cv.c_str());
+                }
                 fprintf(stderr,"  [a3] chose MAXMAP=%u MINOV=%u -> %zu B (one shared prefix)\n",
                         cands[bi].first, cands[bi].second, bestsz);
                 fprintf(stderr,"ARCHIVE_TOTAL=%zu\n",bestsz);
@@ -1150,6 +1175,27 @@ int main(int argc,char** argv){
             setenv("MAXMAP", std::to_string(cands[mine].first).c_str(), 1);
             setenv("MINOV",  std::to_string(cands[mine].second).c_str(), 1);
             setenv("ARCHIVE", (absbase + ".cand" + std::to_string(mine)).c_str(), 1);
+            // CAPS_CALL outputs have the SAME hazard the dump files above had:
+            // every child writes the caller's VCF (and contig dump) to one
+            // shared path, so what survives belongs to whichever child ran
+            // LAST, not to the winner -- and which child that is depends on
+            // scheduling, so the result was not even reproducible run to run.
+            // Same fix: each candidate writes its own file, absolute (resolved
+            // BEFORE the chdir below, so a relative path the caller passed
+            // still refers to the directory they meant), and the parent
+            // promotes the winner's and deletes the losers'.
+            if(CAPS_CALL){
+                auto abso=[&](const char* p)->std::string{
+                    std::string s(p);
+                    return (!s.empty() && s[0]=='/') ? s : (std::string(cwdbuf) + "/" + s);
+                };
+                if(const char* cv = getenv("CALL_VCF"))
+                    setenv("CALL_VCF", (abso(cv) + ".cand" + std::to_string(mine)).c_str(), 1);
+                else
+                    setenv("CALL_VCF", (std::string(cwdbuf) + "/out.vcf.cand" + std::to_string(mine)).c_str(), 1);
+                if(const char* dc = getenv("CAPS_DUMP_CONTIGS"))
+                    setenv("CAPS_DUMP_CONTIGS", (abso(dc) + ".cand" + std::to_string(mine)).c_str(), 1);
+            }
             if(chdir(ddir.c_str())!=0) perror("chdir");
             sweep_minov = cands[mine].second;
             }
