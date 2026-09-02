@@ -1361,6 +1361,11 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             // rising without saturating. Counting distinct read ids makes the
             // support interpretable and lets it be compared against coverage.
             std::map<std::tuple<uint32_t,uint32_t,int,std::string>, std::unordered_set<uint32_t>> pvotes;
+            // Distinct ANCHORS backing each event. Independent right-context
+            // anchors are independent evidence, the same standard the bubble
+            // channel applies via MIN_ANCH. Without it a single anchor's worth
+            // of reads can carry an event on its own.
+            std::map<std::tuple<uint32_t,uint32_t,int,std::string>, std::unordered_set<uint32_t>> panch;
             for (auto& kv : kidx) {
                 if (kv.second.size() != 1) continue;          // unique contig anchor
                 uint32_t ccid = std::get<0>(kv.second[0]);
@@ -1404,7 +1409,9 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                     if (!best_g) continue;
                     uint32_t apos2 = cpos - (uint32_t)d;       // contig position of the event
                     if (apos2 == 0) continue;
-                    pvotes[std::make_tuple(ccid, apos2, best_g, best_ins)].insert(pr.first);
+                    auto pkey = std::make_tuple(ccid, apos2, best_g, best_ins);
+                    pvotes[pkey].insert(pr.first);
+                    panch[pkey].insert(cpos);
                 }
             }
             int PMIN = MC;
@@ -1413,6 +1420,16 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             for (auto& kv : pvotes) {
                 const int nsup = (int)kv.second.size();
                 if (nsup < PMIN) continue;
+                // MEASURED NEUTRAL-TO-NEGATIVE, so no constraint by default.
+                // Five windows: >=1 gives mean indel F1 0.6478 (identical to
+                // no constraint, a useful sanity check that the code is inert
+                // at 1), >=2 gives 0.655/0.699/0.635/0.554/... -- r4 falls
+                // 0.569 -> 0.554. Nearly every real event already has multiple
+                // anchors, so the requirement removes true calls without
+                // removing false ones. Kept adjustable, defaulted off.
+                int PANCH = 1;
+                if (const char* e = std::getenv("CAPS_PCLUSTER_ANCH")) PANCH = atoi(e);
+                if ((int)panch[kv.first].size() < PANCH) continue;
                 uint32_t ccid, apos2; int g; std::string insseq;
                 std::tie(ccid, apos2, g, insseq) = kv.first;
                 const std::string& cc2 = cdb.contigs[ccid];
