@@ -1436,6 +1436,16 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                         double afmin = MAF;
                         if (const char* e = std::getenv("CAPS_PCLUSTER_AF")) afmin = atof(e);
                         if (af < afmin) continue;
+                        // UPPER bound too. A HETEROZYGOUS indel is carried by
+                        // roughly half the reads; if essentially EVERY read at
+                        // the locus shows the gap, the event is homozygous with
+                        // respect to our contig -- a real sequence difference,
+                        // but not a heterozygous variant, and the truth set is
+                        // het-restricted, so it can only ever score as a false
+                        // positive. The SNV path has always applied a two-sided
+                        // band for exactly this reason; the indel path had only
+                        // a floor. Upper bound is the symmetric 1-MAF.
+                        if (!std::getenv("CAPS_NO_PCLUSTER_HI") && af > 1.0 - MAF) continue;
                     }
                 }
                 char anch = cc2[apos2 - 1];
