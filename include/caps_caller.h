@@ -220,6 +220,59 @@ inline Bubble extract_bubble(const std::string& A, uint32_t pA, const std::strin
     return r;
 }
 
+// ── Whole-pair gapped alignment scan ─────────────────────────────────────────
+// MEASURED MOTIVATION (docs/INDEL_LOSS_SKELETAL.md §8): both allele-contigs
+// DO exist (84% of placed reads match their contig perfectly), but the two are
+// never paired at the event, because near a homopolymer every 25-mer
+// overlapping the run differs between haplotypes, so the shared anchors that
+// survive sit 213-135,453 bp away. Walking outward from such an anchor dies on
+// ~335 bp contigs.
+// This removes both constraints at once: take the diagonal implied by ANY
+// shared anchor and scan the ENTIRE co-linear region, resolving each divergence
+// with a gap and continuing past it on the updated diagonal. Events anywhere
+// along the pair are then reachable from one distant anchor.
+inline std::vector<Bubble> scan_pair(const std::string& A, uint32_t pA,
+                                     const std::string& B, uint32_t qB,
+                                     int maxindel, int TAIL, int MAXEV) {
+    std::vector<Bubble> out;
+    long delta = (long)qB - (long)pA;                 // B index = A index + delta
+    long i = std::max<long>(0, -delta);
+    long endA = std::min<long>((long)A.size(), (long)B.size() - delta);
+    long run = 0;                                     // matched bases since last event
+    while (i < endA && (int)out.size() < MAXEV) {
+        long j = i + delta;
+        if (j < 0 || j >= (long)B.size()) break;
+        if (A[(size_t)i] == B[(size_t)j]) { ++i; ++run; continue; }
+        if (run < 12) { ++i; run = 0; continue; }     // need a left context
+        int found = 0; std::string ins;
+        for (int g = 1; g <= maxindel && !found; ++g) {
+            // A carries g extra bases -> deletion in B
+            if (i + g + TAIL <= (long)A.size() && j + TAIL <= (long)B.size()) {
+                int mm = 0;
+                for (int t = 0; t < TAIL; ++t)
+                    if (A[(size_t)(i + g + t)] != B[(size_t)(j + t)]) { ++mm; if (mm > 1) break; }
+                if (mm <= 1) { found = 1; }
+            }
+            // B carries g extra bases -> insertion in B
+            if (!found && j + g + TAIL <= (long)B.size() && i + TAIL <= (long)A.size()) {
+                int mm = 0;
+                for (int t = 0; t < TAIL; ++t)
+                    if (A[(size_t)(i + t)] != B[(size_t)(j + g + t)]) { ++mm; if (mm > 1) break; }
+                if (mm <= 1) { found = 2; ins = B.substr((size_t)j, (size_t)g); }
+            }
+            if (found) {
+                Bubble b; b.ok = true; b.apos = (uint32_t)i; b.len = g;
+                if (found == 1) { b.type = 0; i += g; delta -= g; }
+                else            { b.type = 1; b.ins = ins; delta += g; }
+                out.push_back(b);
+                run = 0;
+            }
+        }
+        if (!found) { ++i; run = 0; }                 // a substitution: keep going
+    }
+    return out;
+}
+
 // ── Cross-contig SNV bubble ───────────────────────────────────────────────────
 // A 1-substitution bubble between two haplotype contigs: they share flanking
 // sequence but differ at exactly one base. CAPSULE's assembler (exact
@@ -1043,6 +1096,10 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             }
         }
         struct Agg { int anchors = 0; uint32_t altcid = 0, altpos = 0; };
+        // pair -> (shared anchors, representative anchor offsets) for the
+        // whole-pair alignment scan below
+        struct PairRep { int n = 0; uint32_t rp = 0, qB = 0, ap = 0; bool opp = false; };
+        std::map<std::pair<uint32_t,uint32_t>, PairRep> pairs_;
         std::map<std::tuple<uint32_t,uint32_t,int,int,std::string>, Agg> im;
         // ANCHOR MULTIPLICITY. The rule used to be `occ.size() != 2 -> skip`,
         // i.e. an anchor was only usable if its 25-mer occurred EXACTLY twice
@@ -1219,6 +1276,11 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                     if (mmL + mmR > EXT_TOL) continue;          // diverges: paralog, not a haplotype pair
                 }
             }
+            {   // record the pair for the whole-pair scan (once per anchor)
+                auto& pr_ = pairs_[{rc_, ac}];
+                if (pr_.n == 0) { pr_.rp = rp; pr_.qB = qB; pr_.ap = ap; pr_.opp = opp; }
+                ++pr_.n;
+            }
             if (std::getenv("CAPS_TRACE"))
                 fprintf(stderr, "[trace] AGG cid=%u apos=%u type=%d len=%d\n", rc_, bub.apos, bub.type, bub.len);
             auto& a = im[std::make_tuple(rc_, bub.apos, bub.type, bub.len, bub.ins)];
@@ -1238,6 +1300,42 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
             medcov[ci] = v[v.size() / 2];
         }
+        // ── WHOLE-PAIR ALIGNMENT SCAN ────────────────────────────────────
+        // One scan per contig PAIR (not per anchor), on the diagonal implied by
+        // any shared anchor, so events far from every anchor are reachable.
+        // Evidence for such an event is the pair's shared-anchor count, which
+        // is what MIN_ANCH already judges.
+        if (!std::getenv("CAPS_NO_ALIGNPAIR")) {
+            int MAXEV = 12;
+            if (const char* e = std::getenv("CAPS_ALIGNPAIR_MAXEV")) MAXEV = atoi(e);
+            size_t added = 0;
+            for (auto& pv : pairs_) {
+                uint32_t rc2 = pv.first.first, ac2 = pv.first.second;
+                if (rc2 >= cdb.contigs.size() || ac2 >= cdb.contigs.size()) continue;
+                const std::string& R2 = cdb.contigs[rc2];
+                std::string B2 = pv.second.opp ? rc_str(cdb.contigs[ac2]) : cdb.contigs[ac2];
+                auto bl = scan_pair(R2, pv.second.rp, B2, pv.second.qB, MAXINDEL, FLANK, MAXEV);
+                for (auto& b : bl) {
+                    if (!b.ok || b.apos == 0) continue;
+                    auto& a3 = im[std::make_tuple(rc2, b.apos, b.type, b.len, b.ins)];
+                    if (a3.anchors == 0) { a3.altcid = ac2; a3.altpos = pv.second.ap; ++added; }
+                    // Credit each PAIR a bounded amount rather than its full
+                    // shared-anchor count: a pair with 50 shared anchors is one
+                    // piece of evidence, not 50, and crediting it fully let a
+                    // single pair clear MIN_ANCH on its own (measured: net
+                    // -0.006 indel F1, precision-side). With a bounded credit
+                    // an alignment-scan event must be corroborated by several
+                    // INDEPENDENT contig pairs before it is emitted.
+                    int CREDIT = 3;
+                    if (const char* e = std::getenv("CAPS_ALIGNPAIR_CREDIT")) CREDIT = atoi(e);
+                    a3.anchors += std::min(pv.second.n, CREDIT);
+                }
+            }
+            if (std::getenv("CAPS_PCDBG"))
+                fprintf(stderr, "[ap] pairs=%zu new-events=%zu total-events=%zu\n",
+                        pairs_.size(), added, im.size());
+        }
+
         // ── MAXIMUM-WEIGHT MATCHING over candidate bubbles ───────────────
         // Taken from Kmer2SNP, which models reference-free SNP calling as a
         // MATCHING: heterozygous k-mers are vertices, candidate pairings are
