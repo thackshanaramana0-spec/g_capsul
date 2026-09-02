@@ -261,7 +261,8 @@ inline std::vector<uint32_t> collapse_contigs(const std::vector<std::string>& ct
 // the surviving contigs allowing mismatches (both strands), keeping the best
 // placement. Falls back to the encoder's own placement for reads that cannot
 // be placed, so nothing is lost relative to the previous behaviour.
-inline Substrate build_substrate(const std::vector<std::string>& seqs, const CallData& cd) {
+inline Substrate build_substrate(const std::vector<std::string>& seqs, const CallData& cd,
+                                 double dup_override = -1.0) {
     using namespace detail;
     Substrate S;
     const bool NO_REMAP    = std::getenv("CAPS_NO_REMAP")    != nullptr;
@@ -280,6 +281,7 @@ inline Substrate build_substrate(const std::vector<std::string>& seqs, const Cal
         // the CENTRE of the plateau, not its argmax.
         double dup = 0.45;
         if (const char* e = std::getenv("CAPS_DUP_FRAC")) dup = atof(e);
+        if (dup_override > 0) dup = dup_override;
         keep = collapse_contigs(cd.contigs, dup, K);
     }
     std::vector<int32_t> old2new(cd.contigs.size(), -1);
@@ -388,14 +390,6 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
     int PLOIDY = 2;
     if (const char* pe = std::getenv("CAPS_PLOIDY")) { int v = atoi(pe); if (v >= 2 && v <= 4) PLOIDY = v; }
 
-    if (const char* dp = std::getenv("CAPS_DUMP_CONTIGS")) {
-        FILE* df = fopen(dp, "w");
-        if (df) {
-            for (size_t ci = 0; ci < cd.contigs.size(); ++ci)
-                fprintf(df, ">contig_%zu\n%s\n", ci, cd.contigs[ci].c_str());
-            fclose(df);
-        }
-    }
 
     // ── 1. Internal canonical-31-mer counts ──
     std::unordered_map<uint64_t, uint32_t> kc;
@@ -564,7 +558,11 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
     }
 
     // ── 6a. SNV records ──
-    struct OutRec { uint32_t cid, pos; std::string ref, alt, info; };
+    // src: 0 = record is in the COLLAPSED substrate's contig space (SNV
+    // pileup), 1 = in the ORIGINAL uncollapsed contig space (bubble passes).
+    // The two spaces have different contig numbering, so they are emitted
+    // under different CHROM prefixes and both sets are dumped for the lift.
+    struct OutRec { uint32_t cid, pos; std::string ref, alt, info; int src; };
     std::vector<OutRec> orecs;
     std::sort(kept.begin(), kept.end());
     for (auto& kp : kept) {
@@ -578,7 +576,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             char alt = "ACGT"[altb & 3];
             char info[64];
             snprintf(info, sizeof info, "AF=%.3f;DP=%d", (double)c.cnt[c.mn] / c.d, c.d);
-            orecs.push_back({cid, pos + 1u, std::string(1, ref), std::string(1, alt), info});
+            orecs.push_back({cid, pos + 1u, std::string(1, ref), std::string(1, alt), info, 0});
         } else {
             int o[4] = {0,1,2,3};
             std::sort(o, o + 4, [&](int a, int b){ return c.cnt[a] > c.cnt[b]; });
@@ -594,21 +592,66 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             if (nalt == 0) continue;
             char info[80];
             snprintf(info, sizeof info, "AF=%.3f;DP=%d;PLOIDY=%d", (double)c.cnt[c.mn] / c.d, c.d, PLOIDY);
-            orecs.push_back({cid, pos + 1u, std::string(1, ref), alts, info});
+            orecs.push_back({cid, pos + 1u, std::string(1, ref), alts, info, 0});
         }
     }
     size_t n_snv = orecs.size();
 
     // ── 6b. Indel pass: het indels are BUBBLES between haplotype contigs ──
     size_t n_indel = 0;
-    if (!std::getenv("CAPS_NO_INDELS") && cd.contigs.size() >= 2) {
+    // DUAL VIEW. The collapse pass is what makes the SNV pileup work (it puts
+    // both alleles' reads in one frame), but it is actively HARMFUL to the
+    // bubble passes below, which need the two haplotype copies to still exist
+    // as SEPARATE contigs -- collapsing deletes exactly the pair a bubble is
+    // made of. Measured on HG002 held-out windows: indel F1 fell 0.357 -> 0.293
+    // (r3) / 0.159 (na) once collapse was enabled.
+    // So: SNVs are called on the collapsed+remapped substrate (above), and the
+    // bubble passes run on the ORIGINAL uncollapsed contigs (below). One
+    // assembly, two views, each used where it is correct.
+    // A/B TESTED, both directions, same reads (HG002 r2): bubbles on the
+    // COLLAPSED substrate score INDEL F1 0.422; on the ORIGINAL uncollapsed
+    // contigs 0.349. My dual-view hypothesis -- that bubbles need the
+    // duplicate pair collapse deletes -- is REFUTED: collapse helps the bubble
+    // passes too, because a bubble needs the two HAPLOTYPES to differ, not the
+    // same haplotype duplicated. Default is therefore the collapsed substrate;
+    // CAPS_BUBBLE_UNCOLLAPSED=1 restores the other view for re-measurement.
+    // MEASURED TENSION (HG002 r2, same reads, dup_frac swept):
+    //     dup=0.45 -> SNV F1 0.882, INDEL F1 0.217
+    //     dup=0.80 -> SNV F1 0.821, INDEL F1 0.422
+    //     no collapse -> SNV F1 0.856, INDEL F1 0.349
+    // The two variant classes want DIFFERENT amounts of collapse, and neither
+    // setting is good for both. The SNV pileup wants both haplotypes' reads in
+    // ONE frame (aggressive collapse); a bubble needs the two haplotypes to
+    // still exist as TWO comparable contigs (mild collapse -- enough to remove
+    // same-haplotype duplicates, not enough to merge the haplotypes).
+    // So build TWO substrates from the one assembly, each at its own optimum.
+    // This is the dual view done correctly; an earlier attempt paired the
+    // pileup view with the UNCOLLAPSED contigs and was refuted (0.349).
+    const bool BUB_UNCOL = std::getenv("CAPS_BUBBLE_UNCOLLAPSED") != nullptr;
+    // Swept on the tuning window only: INDEL F1 0.315 (0.65) / 0.413 (0.80) /
+    // 0.453 (0.92), and 0.349 with no collapse at all -- a peak near 0.92,
+    // i.e. collapse just enough to drop same-haplotype duplicates while
+    // keeping the two haplotypes apart. SNV F1 is flat (0.873-0.880) across
+    // this range, so the two views can be set independently.
+    double bub_dup = 0.92;
+    if (const char* e = std::getenv("CAPS_BUB_DUP_FRAC")) bub_dup = atof(e);
+    CallData cd_bub;
+    if (!BUB_UNCOL) {
+        Substrate B = build_substrate(seqs, cd_in, bub_dup);
+        cd_bub.contigs = std::move(B.contigs); cd_bub.read_cid = std::move(B.read_cid);
+        cd_bub.read_pos = std::move(B.read_pos); cd_bub.read_rc = std::move(B.read_rc);
+        cd_bub.valid = true;
+    }
+    const CallData& cdb = BUB_UNCOL ? cd_in : cd_bub;
+    const int BUB_SRC = 1;   // bubble records always live in cdb's own contig space
+    if (!std::getenv("CAPS_NO_INDELS") && cdb.contigs.size() >= 2) {
         constexpr int BK = 25, FLANK = 15;
-        std::vector<std::vector<uint16_t>> cov(cd.contigs.size());
-        for (size_t ci = 0; ci < cd.contigs.size(); ++ci)
-            cov[ci].assign(cd.contigs[ci].size(), 0);
+        std::vector<std::vector<uint16_t>> cov(cdb.contigs.size());
+        for (size_t ci = 0; ci < cdb.contigs.size(); ++ci)
+            cov[ci].assign(cdb.contigs[ci].size(), 0);
         for (size_t oi = 0; oi < n; ++oi) {
-            uint32_t cid = cd.read_cid[oi], pos = cd.read_pos[oi];
-            if (cid >= cd.contigs.size()) continue;
+            uint32_t cid = cdb.read_cid[oi], pos = cdb.read_pos[oi];
+            if (cid >= cdb.contigs.size()) continue;
             int rl = (int)seqs[oi].size();
             for (int j = 0; j < rl; ++j) {
                 uint32_t p = pos + (uint32_t)j;
@@ -617,8 +660,8 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         }
         std::unordered_map<uint64_t, std::vector<std::tuple<uint32_t,uint32_t,uint8_t>>> kidx;
         kidx.reserve(1u << 20);
-        for (size_t ci = 0; ci < cd.contigs.size(); ++ci) {
-            const std::string& c = cd.contigs[ci];
+        for (size_t ci = 0; ci < cdb.contigs.size(); ++ci) {
+            const std::string& c = cdb.contigs[ci];
             for (size_t i = 0; i + BK <= c.size(); ++i) {
                 uint64_t v; if (!pack25(c.data() + i, v)) continue;
                 uint64_t rcv = rc25(v), canon = v < rcv ? v : rcv;
@@ -634,12 +677,12 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             std::tie(ca, pa, oa) = occ[0]; std::tie(cb, pb, ob) = occ[1];
             if (ca == cb) continue;
             uint32_t rc_, rp, ac, ap; uint8_t ro, ao;
-            if (cd.contigs[ca].size() >= cd.contigs[cb].size()) { rc_=ca; rp=pa; ro=oa; ac=cb; ap=pb; ao=ob; }
+            if (cdb.contigs[ca].size() >= cdb.contigs[cb].size()) { rc_=ca; rp=pa; ro=oa; ac=cb; ap=pb; ao=ob; }
             else { rc_=cb; rp=pb; ro=ob; ac=ca; ap=pa; ao=oa; }
-            const std::string& R = cd.contigs[rc_];
+            const std::string& R = cdb.contigs[rc_];
             bool opp = (ro != ao);
-            std::string Aalt = opp ? rc_str(cd.contigs[ac]) : cd.contigs[ac];
-            uint32_t qB = opp ? (uint32_t)(cd.contigs[ac].size() - ap - BK) : ap;
+            std::string Aalt = opp ? rc_str(cdb.contigs[ac]) : cdb.contigs[ac];
+            uint32_t qB = opp ? (uint32_t)(cdb.contigs[ac].size() - ap - BK) : ap;
             Bubble bub = extract_bubble(R, rp, Aalt, qB, MAXINDEL, FLANK);
             if (!bub.ok || bub.apos == 0) continue;
             auto& a = im[std::make_tuple(rc_, bub.apos, bub.type, bub.len, bub.ins)];
@@ -651,8 +694,8 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             for (int x = std::max(0, lo); x <= std::min((int)cv.size() - 1, hi); ++x) { s += cv[x]; ++cnt; }
             return cnt ? s / cnt : 0;
         };
-        std::vector<int> medcov(cd.contigs.size(), 0);
-        for (size_t ci = 0; ci < cd.contigs.size(); ++ci) {
+        std::vector<int> medcov(cdb.contigs.size(), 0);
+        for (size_t ci = 0; ci < cdb.contigs.size(); ++ci) {
             if (cov[ci].empty()) continue;
             std::vector<uint16_t> v = cov[ci];
             std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
@@ -662,7 +705,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             uint32_t cid, apos; int type, len; std::string ins;
             std::tie(cid, apos, type, len, ins) = kv.first;
             Agg& a = kv.second;
-            const std::string& cc = cd.contigs[cid];
+            const std::string& cc = cdb.contigs[cid];
             if (apos == 0 || apos > cc.size()) continue;
             int refd = covwin(cid, apos - 1);
             int altd = std::max(medcov[a.altcid], (int)covwin(a.altcid, a.altpos));
@@ -690,7 +733,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             char info[96];
             snprintf(info, sizeof info, "SVTYPE=INDEL;AF=%.3f;DP=%d;ANCHORS=%d",
                      af, refd + altd, a.anchors);
-            orecs.push_back({cid, apos, ref, alt, info});
+            orecs.push_back({cid, apos, ref, alt, info, BUB_SRC});
             ++n_indel;
         }
 
@@ -713,19 +756,19 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 std::tie(cax, pax, oax) = occ[0]; std::tie(cbx, pbx, obx) = occ[1];
                 if (cax == cbx) continue;
                 uint32_t rcx, rpx, acx, apx; uint8_t rox, aox;
-                if (cd.contigs[cax].size() >= cd.contigs[cbx].size()) {
+                if (cdb.contigs[cax].size() >= cdb.contigs[cbx].size()) {
                     rcx=cax; rpx=pax; rox=oax; acx=cbx; apx=pbx; aox=obx;
                 } else {
                     rcx=cbx; rpx=pbx; rox=obx; acx=cax; apx=pax; aox=oax;
                 }
                 bool oppx = (rox != aox);
-                std::string Bx = oppx ? rc_str(cd.contigs[acx]) : cd.contigs[acx];
-                uint32_t qBx = oppx ? (uint32_t)(cd.contigs[acx].size() - apx - BK) : apx;
-                SnvBubble sb = extract_snv_bubble(cd.contigs[rcx], rpx, Bx, qBx, XSNV_FLANK);
+                std::string Bx = oppx ? rc_str(cdb.contigs[acx]) : cdb.contigs[acx];
+                uint32_t qBx = oppx ? (uint32_t)(cdb.contigs[acx].size() - apx - BK) : apx;
+                SnvBubble sb = extract_snv_bubble(cdb.contigs[rcx], rpx, Bx, qBx, XSNV_FLANK);
                 if (!sb.ok) continue;
                 uint32_t d = sb.apos - rpx;
                 uint32_t alt_pos_fwd = oppx
-                    ? (uint32_t)(cd.contigs[acx].size() - 1u) - (qBx + d)
+                    ? (uint32_t)(cdb.contigs[acx].size() - 1u) - (qBx + d)
                     : qBx + d;
                 auto& xa = xim[std::make_tuple(rcx, sb.apos, sb.ref_base, sb.alt_base)];
                 xa.anchors++;
@@ -749,7 +792,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 char inf2[96];
                 snprintf(inf2, sizeof inf2, "AF=%.3f;DP=%d;ANCHORS=%d;SOURCE=XCONTIG",
                          af2, dp2, xa.anchors);
-                orecs.push_back({cid2, vcf_pos2, std::string(1, rb2), std::string(1, ab2), inf2});
+                orecs.push_back({cid2, vcf_pos2, std::string(1, rb2), std::string(1, ab2), inf2, BUB_SRC});
                 ++n_xsnv;
             }
         }
@@ -758,17 +801,36 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
 
     // ── 6c. Write VCF ──
     std::sort(orecs.begin(), orecs.end(), [](const OutRec& x, const OutRec& y){
+        if (x.src != y.src) return x.src < y.src;
         return x.cid != y.cid ? x.cid < y.cid : x.pos < y.pos;
     });
+    // Contig dump for the evaluation lift. Emitted HERE, not earlier, because
+    // both substrates must exist: SNV records live in cd's contig space
+    // (contig_N) and bubble records in cdb's (bcontig_N), and the lift needs
+    // the exact sequences each record was called against.
+    if (const char* dp = std::getenv("CAPS_DUMP_CONTIGS")) {
+        FILE* df = fopen(dp, "w");
+        if (df) {
+            for (size_t ci = 0; ci < cd.contigs.size(); ++ci)
+                fprintf(df, ">contig_%zu\n%s\n", ci, cd.contigs[ci].c_str());
+            for (size_t ci = 0; ci < cdb.contigs.size(); ++ci)
+                fprintf(df, ">bcontig_%zu\n%s\n", ci, cdb.contigs[ci].c_str());
+            fclose(df);
+        }
+    }
+
     FILE* f = fopen(out_vcf.c_str(), "w");
     if (!f) { fprintf(stderr, "caps_caller: cannot open %s\n", out_vcf.c_str()); return -1; }
     fprintf(f, "##fileformat=VCFv4.2\n##source=CAPSULE-reffree-caller\n");
     for (size_t ci = 0; ci < cd.contigs.size(); ++ci)
         fprintf(f, "##contig=<ID=contig_%zu,length=%zu>\n", ci, cd.contigs[ci].size());
+    for (size_t ci = 0; ci < cdb.contigs.size(); ++ci)
+        fprintf(f, "##contig=<ID=bcontig_%zu,length=%zu>\n", ci, cdb.contigs[ci].size());
     fprintf(f, "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n");
     for (auto& r : orecs)
-        fprintf(f, "contig_%u\t%u\t.\t%s\t%s\t.\tPASS\t%s\n",
-                r.cid, r.pos, r.ref.c_str(), r.alt.c_str(), r.info.c_str());
+        fprintf(f, "%s%u\t%u\t.\t%s\t%s\t.\tPASS\t%s\n",
+                r.src ? "bcontig_" : "contig_", r.cid, r.pos,
+                r.ref.c_str(), r.alt.c_str(), r.info.c_str());
     fclose(f);
     fprintf(stderr, "[CAPS-CALL] contigs=%zu H=%u candidates=%zu SNVs=%zu indels=%zu -> %s\n",
             cd.contigs.size(), H, C.size(), n_snv, n_indel, out_vcf.c_str());
