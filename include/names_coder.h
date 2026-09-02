@@ -264,6 +264,14 @@ struct Layout {
     // length. Hoisted into the header exactly like a constant index: the
     // per-read cost falls from one ID_SEQLEN type symbol to nothing at all.
     std::vector<uint8_t> isseqlen;
+    // Line 3 of a FASTQ record. In every SRA-derived file here it is '+'
+    // followed by a verbatim repeat of the header -- 15.5% of the raw text,
+    // and pure redundancy. Stored as ONE byte for the whole file:
+    //   0 = "+" alone, 1 = "+" + the header, 2 = neither (must be stored, not
+    //   supported yet -- an archive claiming losslessness must not see this).
+    // Same admission rule as every other elision: verified on EVERY read in
+    // pass 1, never inferred from the first one.
+    uint8_t line3_mode=2;
     bool active() const { return ntok>0 && !isconst.empty(); }
 };
 
@@ -298,6 +306,7 @@ static void dict_pass(const char* fq_path, std::array<GlobalDict,MAXTOK>& gdict,
     // Without this, pass 1 would register the length values in the dictionary
     // and the gate would price a path pass 2 no longer takes (ID_SEQLEN).
     std::string pend; bool havepend=false; uint32_t pend_slen=0;
+    std::string lasthdr; bool l3_all_plus=true, l3_all_copy=true; uint64_t l3_seen=0;
     while(fgets(buf.data(),(int)buf.size(),f) || havepend){
         const bool eof_flush = havepend && feof(f);
         if(!eof_flush){
@@ -310,11 +319,21 @@ static void dict_pass(const char* fq_path, std::array<GlobalDict,MAXTOK>& gdict,
             if(ln%4==1 && havepend){
                 size_t L1=strlen(buf.data()); while(L1&&(buf[L1-1]=='\n'||buf[L1-1]=='\r')) --L1;
                 pend_slen=(uint32_t)L1;
+            } else if(ln%4==2){
+                size_t L3=strlen(buf.data()); while(L3&&(buf[L3-1]=='\n'||buf[L3-1]=='\r')) --L3;
+                buf[L3]=0; ++l3_seen;
+                const char* h = lasthdr.c_str();
+                const size_t hn = lasthdr.size();
+                if(!(L3==1 && buf[0]=='+')) l3_all_plus=false;
+                if(!(L3==hn+1 && buf[0]=='+' && memcmp(buf.data()+1,h,hn)==0)) l3_all_copy=false;
+                continue;
             } else continue;
         }
         havepend=false;
         const uint32_t seqlen = pend_slen;
         ++nn;
+        // header WITHOUT the '@' -- line 3 is '+' plus that, not '+@...'
+        lasthdr = (!pend.empty() && pend[0]=='@') ? pend.substr(1) : pend;
         const char* id = pend.c_str();
         if(*id=='@'){ ++id; }               // '@' is structural, not stored
         const char* id_ptr=id;
@@ -430,6 +449,10 @@ static void dict_pass(const char* fq_path, std::array<GlobalDict,MAXTOK>& gdict,
         const double raw_bits = (double)N*Hb;
         if(dict_bits < raw_bits)
             for(auto& e:vcnt[k]) gdict[k].registerNew(e.first);
+    }
+    if(lay){
+        lay->line3_mode = (l3_seen && l3_all_plus) ? 0
+                        : (l3_seen && l3_all_copy) ? 1 : 2;
     }
     if(lay && ntok_max>0){
         lay->ntok = ntok_max;
@@ -704,6 +727,7 @@ struct Encoded {
     std::vector<uint8_t> body, dict, index;
     uint64_t n_names=0, n_blocks=0, block=0;
     uint32_t tokens=0, const_tokens=0;   // reported: how much the header absorbed
+    uint8_t line3_mode=2;                // 0='+' 1='+'+header 2=must be stored
 };
 
 static std::vector<uint8_t> serialize_dict(const std::array<GlobalDict,MAXTOK>& gdict,
@@ -722,6 +746,7 @@ static std::vector<uint8_t> serialize_dict(const std::array<GlobalDict,MAXTOK>& 
             pv(o,k); pv(o,lay.constant[k].size());
             o.insert(o.end(), lay.constant[k].begin(), lay.constant[k].end());
         }
+        pv(o, lay.line3_mode);
         uint32_t ns=0;
         for(uint32_t k=0;k<lay.ntok;++k) if(k<lay.isseqlen.size() && lay.isseqlen[k]) ++ns;
         pv(o, ns);
@@ -766,6 +791,7 @@ static void deserialize_dict(const std::vector<uint8_t>& in, std::array<GlobalDi
             }
             p+=len;
         }
+        lay.line3_mode=(uint8_t)gv(p,end);
         lay.isseqlen.assign(lay.ntok,0);
         const uint64_t ns=gv(p,end);
         for(uint64_t c=0;c<ns && p<end;++c){
@@ -809,6 +835,7 @@ static Encoded encode_from_fastq(const char* fq_path, size_t BLOCK=250000,
     std::array<GlobalDict,MAXTOK> gdict;
     Layout lay;
     dict_pass(fq_path, gdict, &E.n_names, &lay);
+    E.line3_mode = lay.line3_mode;
     E.dict = serialize_dict(gdict, lay);
     E.const_tokens=0;
     if(lay.active()) for(uint32_t k=0;k<lay.ntok;++k) if(lay.isconst[k]) ++E.const_tokens;
