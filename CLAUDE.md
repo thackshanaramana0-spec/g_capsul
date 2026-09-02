@@ -12,6 +12,14 @@ not the outer ARCS binary), the locked set is `NEW_DATASET_LOCKED.md`, not the
 2026-09-02 (Drosophila out, Utricularia gibba/Plantae in) and why. Read it
 before running or citing that comparison.
 
+**Current head-to-head result: `docs/PHASE2B_RESULT.md`** (2026-09-02).
+Sequence + read order + names on 14 datasets: **14/14 wins vs SPRING (-22.00%)
+and 14/14 vs Genozip (-72.83%)**, real archive sizes on disk. Sequence-only:
+14/14 vs Genozip, 12/14 vs SPRING, 7/8 vs PgRC2 (which crashed or refused on 6
+of the 14). That file also records two invocation traps that silently produce
+wrong numbers -- read it before running the benchmark yourself. Quality is the
+one column still unwired.
+
 Repo: `github.com/thackshanaramana0-spec/c_star_pg_advance`, branch
 `c_star_pg_advance`, 127 commits, working tree clean.
 
