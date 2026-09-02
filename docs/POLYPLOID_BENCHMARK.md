@@ -30,6 +30,31 @@ all** — with 1 multi-allelic site in 603, both tools were being scored on
 ordinary biallelic het-SNV calling, and the tie says nothing about the
 polyploid capability. That result is withdrawn as a polyploid measurement.
 
+## 1b. REAL-DATA multi-allelic testing IS possible — via GT=1/2 sites
+
+§1 shows pooling cannot create multi-allelic sites. But a **single diploid
+sample already contains them**: wherever the genotype is `1/2`, both haplotypes
+carry a non-reference allele AND the two differ from each other, so the VCF
+record is genuinely multi-allelic (`REF=C ALT=A,G`).
+
+Counted in GIAB truth on chr20:
+
+| sample | GT=1/2 sites on chr20 |
+|---|---|
+| HG002 | **952** |
+| HG003 | **940** |
+
+These are real reads, real variants, real multi-allelic truth, and a single
+sample — no pooling, no simulation. They exercise exactly the capability under
+test: a caller that can only ever emit ONE ALT per site gets every one of them
+half-wrong.
+
+Benchmark built on this basis (`~/pld/realmulti`): HG002, chr20:1–6 Mb, 30×,
+**971,250 real reads, 5,216 truth het sites of which 111 are multi-allelic**.
+This supersedes both the pooled design (§1, no multi-allelic sites) and the
+synthetic design (§5, a generator whose truth had to be repaired) as the
+primary evidence for this class.
+
 ## 2. What a legitimate polyploid benchmark requires
 
 Multi-allelic sites must be common, which means one of:
