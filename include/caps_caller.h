@@ -1127,9 +1127,54 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
             medcov[ci] = v[v.size() / 2];
         }
+        // ── MAXIMUM-WEIGHT MATCHING over candidate bubbles ───────────────
+        // Taken from Kmer2SNP, which models reference-free SNP calling as a
+        // MATCHING: heterozygous k-mers are vertices, candidate pairings are
+        // edges weighted by overlap evidence, and it emits a maximum weight
+        // matching -- so each vertex gets AT MOST ONE partner.
+        // That constraint is exactly what we lacked. A true heterozygous site
+        // has exactly ONE alternate haplotype, but our anchor search lets one
+        // locus pair with several alt contigs (and one alt contig serve many
+        // loci), which is how paralogs and repeats enter as false bubbles.
+        // Every precision idea tried before this was LOCAL -- more flanking
+        // context, longer fragments, read substrings -- and all of them failed
+        // for the same reason: our contigs are too short to supply context.
+        // Matching is GLOBAL and needs no context at all.
+        // Greedy by weight is the standard 1/2-approximation and is what the
+        // evidence ordering here justifies (anchors = independent 25-mers
+        // agreeing on the same pairing).
+        std::vector<std::pair<int, const std::tuple<uint32_t,uint32_t,int,int,std::string>*>> order_;
+        for (auto& kv : im) order_.push_back({kv.second.anchors, &kv.first});
+        std::sort(order_.begin(), order_.end(),
+                  [](auto& x, auto& y){ return x.first > y.first; });
+        std::unordered_set<uint64_t> used_ref, used_alt;
+        std::unordered_set<const void*> accepted;
+        // MEASURED NEUTRAL (five-window mean 0.5976 -> 0.5962; r5 0.623->0.605,
+        // HG004 0.515->0.521, HG003 0.672->0.677) and therefore opt-in.
+        // Informative failure: the matching constraint assumes competing
+        // pairings are the problem. They are not -- our false bubbles are
+        // mostly UNCONTESTED, i.e. a locus with exactly one (wrong) partner,
+        // which a matching cannot reject because there is nothing to compete
+        // against it.
+        const bool MATCHING = std::getenv("CAPS_MATCHING") != nullptr;
+        if (MATCHING) {
+            for (auto& e : order_) {
+                uint32_t cid, apos; int type, len; std::string ins;
+                std::tie(cid, apos, type, len, ins) = *e.second;
+                const Agg& a = im[*e.second];
+                // a locus is a contig plus a 50bp bucket, so one long contig may
+                // still host several distinct events
+                uint64_t rk = ((uint64_t)cid << 32) | (apos / 50);
+                uint64_t ak = ((uint64_t)a.altcid << 32) | (a.altpos / 50);
+                if (used_ref.count(rk) || used_alt.count(ak)) continue;
+                used_ref.insert(rk); used_alt.insert(ak);
+                accepted.insert((const void*)e.second);
+            }
+        }
         for (auto& kv : im) {
             uint32_t cid, apos; int type, len; std::string ins;
             std::tie(cid, apos, type, len, ins) = kv.first;
+            if (MATCHING && !accepted.count((const void*)&kv.first)) continue;
             Agg& a = kv.second;
             const std::string& cc = cdb.contigs[cid];
             if (apos == 0 || apos > cc.size()) continue;
