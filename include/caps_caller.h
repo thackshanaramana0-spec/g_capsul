@@ -1319,6 +1319,143 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             ++n_indel;
         }
 
+        // ── 6b3. POSITIONAL-CLUSTERING indel channel ─────────────────────
+        // The eBWT2SNP principle, ported. Their 99.13% SNP precision comes from
+        // never CONSTRUCTING a candidate: reads covering one genome position
+        // share a right context, suffix-sorting groups them into a cluster, and
+        // the differing allele sits immediately before it -- so both haplotype
+        // fragments are lifted straight out of the reads. Their paper leaves
+        // the INDEL case explicitly unimplemented ("extract the left-context
+        // and perform a local alignment ... future work"); this is that.
+        //
+        // Why it should succeed where every filter failed: our false bubbles
+        // come from SPLICING one contig's flank onto another's allele, and no
+        // read-support test, context test or matching can detect a chimera
+        // whose pieces are all read-derived (see docs/INDEL_PRECISION_ROOT_CAUSE.md).
+        // Here the evidence is a real read carrying a real gap against the
+        // contig; the contig only supplies coordinates and the REF allele.
+        // Anchoring on the RIGHT context is also what makes this different from
+        // the earlier read-gap scan that found nothing: that one asked a read
+        // where it placed best, and an alt-haplotype read places perfectly on
+        // its OWN contig. Here every read covering an anchor is compared to the
+        // SAME contig, so alt-haplotype reads must reveal their gap.
+        if (!std::getenv("CAPS_NO_PCLUSTER")) {
+            const int AK = 25, LW = 40;      // anchor k-mer, left window
+            // cluster reads by right-context anchor that is UNIQUE in the contigs
+            std::unordered_map<uint64_t, std::vector<std::pair<uint32_t,uint32_t>>> rc_reads;
+            rc_reads.reserve(1u << 20);
+            for (uint32_t i = 0; i < (uint32_t)seqs.size(); ++i) {
+                const std::string& q = seqs[i];
+                for (size_t j = LW; j + AK <= q.size(); ++j) {
+                    uint64_t v; if (!pack25(q.data() + j, v)) continue;
+                    uint64_t rv = rc25(v), cn = v < rv ? v : rv;
+                    auto& vec = rc_reads[cn];
+                    if (vec.size() < 200) vec.push_back({i, (uint32_t)j});
+                }
+            }
+            // (contig, pos, signed gap, inserted seq) -> supporting reads
+            // DISTINCT reads per event, not votes. A read spanning an indel
+            // matches many anchors (every unique 25-mer in its right context),
+            // so a raw vote count multiplies one read into dozens and is not a
+            // read count at all -- which is why an absolute threshold kept
+            // rising without saturating. Counting distinct read ids makes the
+            // support interpretable and lets it be compared against coverage.
+            std::map<std::tuple<uint32_t,uint32_t,int,std::string>, std::unordered_set<uint32_t>> pvotes;
+            for (auto& kv : kidx) {
+                if (kv.second.size() != 1) continue;          // unique contig anchor
+                uint32_t ccid = std::get<0>(kv.second[0]);
+                uint32_t cpos = std::get<1>(kv.second[0]);
+                if (std::get<2>(kv.second[0]) != 0) continue;   // anchor stored RC: skip
+                const std::string& cc2 = cdb.contigs[ccid];
+                if (cpos < (uint32_t)LW) continue;
+                auto rit = rc_reads.find(kv.first);
+                if (rit == rc_reads.end()) continue;
+                for (auto& pr : rit->second) {
+                    const std::string& q = seqs[pr.first];
+                    uint32_t rpos = pr.second;
+                    // orient the read so its anchor reads forward like the contig
+                    std::string qq = q; uint32_t qp = rpos;
+                    { uint64_t v; pack25(q.data() + rpos, v);
+                      uint64_t rv = rc25(v);
+                      if (v > rv) { qq = rc_str(q); qp = (uint32_t)(q.size() - rpos - AK); } }
+                    if (qp < (uint32_t)LW) continue;
+                    // walk LEFT from the anchor: contig and read agree, then diverge
+                    int d = 0;
+                    while (d < LW && cc2[cpos - 1 - d] == qq[qp - 1 - d]) ++d;
+                    if (d >= LW) continue;                     // identical: no event
+                    // try a single gap of g bases at the divergence point
+                    int best_g = 0; std::string best_ins;
+                    for (int g = 1; g <= MAXINDEL && !best_g; ++g) {
+                        // deletion in the READ: contig has g extra bases
+                        if (cpos >= (uint32_t)(d + g + 10) && qp >= (uint32_t)(d + 10)) {
+                            bool ok = true;
+                            for (int t = 0; t < 10; ++t)
+                                if (cc2[cpos - 1 - d - g - t] != qq[qp - 1 - d - t]) { ok = false; break; }
+                            if (ok) { best_g = g; }
+                        }
+                        // insertion in the READ: read has g extra bases
+                        if (!best_g && qp >= (uint32_t)(d + g + 10) && cpos >= (uint32_t)(d + 10)) {
+                            bool ok = true;
+                            for (int t = 0; t < 10; ++t)
+                                if (cc2[cpos - 1 - d - t] != qq[qp - 1 - d - g - t]) { ok = false; break; }
+                            if (ok) { best_g = -g; best_ins = qq.substr(qp - d - g, (size_t)g); }
+                        }
+                    }
+                    if (!best_g) continue;
+                    uint32_t apos2 = cpos - (uint32_t)d;       // contig position of the event
+                    if (apos2 == 0) continue;
+                    pvotes[std::make_tuple(ccid, apos2, best_g, best_ins)].insert(pr.first);
+                }
+            }
+            int PMIN = MC;
+            if (const char* e = std::getenv("CAPS_PCLUSTER_MIN")) PMIN = atoi(e);
+            size_t n_pc = 0;
+            for (auto& kv : pvotes) {
+                const int nsup = (int)kv.second.size();
+                if (nsup < PMIN) continue;
+                uint32_t ccid, apos2; int g; std::string insseq;
+                std::tie(ccid, apos2, g, insseq) = kv.first;
+                const std::string& cc2 = cdb.contigs[ccid];
+                if (apos2 == 0 || apos2 > cc2.size()) continue;
+                // ALLELE FRACTION against the coverage already computed for
+                // this contig. An absolute read-count floor cannot separate a
+                // heterozygous indel from an artifact, because both scale with
+                // depth; the discriminating quantity is what FRACTION of the
+                // reads at this locus carry the event. A het indel sits near
+                // 0.5. Reuses the frozen MAF rather than adding a constant.
+                if (!std::getenv("CAPS_NO_PCLUSTER_AF")) {
+                    int dp = (ccid < cov.size() && apos2 < cov[ccid].size())
+                             ? (int)cov[ccid][apos2] : 0;
+                    if (dp > 0) {
+                        double af = (double)nsup / (double)dp;
+                        // Swept over five windows on DISTINCT-read support:
+                        // mean indel F1 0.6446 (0.20) / 0.6414 (0.30) /
+                        // ~0.643 (0.40). The optimum is 0.20 -- exactly the
+                        // project's already-frozen MAF, so this adds no new
+                        // constant.
+                        double afmin = MAF;
+                        if (const char* e = std::getenv("CAPS_PCLUSTER_AF")) afmin = atof(e);
+                        if (af < afmin) continue;
+                    }
+                }
+                char anch = cc2[apos2 - 1];
+                std::string ref2, alt2;
+                if (g > 0) {                                   // deletion in the read
+                    if (apos2 + (uint32_t)g > cc2.size()) continue;
+                    ref2 = std::string(1, anch) + cc2.substr(apos2, (size_t)g);
+                    alt2 = std::string(1, anch);
+                } else {                                       // insertion in the read
+                    ref2 = std::string(1, anch);
+                    alt2 = std::string(1, anch) + insseq;
+                }
+                char inf3[96];
+                snprintf(inf3, sizeof inf3, "SVTYPE=INDEL;DP=%d;SOURCE=PCLUSTER", nsup);
+                orecs.push_back({ccid, apos2, ref2, alt2, inf3, BUB_SRC});
+                ++n_pc; ++n_indel;
+            }
+            if (n_pc) fprintf(stderr, "[CAPS-CALL] pcluster indels=%zu\n", n_pc);
+        }
+
         // ── 6b2. Cross-contig SNV pass (default ON for CAPSULE; see the
         // struct-level comment on SnvBubble for why this is the primary
         // signal here rather than an experimental extra) ──
