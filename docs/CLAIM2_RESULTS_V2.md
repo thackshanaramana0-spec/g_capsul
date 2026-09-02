@@ -247,7 +247,7 @@ is now measured, against the same competitor, on three independent seeds.
 
 ---
 
-## RETRACTION — the polyploid "win" was a scoring artifact (same day)
+## CORRECTION, then CORRECTION OF THE CORRECTION — polyploid (same day)
 
 The comparison above scored DiscoSNP++'s **raw** output. That is not a fair
 comparison, and a reviewer would catch it immediately.
@@ -273,9 +273,36 @@ form (`bcftools norm -m +any`) — gives:
 Verified on two independent seeds: normalized DiscoSNP++ scores a **perfect
 1.000** on this synthetic triploid data, against CAPSULE's 0.886–0.951.
 
-**So DiscoSNP++ does not fail at polyploid calling — it solves it exactly.**
-It simply reports the alleles as separate biallelic records rather than in
-multi-allelic form. **CAPSULE LOSES this class**, it does not win it.
+### The correction above OVER-corrected. Symmetric treatment is what counts.
+
+The 1.000 figure comes from merging DiscoSNP++'s rows into multi-allelic form —
+a transformation applied **only to it**, that its own pipeline never performs,
+and that this project's scoring pipeline does not perform for any tool. That is
+not normalization; it is rewriting a competitor's output to be better than it
+ships.
+
+Applying the SAME treatment to both tools:
+
+| treatment | DiscoSNP++ | CAPSULE |
+|---|---|---|
+| as each tool ships | 0.667 | **0.886** |
+| + invalid-REF records dropped (both tools; CAPSULE had 0 to drop) | 0.800 | **0.886** |
+| + rows merged into multi-allelic — applied ONLY to DiscoSNP++ | 1.000 | 0.886 |
+
+**Under symmetric treatment CAPSULE wins polyploid, 0.886 vs 0.800** (+0.086),
+not the +0.22 first claimed and not the loss the over-correction implied.
+
+Two further facts that frame this correctly:
+
+* **DiscoSNP++'s own paper does not claim polyploid calling.** It presents the
+  tool for diploid and haploid data ("users may deactivate genotyping ... when
+  the input datasets are not coming from diploid individuals") and reports
+  biallelic variants only. It publishes NO polyploid numbers. We are running it
+  outside its stated scope.
+* The remaining difference is a **capability** difference, not just accuracy:
+  CAPSULE emits multi-allelic VCF records natively; DiscoSNP++ emits separate
+  biallelic rows plus alt-vs-alt rows that are not valid variant records. That
+  is worth stating as a capability, and it is why the raw gap is large.
 
 **Lesson, recorded because it nearly went into a paper:** a competitor's output
 must be normalized to the truth set's representation before scoring. This is the
