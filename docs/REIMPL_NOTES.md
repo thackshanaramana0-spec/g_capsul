@@ -1921,3 +1921,41 @@ something PgRC2 has and we lacked:
 Build any of these standalone:
     g++ -O3 -march=native -o scs <file>.cpp
     ./scs reads.fq [maxmm] [minov] [seedwidth]
+
+## Names: X/Y fixed-width columns — TESTED AND REFUTED (2026-09-02)
+
+Proposed after reading Genozip's `dyn_int.c`, which stores numeric fields as a
+width-minimised binary column handed to a general codec, and because this
+project had already proven the same principle on positions (fixed-width uint32
++ xz beat varint: E. coli -7.9%, P. aeruginosa -11.1%). The idea was to route
+the X/Y coordinate token indices out of the inline arithmetic coder and into a
+`best_encode` column instead.
+
+**Measured before building. It does not pay.**
+
+    column vs our inline coder (500K names each)
+    SRR2584863 X   ours 782,821   column 779,641   -0.4%
+    SRR2584863 Y   ours 568,954   column 569,170   WORSE
+    DRR976266  X   ours 829,686   column 798,445   -3.8%
+    DRR976266  Y   ours  61,844   column  68,066   WORSE
+
+The reason is that we are already at the bound:
+
+    column        ours      order-0    delta-entropy
+    SRR2584863 X  782,821     892,301        748,739
+    SRR2584863 Y  568,954   1,027,673        554,063
+    DRR976266  X  829,686     788,532        775,494
+    DRR976266  Y   61,844     687,337         61,665
+
+Below order-0 on three of four columns; within 0.3-4.6% of delta entropy on
+three. Only DRR976266's X has real slack (~7%, ~54 KB) and that file is
+already a win.
+
+X+Y are 99.8% of the whole names stream on Illumina headers (1,351,775 of
+1,354,682 on E. coli), so this closes coordinate coding as a source of
+headroom: no re-representation can recover bytes that are not there. Genozip
+cannot be beating us via a better coordinate representation either -- there is
+no room for one.
+
+Do not retry this. Real names gains came from cross-column reference instead
+(ID_SEQLEN, commit 877702d): -96.5% on ERR5181310, -20.1% on ERR552797.
