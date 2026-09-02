@@ -83,6 +83,20 @@ inline uint64_t canon31(uint64_t v) { uint64_t r = rc31(v); return v < r ? v : r
 inline uint64_t colkey(uint32_t cid, uint32_t pos) { return ((uint64_t)cid << 32) | pos; }
 
 inline bool is_str_event(const std::string& seq, const std::string& flank) {
+    // SINGLE-BASE indels were exempt from this filter entirely (the old guard
+    // was `seq.size() < 2 -> false`), yet they are the dominant false-positive
+    // class: on HG002 r4, 16 of 24 indel FPs were 1 bp deletions against only
+    // 6 TPs of that class. A 1 bp indel adjacent to a run of the same base is
+    // a homopolymer-length artifact -- the known hard case for every
+    // reference-free caller. Detect it by the actual run length in the left
+    // flank (a measured property of the sequence, not a per-dataset rule)
+    // rather than by mere presence of the base, which would fire on almost
+    // everything.
+    if (seq.size() == 1) {
+        int run = 0;
+        for (int i = (int)flank.size() - 1; i >= 0 && flank[(size_t)i] == seq[0]; --i) ++run;
+        return run >= 2;              // deleted/inserted base extends a >=2 run
+    }
     if (seq.size() < 2) return false;
     for (int u = 1; u <= std::min((int)seq.size(), 4); ++u) {
         bool tandem = true;
