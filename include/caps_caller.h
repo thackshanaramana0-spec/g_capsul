@@ -225,11 +225,14 @@ inline double loglik(const std::vector<std::pair<int,int>>& rl, const int* al, i
 // Both passes are gated and default ON for calling only; they never touch the
 // compression path. CAPS_NO_REMAP=1 / CAPS_NO_COLLAPSE=1 restore the previous
 // behaviour exactly, so every measurement has a revert.
+struct GapEvent;
+
 struct Substrate {
     std::vector<std::string> contigs;
     std::vector<uint32_t> read_cid, read_pos;
     std::vector<uint8_t>  read_rc;
     std::vector<uint16_t> read_clip;
+    std::vector<GapEvent> gaps;      // read-level indel evidence (second channel)
 };
 
 namespace detail {
@@ -283,6 +286,104 @@ inline std::vector<uint32_t> collapse_contigs(const std::vector<std::string>& ct
 // the surviving contigs allowing mismatches (both strands), keeping the best
 // placement. Falls back to the encoder's own placement for reads that cannot
 // be placed, so nothing is lost relative to the previous behaviour.
+// ── Read-level gapped indel evidence ────────────────────────────────────────
+// SECOND, INDEPENDENT indel channel. The bubble passes need two contigs that
+// both exist and differ; measured on HG002 r2 that misses most events (32 FN
+// against only 13 FP -- recall, not precision, is the indel limiter).
+// A read that SPANS an indel carries the evidence directly: its seeds before
+// the event and after it imply contig start positions that differ by exactly
+// the indel length. No gapped aligner is needed -- the seed index already
+// built for placement supplies both anchors, so this costs one extra pass.
+// An event is emitted only when >= MC independent reads agree on the same
+// (contig, boundary, signed length), which is the same read-support standard
+// the junction test applies to bubbles.
+struct GapEvent { uint32_t cid; uint32_t pos; int len; int support; std::string ins; };
+
+inline std::vector<GapEvent> gapped_indel_scan(const std::vector<std::string>& seqs,
+                                               const Substrate& S,
+                                               const std::unordered_map<uint64_t,
+                                                     std::vector<std::pair<uint32_t,uint32_t>>>& idx,
+                                               int K) {
+    using namespace detail;
+    // key: (contig, boundary/8, signed length, inserted bases). Requiring reads
+    // to agree on the INSERTED SEQUENCE as well as the length is a free
+    // consistency check -- independent reads spanning the same real insertion
+    // agree on its bases; coincidental seed splits do not.
+    std::map<std::tuple<uint32_t,int32_t,int32_t,std::string>, int> votes;
+    for (size_t o = 0; o < seqs.size(); ++o) {
+        uint32_t cid = S.read_cid[o];
+        if (cid == UINT32_MAX) continue;
+        std::string r = S.read_rc[o] ? rc_str(seqs[o]) : seqs[o];
+        const int rl = (int)r.size();
+        if (rl < 2 * K + 4) continue;
+        // implied contig start from each seed offset, restricted to this read's contig
+        std::vector<std::pair<int,int64_t>> imp;    // (read offset, implied start)
+        for (int off = 0; off + K <= rl; off += 4) {
+            uint64_t v; if (!pack25(r.data() + off, v)) continue;
+            uint64_t rcv = rc25(v), can = v < rcv ? v : rcv;
+            auto it = idx.find(can);
+            if (it == idx.end()) continue;
+            for (auto& pr : it->second)
+                if (pr.first == cid) imp.push_back({off, (int64_t)pr.second - off});
+        }
+        if (imp.size() < 4) continue;
+        // Take the two DOMINANT implied starts rather than demanding that every
+        // seed agree. A single spurious repeat hit inside the same contig is
+        // enough to break a strict all-agree test -- which is why the first
+        // version of this scan found exactly 1 event in a whole window.
+        std::map<int64_t,int> cnt;
+        for (auto& pr : imp) cnt[pr.second]++;
+        if (cnt.size() < 2) continue;
+        std::vector<std::pair<int,int64_t>> byc;
+        for (auto& kv : cnt) byc.push_back({kv.second, kv.first});
+        std::sort(byc.rbegin(), byc.rend());
+        if (byc[0].first < 2 || byc[1].first < 2) continue;
+        int64_t a = byc[0].second, b = byc[1].second;
+        int64_t mean_a = 0, mean_b = 0; int na = 0, nb = 0;
+        for (auto& pr : imp) {
+            if (pr.second == a) { mean_a += pr.first; ++na; }
+            else if (pr.second == b) { mean_b += pr.first; ++nb; }
+        }
+        if (!na || !nb) continue;
+        int64_t s0 = (mean_a / na <= mean_b / nb) ? a : b;
+        int64_t s1 = (s0 == a) ? b : a;
+        int64_t g = s1 - s0;
+        if (g == 0 || std::llabs(g) > MAXINDEL) continue;
+        int last_s0 = -1, first_s1 = rl + 1;
+        for (auto& pr : imp) {
+            if (pr.second == s0) last_s0 = std::max(last_s0, pr.first);
+            else if (pr.second == s1) first_s1 = std::min(first_s1, pr.first);
+        }
+        if (last_s0 < 0 || first_s1 > rl || last_s0 >= first_s1) continue;
+        // Exact divergence point: walk the read against the contig from the
+        // last agreeing seed until the first mismatch. Voting on a rounded
+        // boundary would smear the position by up to the seed stride, and an
+        // indel called even a few bases off does not match the truth set.
+        const std::string& cseq = S.contigs[cid];
+        int64_t bp = last_s0 + K;
+        while (bp < rl && s0 + bp >= 0 && s0 + bp < (int64_t)cseq.size()
+               && r[(size_t)bp] == cseq[(size_t)(s0 + bp)]) ++bp;
+        int64_t boundary = s0 + bp;                   // contig position where they diverge
+        if (boundary <= 0) continue;
+        std::string ins_seq;
+        if (g < 0) {                        // insertion in the read
+            int64_t ip = bp;
+            int64_t ilen = -g;
+            if (ip < 0 || ip + ilen > rl) continue;
+            ins_seq = r.substr((size_t)ip, (size_t)ilen);
+        }
+        votes[std::make_tuple(cid, (int32_t)boundary, (int32_t)g, ins_seq)]++;
+    }
+    std::vector<GapEvent> out;
+    for (auto& kv : votes) {
+        if (kv.second < MC) continue;
+        uint32_t cid; int32_t bpos, g; std::string ins_seq;
+        std::tie(cid, bpos, g, ins_seq) = kv.first;
+        out.push_back({cid, (uint32_t)bpos, (int)g, kv.second, ins_seq});
+    }
+    return out;
+}
+
 inline Substrate build_substrate(const std::vector<std::string>& seqs, const CallData& cd,
                                  double dup_override = -1.0) {
     using namespace detail;
@@ -401,8 +502,21 @@ inline Substrate build_substrate(const std::vector<std::string>& seqs, const Cal
             S.read_clip[o] = best_clip;
         }
     }
-    fprintf(stderr, "[CAPS-CALL] substrate: contigs %zu -> %zu, reads placed=%zu re-placed=%zu of %zu\n",
-            cd.contigs.size(), S.contigs.size(), placed, improved, n);
+    // REFUTED, and kept only behind an explicit opt-in (CAPS_GAPSCAN=1).
+    // The idea: a read spanning an indel should show two different implied
+    // contig starts. Measured: 1 event per window with a strict all-seeds-
+    // agree test, 0 with a robust two-dominant-groups test.
+    // The reason is architectural, not a bug. This substrate keeps the two
+    // haplotypes as SEPARATE contigs -- which is precisely what makes the
+    // bubble passes work -- so an indel-carrying read is placed on its OWN
+    // haplotype's contig, where it matches with no gap at all. No read ever
+    // needs a gapped placement, and the indel evidence lives in the contig
+    // PAIR rather than in any read-vs-contig discrepancy.
+    // A read-level gapped channel is therefore only meaningful for a caller
+    // built on a single merged consensus; it cannot add recall here.
+    if (std::getenv("CAPS_GAPSCAN")) S.gaps = gapped_indel_scan(seqs, S, idx, K);
+    fprintf(stderr, "[CAPS-CALL] substrate: contigs %zu -> %zu, reads placed=%zu re-placed=%zu of %zu gaps=%zu\n",
+            cd.contigs.size(), S.contigs.size(), placed, improved, n, S.gaps.size());
     return S;
 }
 
