@@ -139,3 +139,40 @@ haplotype fragments emerging from one cluster, which this does not reproduce.
 The remaining gap (0.631 vs 0.663) should therefore be attributed to
 **substrate quality**, not to a missing filter and not to a solved-in-principle
 generator.
+
+---
+
+## 8. Why no filter can close it — the decisive measurement
+
+After thirteen mechanisms, the obvious question is whether a *fourteenth*,
+better-chosen filter could work. It cannot, and this settles it.
+
+Comparing the bubble channel's FALSE positives against its TRUE positives on
+HG002 r2, by the two properties any indel filter would key on:
+
+| property | FP (n=9) | TP (n=35) |
+|---|---|---|
+| length ≤ 2 bp | 67% | 66% |
+| sits inside a homopolymer run ≥ 4 | 78% | 77% |
+| both | 56% | 54% |
+
+**The distributions are identical.** Our false indels are the same KIND of
+event as our true ones — short indels in low-complexity context — so no
+threshold on length, homopolymer context, allele fraction, k-mer frequency,
+read support or anchor count can prefer one population over the other. That is
+precisely why thirteen mechanisms produced three small wins and ten neutral or
+negative results.
+
+This independently reproduces the outer ARCS project's own finding, recorded
+in `/root/arcs-clean/docs/VARIANT_ANALYSIS_MASTER.md` §6.2: "ARCS's false
+positives and true positives are structurally identical low-complexity events
+(TP: 12 homo / 6 STR2 / 6 other; FP: 9 homo / 4 other / 3 STR2), so they are
+**not separable by a low-complexity filter** — this is the known ceiling, and
+ARCS sits on it alongside DiscoSNP++."
+
+**Conclusion.** The remaining het-indel gap (0.631 vs 0.663) is not a tuning
+deficit and not a missing filter. It is the homopolymer/STR ceiling that limits
+every reference-free caller, and the only lever that moves a caller across it
+is a substrate that resolves low-complexity regions better — longer contigs, or
+reading both haplotype fragments out of one eBWT cluster. Further filter work
+on this class should be considered refuted in advance.
