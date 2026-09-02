@@ -270,6 +270,22 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
           mmpos = form ? mmpos_decode_buckets(body.data(),body.size(),mmcount)
                        : capsule_decode_stream(body,1);
       } }
+    // Positions are one byte per mismatch while Lmax<=256, and varint-coded
+    // deltas above that -- a byte cannot hold a position past 255, which is
+    // what used to make long-read archives lossy. Both forms are widened to
+    // uint32 here so the two consumers below index one array either way.
+    std::vector<uint32_t> mmpos32;
+    {
+        uint16_t Lm=0; for(auto L:lengths) if(L>Lm) Lm=L;
+        if(Lm<=256){ mmpos32.assign(mmpos.begin(), mmpos.end()); }
+        else {
+            const uint8_t* p=mmpos.data(); const uint8_t* e=p+mmpos.size();
+            while(p<e){ uint32_t v=0; int sh=0;
+                        while(p<e){ uint8_t b=*p++; v |= (uint32_t)(b&0x7f)<<sh;
+                                    if(!(b&0x80)) break; sh+=7; }
+                        mmpos32.push_back(v); }
+        }
+    }
 
     // ---- derive ref, then decode obs --------------------------------------
     uint16_t Lmax=0; for(auto L:lengths) if(L>Lmax) Lmax=L;
@@ -293,8 +309,8 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
           const int64_t q = (int64_t)positions[u];
           uint32_t prevj=0;
           for(uint16_t m=0;m<cnt;++m){
-              uint32_t j = off+m<mmpos.size()?mmpos[off+m]:0;
-              if(MMDELTA){ j=prevj+j; prevj=j; }
+              uint32_t j = off+m<mmpos32.size()?mmpos32[off+m]:0;
+              j=prevj+j; prevj=j;
               int64_t idx = rc ? q+RL-1-(int64_t)j : q+(int64_t)j;
               refs.push_back((idx>=0 && idx<(int64_t)PGLEN) ? pg[idx] : 'A');
           }
@@ -339,11 +355,12 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
                     if(!cnt) continue;
                     size_t off=mmoff[u]; uint32_t prevj=0;
                     for(uint16_t m=0;m<cnt;++m){
-                        if(off+m>=mmpos.size()||off+m>=obs.size()) break;
-                        uint32_t j=mmpos[off+m];
-                        if(MMDELTA){ j=prevj+j; prevj=j; }
-                        else if(j==255) continue;      // capped, >255 bp reads
-                        if(j>=L) continue;             // container mismatch past this read
+                        if(off+m>=mmpos32.size()||off+m>=obs.size()) break;
+                        uint32_t j = off+m<mmpos32.size()?mmpos32[off+m]:0;
+                        j=prevj+j; prevj=j;
+                        // The old `j==255 -> skip` guard is gone with the clamp
+                        // that created it: 255 is now an ordinary delta value.
+                        if(j>=L) continue;             // mismatch past this read
                         const uint8_t ob=obs[off+m];
                         dst[j]= rc ? comp(ob) : ob;
                     }
