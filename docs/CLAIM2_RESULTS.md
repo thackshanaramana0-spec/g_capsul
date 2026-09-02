@@ -31,19 +31,34 @@ the held-out window behaves like the tuning window. That was the specific
 risk of developing on a small slice, and it did not materialise. (Precision
 is actually *higher* on the held-out window.)
 
-## Where it stands against the field — honestly, it loses
+## Where it stands against ARCS — VERIFIED BY RERUN, not quoted
 
-Same metric, same engine, same windows (outer ARCS's published numbers):
+**Correction to an earlier version of this document.** It first compared
+CAPSULE against ARCS's *published* 0.923/0.954, which was wrong twice over:
+those numbers are **HG001**, while CAPSULE was run on **HG002**, and they
+were quoted from `VARIANT_ANALYSIS_MASTER.md` rather than reproduced. ARCS
+has now been rerun on the **identical `reads.fq`** through the **identical**
+lift-and-score pipeline. The real picture:
 
-| tool | r2 SNV F1 | r3 SNV F1 |
-|---|---|---|
-| ARCS (outer project) | 0.923 | **0.954** |
-| DiscoSNP++ | 0.826 | 0.886 |
-| Kmer2SNP | 0.550 | 0.544 |
-| **CAPSULE (this repo)** | **0.419** | **0.394** |
+| tool (same reads, same pipeline, HG002 r2) | SNV P | SNV R | **SNV F1** | INDEL F1 |
+|---|---|---|---|---|
+| ARCS, default config | — | — | **0.000** (0 SNVs called) | 0.46 (46 lifted) |
+| ARCS, `ARCS_XSNV=1` | 0.981 | 0.635 | **0.771** | 0.710 |
+| **CAPSULE (this repo)** | 0.939 | 0.270 | **0.419** | 0.357 |
 
-CAPSULE currently places **last**, behind even Kmer2SNP. This is not a
-tuning miss and not a scoring artifact — see the cause below.
+Two findings that matter more than the ranking:
+
+1. **ARCS's published 0.954 does not reproduce on this input.** Its default
+   configuration produces `candidates=0, SNVs=0+0` here — zero SNV calls.
+   The published numbers must come from a different read preparation
+   (pairing, source, or depth), so **no ARCS figure should be quoted as a
+   baseline for CAPSULE without rerunning it on the same input**, which is
+   exactly the mistake this document originally made.
+2. **CAPSULE beats ARCS's shipped default** (0.419 vs 0.000) because the
+   cross-contig bubble pass is default-ON here and off there — the finding
+   recorded in `docs/CLAIM2_BUILDER.md`. Against ARCS with that same pass
+   enabled, CAPSULE still loses 0.419 vs 0.771. The honest gap is **0.771 vs
+   0.419 on equal footing**, not 0.954 vs 0.419.
 
 ## Root cause: the contigs are far too short
 
@@ -82,28 +97,77 @@ frozen parameters, different assembly — and the assembly is the whole
 difference.** This confirms, from the opposite direction, the finding
 recorded in `docs/CLAIM2_BUILDER.md`.
 
-## What would actually fix it (not yet attempted)
+## The "contigs are too short" hypothesis — MEASURED AND REFUTED
 
-In rough order of expected value per unit of work:
+An earlier version of this document blamed short contigs and proposed
+mismatch-tolerant chain extension to lengthen them. **Measurement refutes
+that.** Comparing the two assemblers' contigs on the same window:
 
-1. **Mismatch-tolerant chain extension in calling mode.** Allow a chain to
-   extend across ≤1 mismatch when `CAPS_CALL` is set. This is the direct
-   analogue of `MEM_MAXMM` (already implemented for MEM references, shipped
-   off because it costs *compression* bytes) — but for calling, longer
-   contigs are worth far more than the bytes cost, and calling mode does not
-   need to preserve the archive. Would merge both haplotypes onto one
-   contig, restoring pileup depth.
-2. **Post-assembly contig merge for calling only** — join contigs whose ends
-   overlap within ≤1–2 mismatches, before the caller runs. Cheaper to
-   implement, does not touch the compression path at all.
-3. **Accept the split and improve bubble detection** — shorter anchors than
-   25-mers, or allow anchors occurring >2 times. Weakest option: it fights
-   the fragmentation rather than fixing it, and short anchors cost precision.
+| | contigs | mean len | ≥1 kb | total bp (window = 400 kb) |
+|---|---|---|---|---|
+| ARCS (`ARCS_XSNV=1`) — 0.771 F1 | 4,307 | **249** | 97 | 1,072,468 (2.7×) |
+| CAPSULE — 0.419 F1 | 4,537 | **335** | 326 | 1,520,128 (3.8×) |
+
+CAPSULE's contigs are **longer** on average, with **3× more** ≥1 kb contigs,
+and it still gets half the recall. Lengthening contigs would not have fixed
+anything — the proposed fix was aimed at the wrong quantity.
+
+## The anchor-supply hypothesis — ALSO REFUTED
+
+Next suspicion: the cross-contig pass needs a canonical 25-mer occurring
+*exactly twice* (`occ.size() != 2 → skip`), so maybe fragmentation starves
+the anchor pool. Measured 25-mer occurrence multiplicity across each
+assembler's contigs:
+
+| | distinct 25-mers | occ==1 | **occ==2** | occ==3 | occ≥4 |
+|---|---|---|---|---|---|
+| ARCS | 648,780 | 511,804 | **92,163 (14.2%)** | 17,876 | 26,937 |
+| CAPSULE | 670,082 | 281,411 | **253,945 (37.9%)** | 61,100 | 73,626 |
+
+CAPSULE has **2.75× more** exactly-2-occurrence anchors than ARCS. Anchor
+supply is not the bottleneck either.
+
+## What the evidence actually points to
+
+CAPSULE carries 3.8× the window in contig bases against ARCS's 2.7×. For a
+diploid the *ideal* is ~2× — one contig per haplotype. The excess is
+**same-allele duplication**: because exact-overlap chaining breaks a chain at
+every het site *and* every error, one haplotype's sequence ends up spread
+across several separate contigs.
+
+That predicts exactly the failure observed: most of CAPSULE's abundant
+`occ==2` anchor pairs are **two copies of the same allele**, which walk
+along matching and never diverge, so `extract_snv_bubble` finds no bubble —
+and worse, a same-allele duplicate *consumes the 2-occurrence slot* that the
+true hap1/hap2 pair needed, pushing the real pair to occ==3 or 4 where the
+`occ.size()!=2` test discards it. That is consistent with every measurement
+above: more anchors, longer contigs, more total sequence, fewer bubbles.
+
+**Next experiments, in order (both cheap, neither yet run):**
+
+1. **Collapse duplicate/contained contigs before calling.** Targets the
+   excess redundancy directly. Note the irony: CAPSULE's MEM self-match
+   already finds precisely this redundancy for compression — but the caller
+   deliberately captures contigs *pre*-MEM to preserve haplotype separation,
+   which preserves same-allele duplication along with it. A dedup pass that
+   collapses *identical* fragments while keeping *differing* ones is exactly
+   the needed middle ground.
+2. **Relax `occ.size()==2` to a small range (2–4)** and test every
+   cross-contig pair among the occurrences, keeping bubbles that actually
+   diverge-and-reconverge. Directly recovers the true pairs currently
+   discarded by the strict test.
 
 **Do not** respond to these numbers by loosening the frozen filter
 parameters. Precision 0.94 with recall 0.25 is a *visibility* problem, not a
-threshold problem — the variants are not being presented to the filters at
-all.
+threshold problem — the variants never reach the filters at all.
+
+## Methodological note for the paper
+
+Two hypotheses were formed and killed by measurement within one session
+(short contigs; anchor starvation). Neither was argued away — each was
+measured against the alternative assembler on identical input. This is the
+same discipline recorded in `docs/FAILURES_AND_REFUTED_IDEAS.md` and it
+belongs in the Methods section as evidence the tuning was not blind.
 
 ## Reproduce
 
