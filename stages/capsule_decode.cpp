@@ -19,6 +19,7 @@
 #include "seqpar_core.h"
 #include "coders_inproc.h"
 #include "names_coder.h"
+#include "quality_coder.h"
 
 // ---- inverse of xz_compress / xz_compress_lzma (both write .xz containers) --
 static std::vector<uint8_t> xz_decompress(const uint8_t* d, size_t n, size_t hint){
@@ -389,6 +390,23 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
             const uint64_t nw = nmc::decode_to_file(S["names_body"], ndict, nindex, nf, false, &slens);
             fclose(nf);
             fprintf(stderr,"  names written: %llu -> %s\n",(unsigned long long)nw,npath.c_str());
+        }
+    }
+
+    // ---- quality column (Phase 3) ------------------------------------------
+    // Present only when the archive was written with CAPS_QUAL=1. Record
+    // boundaries come from `lengths` (per ORIGINAL read, already decoded
+    // above) rather than from anything fqzcomp stores, so the two columns
+    // cannot disagree about where a read ends.
+    if(has("qual_body")){
+        const std::string qpath = outreads.empty() ? (outdir+"/qual.txt") : (outreads+".qual");
+        FILE* qf=fopen(qpath.c_str(),"wb");
+        if(qf){
+            auto qindex = dec("qual_index");
+            std::vector<uint32_t> qlens(lengths.begin(), lengths.end());
+            const uint64_t qw = qlc::decode_to_file(S["qual_body"], qindex, qf, qlens);
+            fclose(qf);
+            fprintf(stderr,"  quality written: %llu -> %s\n",(unsigned long long)qw,qpath.c_str());
         }
     }
 
