@@ -2019,3 +2019,63 @@ Gated on a measured property, so it fires, degrades or stays inert by itself;
 inert to within 13 B on 6 of 8 datasets. The gain exists only where read
 lengths VARY -- on fixed-length files "length=" is constant and the older
 constant-token elision already handled it.
+
+## Quality: assessed, NOT wired — vendor fqzcomp, do not reimplement (2026-09-02)
+
+Read stages 67/68/71/73/84/92 and measured stage 92 (current) on the 8
+non-human locked datasets, 500K reads each. Round trip VERIFIED 8/8.
+
+    vs SPRING    7/8 wins  -2.88%
+    vs Genozip   8/8 wins  -5.24%
+    vs fqzcomp   0/8       +1.1% to +4.5% (default), up to +7.2% (best-of-4)
+
+fqzcomp is the reference implementation of the very context design stage 68
+borrowed, and it beats us on all 8 while ALSO paying a cost we do not (it
+stores its own record lengths in raw mode; we get them from read_lengths).
+Speed/RAM measured on ERR552797 (145 MB quality): fqzcomp 2.14 s single-
+threaded / 249 MB RSS vs stage 92 4.35 s on 12 threads / 253 MB. It is better
+on every axis.
+
+**License permits vendoring.** htscodecs is BSD 3-clause (Genome Research Ltd,
+James Bonfield) -- unlike PgRC2 (GPL-3), which is why THAT had to be
+reimplemented. Same pattern as thirdparty/fse (BSD) and thirdparty/ppmd.
+
+**Accounting gap to fix when wiring** (same trap names had): stage 92's
+`coded=` is only the sum of block payloads. It does not serialize or count the
+alphabet table or the block index (per-block byte length + line count), both of
+which an archive-only decoder needs. Tens of bytes here, but must be counted.
+
+### Reimplementation headroom: LOOKED FOR, NOT THERE
+
+The CRAM 3.1 paper (Bonfield, Bioinformatics 38(6):1497) concedes two limits:
+a 16-bit context ceiling and small blocks, both for CRAM's random access --
+constraints we do not have. Neither is worth attacking:
+
+- Small blocks: the standalone codec defaults to BLK_SIZE=300 MB. Our largest
+  quality column is 145 MB, so it ALREADY ran as one block. Lever spent.
+- 16-bit context: stage 92's own sweep found a BIGGER context is 5.5-12.5%
+  WORSE on full-resolution files (under one observation per context at real
+  data volumes). Context here is limited by data, not by their design rule.
+
+Cross-column signals we have and fqzcomp structurally cannot see, all tested by
+HELD-OUT entropy (train on even reads, score odd reads, Laplace-smoothed):
+
+    conditioning on TILE (from the name column)   +12.20%  WORSE
+    conditioning on the base call (ACGTN)          +1.04%  WORSE
+    conditioning on an is-N flag                   -0.00%  nothing
+
+**A caution recorded because it nearly cost a build:** in-sample conditional
+entropy said tile conditioning was -3.02% BETTER. That was pure overfitting --
+adding context always lowers in-sample entropy. The first held-out attempt then
+said +227%, which was also wrong: tiles are sequentially ordered in the file, so
+a first-half/second-half split tests on tiles never seen. Only the interleaved
+split is fair, and it gives +12.20%. Independently consistent with the names
+work, where tile-change conditioning was also refuted (155/572 B against an
+8,973 B gap).
+
+**Conclusion: vendor fqzcomp, feed it our read_lengths (turn off PFLAG_DO_LEN)
+and pos_strand RC flags (GFLAG_DO_REV), and sweep its 4 strategies** (its
+default leaves 1.5-3.0% against its own best on 3 of 8 datasets). Keep stage 92
+in-tree as our own implementation and as the honest comparison point.
+Reimplementing would rebuild a model we already implement 1-4% worse, to
+exploit limitations that cost nothing at our data volumes.
