@@ -122,8 +122,41 @@ DiscoSNP++'s 0.977. Recall there is comparable (0.771 vs 0.784), so the loss
 is precision-side and specific to the most distant genome — the honest place
 to look next.
 
-Indels across the same evaluations: CAPSULE 0.31–0.46 against DiscoSNP++
-0.58–0.79. **Not at parity, and not hidden.**
+### Indels, after the read-support work (same 8 evaluations)
+
+| dataset | CAPSULE INDEL F1 | DiscoSNP++ INDEL F1 | Δ |
+|---|---|---|---|
+| HG002 r2 | 0.620 | 0.679 | −0.059 |
+| HG002 r3 | 0.596 | 0.581 | **+0.015** |
+| HG002 na | 0.581 | 0.593 | −0.012 |
+| HG002 r4 | 0.531 | 0.781 | −0.250 |
+| HG002 r5 | 0.600 | 0.789 | −0.189 |
+| HG003 r3 | 0.682 | 0.613 | **+0.069** |
+| HG004 r3 | 0.515 | 0.598 | −0.083 |
+| HG005 r3 | 0.542 | 0.667 | −0.125 |
+| **average** | **0.583** | **0.663** | **−0.080** |
+
+Indels went from ~0.40 to **0.583** via three changes, each measured:
+
+1. **Read-level junction support.** An indel used to be accepted on CONTIG
+   coverage proxies, never on evidence that a READ carries the alt allele —
+   exactly the job DiscoSNP++ gives `kissreads2`, and exactly why its indel
+   precision is 0.88–0.97. Building the alt haplotype across the junction and
+   requiring its 31-mers to exist in the read k-mer table (already built for
+   the coverage model, so free) moved precision **0.37 → 0.93 / 0.40 → 0.83**.
+2. **Anchor multiplicity.** The rule was `occ != 2 → skip`: a real hap1/hap2
+   pair whose 25-mer also appeared in any third fragment was silently
+   discarded. Trying every cross-contig pair among ≤4 occurrences moved recall
+   **0.36 → 0.53**, costing some precision, net F1 **0.522 → 0.614**.
+3. **Homopolymer guard for 1 bp indels.** `is_str_event` returned false for
+   `seq.size() < 2`, so single-base indels — 16 of 24 FPs on r4 — were exempt
+   from the STR filter entirely. Now guarded by an actual run-length test.
+
+A fourth idea, an allele-fraction test on the junction k-mers reusing the
+frozen MAF, measured **neutral** (0.614 → 0.620 / 0.554 → 0.531) and is
+recorded as such rather than kept for appearances: the surviving FPs have
+BOTH junctions well covered, i.e. they are real sequence differences absent
+from the het-restricted truth, not low-support noise.
 
 ## Honest standing
 
@@ -131,7 +164,7 @@ Indels across the same evaluations: CAPSULE 0.31–0.46 against DiscoSNP++
   evaluations (5 windows, 3 unseen individuals), 4 wins / 4 losses. Started
   this session at 0.419. Claiming "dominant" would be wrong; claiming "equal"
   is supported.
-- **INDEL: behind** (0.31–0.46 vs 0.58–0.79). Our indels come only from contig
+- **INDEL: behind but close** — 0.583 vs 0.663 average (was 0.40 vs 0.66). Our indels come only from contig
   bubbles; DiscoSNP++ detects them in a purpose-built graph and is both more
   sensitive and far more precise (0.88–0.97 vs our 0.32–0.63). This is the
   open gap and it is stated plainly.
