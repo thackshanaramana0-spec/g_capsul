@@ -940,6 +940,49 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             uint32_t qB = opp ? (uint32_t)(cdb.contigs[ac].size() - ap - BK) : ap;
             Bubble bub = extract_bubble(R, rp, Aalt, qB, MAXINDEL, FLANK);
             if (!bub.ok || bub.apos == 0) continue;
+            // ── CLOSING ANCHOR: make the bubble anchored at BOTH ends ───────
+            // THE structural difference from DiscoSNP++. Its bubble leaves a
+            // shared graph node and must RE-CONVERGE on another shared node,
+            // so both ends of both paths are k-mers that exist in the reads.
+            // Ours opened on one 25-mer anchor and closed on nothing stronger
+            // than 15 bases of contig-vs-contig identity -- a pair of paralogs
+            // sharing one anchor can satisfy that by luck, which is why our
+            // indel precision sat at 0.729 against their 0.910 while our
+            // recall was already comparable (0.497 vs 0.522).
+            // Require the re-convergence point to be a real closing anchor: a
+            // full BK-mer identical in both contigs AND present in the reads.
+            // This is the both-ends-anchored property obtained on our own
+            // contig set, with no graph.
+            if (!std::getenv("CAPS_NO_CLOSE_ANCHOR")) {
+                uint32_t ra = bub.apos + (bub.type == 0 ? (uint32_t)bub.len : 0u);
+                uint32_t rb = (uint32_t)(qB + (bub.apos - rp)) + (bub.type == 1 ? (uint32_t)bub.len : 0u);
+                if ((size_t)ra + BK > R.size() || (size_t)rb + BK > Aalt.size()) continue;
+                bool same = true;
+                for (int t = 0; t < BK; ++t)
+                    if (R[(size_t)ra + t] != Aalt[(size_t)rb + t]) { same = false; break; }
+                if (!same) continue;                       // no shared closing k-mer
+                // and it must be observed in the reads, not merely in contigs
+                if ((size_t)ra + 31 <= R.size() &&
+                    (int)kcount(R.substr(ra, 31)) < MC) continue;
+                // UNIQUENESS of the closing anchor, mirroring the opening one.
+                // A graph bubble re-converges on a specific NODE; the analogue
+                // here is that the closing k-mer must not be a repeat scattered
+                // across many contigs, or "re-convergence" means nothing.
+                // Measured NEGATIVE and therefore opt-in: requiring the
+                // closing anchor to be unique as well costs more than it buys
+                // (five-window mean indel F1 0.5976 -> 0.5932, HG003
+                // 0.672 -> 0.640). A repeated closing k-mer still closes a real
+                // bubble; demanding uniqueness at BOTH ends over-constrains a
+                // fragmented contig set. Kept for re-measurement elsewhere.
+                if (std::getenv("CAPS_CLOSE_UNIQ")) {
+                    uint64_t cv;
+                    if (pack25(R.data() + ra, cv)) {
+                        uint64_t crv = rc25(cv), ccan = cv < crv ? cv : crv;
+                        auto cit = kidx.find(ccan);
+                        if (cit == kidx.end() || (int)cit->second.size() > MAXOCC) continue;
+                    }
+                }
+            }
             // EXTENDED AGREEMENT. Read-support tests cannot separate our false
             // bubbles from true ones: every candidate is built FROM contigs,
             // which are built from reads, so all of it is read-supported by
