@@ -1959,3 +1959,63 @@ no room for one.
 
 Do not retry this. Real names gains came from cross-column reference instead
 (ID_SEQLEN, commit 877702d): -96.5% on ERR5181310, -20.1% on ERR552797.
+
+## Names: the last two gaps are TIES, not losses (2026-09-02)
+
+After ID_SEQLEN (commit 877702d) the standing on the 8 non-human locked
+datasets, every tool measured by its OWN name-section bytes:
+
+    vs SPRING    7/8 wins, -18.37%
+    vs Genozip   6/8 wins,  -7.35%
+    remaining non-wins: SRR2584863 +0.5% (6,108 B), SRR36741279 +0.8% (9,262 B)
+
+**Measurement method, settled.** Two definitions disagree and it matters:
+per-tool section accounting vs differencing (compress twice, once with names
+replaced by same-length constants, subtract). Section accounting is correct --
+"what do names cost" not "what happens if you remove them". Proof it is the
+right one: for SPRING the two AGREE (its own id_1.* stream files 1,008,011 B
+vs --no-ids differencing 1,003,520 B, 0.45% apart). They diverge only for
+Genozip, which reuses "length=" to store read lengths, so deleting names makes
+its archive BIGGER and differencing reports a negative name cost. Use
+`genocat --STATS` (capital) for exact per-context bytes -- the lowercase
+--stats rounds to 2-3 significant figures, which cannot resolve gaps under
+~5%. Genozip name cost = all contexts with Parent=QNAME, plus `length`;
+exclude LINE3 (that is line 3, which we do not store at all).
+
+**Why the last two cannot be won by a better mechanism.** Genozip sits ON the
+entropy bound of the same delta model we use:
+
+    SRR36741279   entropy of our own delta scheme : 1,186,751 B
+                  Genozip                         : 1,186,600 B
+                  ours                            : 1,195,862 B  (+0.77%)
+
+It exploits nothing we lack. The residual is arithmetic-coder efficiency
+(per-block model warm-up, frequency quantisation, rescale halving), and it IS
+the whole gap. Treat both as ties.
+
+**Three levers tested and REFUTED (do not retry):**
+
+1. X/Y fixed-width columns -- see previous section. -0.4% best case, worse on
+   both Y columns. X+Y are 99.8% of the names stream and are already coded
+   below order-0 entropy.
+2. Unify ID_DELTA/ID_ZDELTA into a magnitude-bucket code to kill the per-token
+   type bit. token_type really does cost 7.8-10.5% of the stream (105 KB /
+   125 KB, measured by bit attribution), and Genozip pays none of it because
+   each field is its own context. But the type bit is NOT redundant: the
+   specialised models it selects between are worth more than it costs.
+   Measured +28,826 B WORSE on SRR2584863. Removing ZDELTA outright (NMC_NOZD)
+   is far worse still: 1,354,682 -> 1,698,147.
+3. Raising Model's rescale ceiling 60000 -> 262144: SRR36741279 -4,790 B but
+   SRR2584863 +1,878 B. Fails the no-regression gate. This one is a parameter,
+   not a fix, and was rejected for that reason.
+
+**Generalisation of ID_SEQLEN, verified rather than asserted:**
+
+    header with no length= field   1,353,916 B  mechanism never fires  RT_OK
+    length= wrong in 10% of reads  1,412,674 B  hoist refuses, token   RT_OK
+    variable length, holds always  1,072,050 B  full win               RT_OK
+
+Gated on a measured property, so it fires, degrades or stays inert by itself;
+inert to within 13 B on 6 of 8 datasets. The gain exists only where read
+lengths VARY -- on fixed-length files "length=" is constant and the older
+constant-token elision already handled it.
