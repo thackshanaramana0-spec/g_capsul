@@ -230,6 +230,24 @@ static void phase(const char* name){
 int main(int argc,char** argv){
     phase_init();
     if(argc>1) g_input_path = argv[1];
+    // Resolve to absolute IMMEDIATELY, before any candidate/GSEARCH fork can
+    // chdir() into a per-candidate scratch directory. CALL_VCF and
+    // CAPS_DUMP_CONTIGS already get this treatment for exactly this reason
+    // (see the CAPS_CALL child-setup block below) -- g_input_path did not,
+    // which silently broke CAPS_NAMES/CAPS_QUAL whenever a relative input
+    // path was used through encode_adaptive.sh's sweep: nmc::encode_from_fastq
+    // and qlc::encode_from_fastq reopen g_input_path to extract names/quality,
+    // and after the chdir a relative path no longer points at the file the
+    // caller meant, so both silently encoded zero records while the archive
+    // still reported success. Found 2026-09-03 by actually running all three
+    // claims' features together on one archive, not by isolated per-feature
+    // testing. A no-op when the path is already absolute or CAPSULE is run
+    // without CANDIDATES/GSEARCH (the overwhelmingly common case), so this
+    // cannot change any existing single-candidate archive.
+    if(!g_input_path.empty() && g_input_path[0]!='/'){
+        char cwdbuf[4096];
+        if(getcwd(cwdbuf,sizeof cwdbuf)) g_input_path = std::string(cwdbuf) + "/" + g_input_path;
+    }
     // RAM FIX -- confirmed real driver of the C. elegans-scale RSS gap
     // after three application-level hypotheses were measured and ruled
     // out (allrefs/cleanRefs double-holding, c/cr scope overlap, res[]
