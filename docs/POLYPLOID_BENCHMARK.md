@@ -68,3 +68,51 @@ to k co-occurring alleles). DiscoSNP++ does not, and its own paper does not
 claim polyploid calling — it presents the tool for diploid and haploid data and
 reports biallelic variants only. This is a capability difference, not merely an
 accuracy margin, and it is the more defensible claim of the two.
+
+---
+
+## 5. FINAL polyploid result, after fixing the generator and the scoring
+
+Two defects had to be removed before any number here meant anything.
+
+**Defect 1 — the truth set was broken (fixed, commit `d92a5b1`).**
+`sim_polyploid.py` mutated the reference haplotype at multi-allelic sites, so
+**22 of 80 truth records (28%), all of them multi-allelic, had a REF that
+disagreed with the `ref.fa` they were generated against**. A caller reporting
+the correct genome base could never match them. After the fix: 0 disagreements.
+
+**Defect 2 — the scoring convention decided the winner.** Measured three ways
+on the same corrected data:
+
+| convention | CAPSULE | DiscoSNP++ | who "wins" |
+|---|---|---|---|
+| raw, no normalisation | 0.886 | 0.800 | CAPSULE |
+| split multi-allelics in truth + both calls | 0.658 | 0.664 | tie |
+| **join to multi-allelic in truth + both calls** | **0.981** | **0.994** | **DiscoSNP++** |
+
+The split convention is invalid for this class: decomposing a truth record
+`A>C,G  GT 1/2` into two `0/1` records at one position is genotypically
+impossible, and rtg then credits one and rejects the other **for both tools** —
+which is exactly what the per-site inspection shows (we call both `A>C` and
+`A>G`, one scores TP, the other FP).
+
+**The joined convention is the correct one**, and under it both tools are
+near-perfect with DiscoSNP++ narrowly ahead: **CAPSULE 0.981 vs 0.994**. Our
+gap is 2 missed sites of 80; precision is equal (0.987 vs 0.988).
+
+### Verdict
+
+**CAPSULE does not win polyploid.** Every earlier margin in its favour came
+from a broken truth set or a favourable representation. Stated honestly:
+
+* **Accuracy: near-parity, DiscoSNP++ marginally ahead** (0.981 vs 0.994) on
+  synthetic triploid data.
+* **Capability: ours is native.** CAPSULE emits multi-allelic VCF records
+  directly; DiscoSNP++ emits separate biallelic rows that must be joined before
+  they can be scored as multi-allelic — `bcftools norm -m +any` failed on its
+  output entirely, and the join had to be written by hand. Its own paper does
+  not claim polyploid support.
+* **Real human data cannot test this class at all** (§1): 1 multi-allelic site
+  per 763, so the capability is unexercised there.
+
+The defensible paper claim is the capability, not an accuracy win.
