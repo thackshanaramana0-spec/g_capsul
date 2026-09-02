@@ -91,3 +91,53 @@ short reads.
 3. **The complementarity is a publishable result in itself**: on this window we
    find 46% more true indels, they find a class we cannot, and the union of the
    two tools would exceed either.
+
+---
+
+## 6. Length-aware bubble extraction — IMPLEMENTED, and it does not fix it
+
+Section 5 proposed length-aware extraction as "the first indel lead with a
+named mechanism". Two versions were implemented and measured; both are correct,
+both fire, and **neither changes the score** (HG002 r2 indel F1 stays 0.655):
+
+1. **Homopolymer run-length branch in `extract_bubble`** — when the divergence
+   sits at a run, measure the run length on each side and emit the difference
+   directly instead of walking for a divergence point. Fires 70,388 times with
+   5,637 successful resolutions. `CAPS_NO_HPBUBBLE=1` gives an identical score,
+   proving every bubble it resolves was already resolved by the generic path.
+2. **Homopolymer-aware closing anchor** — slide the alt side by up to the event
+   length before testing re-convergence, since a k-base length change shifts
+   everything after the run by k. Real effect: closing-anchor rejections fall
+   1,340 → 1,171. Score unchanged.
+
+**Why neither helps — traced, not guessed.** Instrumenting every gate:
+
+| stage | count |
+|---|---|
+| bubbles aggregated | 13,204 |
+| dropped at closing anchor | 1,340 |
+| dropped at coverage | 151 |
+| dropped at junction support | 8 |
+| dropped at anchors / STR / context / read-substring | 10 / 0 / 0 / 0 |
+
+Then mapping every aggregated bubble to genome coordinates and checking the 9
+target positions:
+
+> **Only 1 of the 9 missed events ever produces a bubble at all.**
+
+The other 8 are lost **upstream of `extract_bubble`**, in the anchor-pairing
+loop — the two haplotype contigs never get paired on a shared unique 25-mer in
+the first place, so there is nothing for any extraction or filter improvement
+to act on. Both fixes above target stages these events never reach.
+
+**Corrected conclusion.** The homopolymer diagnosis in sections 2-5 is right
+about WHICH events we miss and WHY they are hard, but wrong about WHERE the
+loss happens. It is not extraction and not filtering: it is **anchor pairing**.
+A 1 bp change inside a 7-8 bp homopolymer perturbs every 25-mer overlapping the
+run, so the two haplotypes share far fewer unique 25-mers there, and the pair is
+never formed. Fixing this means shorter or spaced/gapped anchors near
+low-complexity sequence — a change to the anchor index, not to `extract_bubble`.
+
+Both implementations are kept behind `CAPS_NO_HPBUBBLE` / `CAPS_NO_HPCLOSE`
+(default ON, measurably harmless) because they are correct in themselves and
+will matter once anchoring reaches these loci.

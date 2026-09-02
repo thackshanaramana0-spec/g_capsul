@@ -155,6 +155,55 @@ inline Bubble extract_bubble(const std::string& A, uint32_t pA, const std::strin
     while (pA + d < la && qB + d < lb && A[pA + d] == B[qB + d]) ++d;
     if (d == 0) return r;
     if (pA + d >= la || qB + d >= lb) return r;
+
+    // ── HOMOPOLYMER RUN-LENGTH BRANCH ────────────────────────────────────────
+    // MEASURED MOTIVATION (docs/INDEL_LOSS_SKELETAL.md): every one of the 9
+    // truth indels DiscoSNP++ finds on HG002 r2 that we miss is a 1 bp indel
+    // inside a homopolymer run of 7-8 identical bases. The generic path below
+    // cannot represent them: a 1 bp change in an 8-mer run shifts its LENGTH
+    // (8 -> 7 or 9), the two haplotypes stay identical through the whole run,
+    // and the byte-identical `flank_match` never succeeds at any offset g
+    // because the flanks are themselves shifted by the length difference.
+    // DiscoSNP++ resolves this by extending one graph path base-by-base and
+    // taking the shortest closing extension, plus an explicit ambiguity
+    // allowance (max_ambigous_indel, default 20).
+    // Here the equivalent is direct: when the divergence sits at a
+    // homopolymer, measure the RUN LENGTH on each side and emit the difference
+    // as the indel, then verify re-convergence AFTER both runs.
+    if (!std::getenv("CAPS_NO_HPBUBBLE")) {
+        size_t ia = pA + d, ib = qB + d;
+        // the run character is the one repeating just before the divergence
+        char rc0 = A[ia - 1];
+        if (rc0 == B[ib - 1] && b2i(rc0) >= 0) {
+            // length of the run ending at the divergence (shared prefix part)
+            size_t back = 0;
+            while (back < ia && back < ib && A[ia - 1 - back] == rc0 && B[ib - 1 - back] == rc0) ++back;
+            // how much further each side continues the same character
+            size_t ea = 0, eb = 0;
+            while (ia + ea < la && A[ia + ea] == rc0) ++ea;
+            while (ib + eb < lb && B[ib + eb] == rc0) ++eb;
+            long diff = (long)ea - (long)eb;        // A longer => deletion in B
+            if (std::getenv("CAPS_HPDBG") && back >= 3)
+                fprintf(stderr, "[hp] run='%c' back=%zu ea=%zu eb=%zu diff=%ld\n", rc0, back, ea, eb, (long)ea-(long)eb);
+            if (back >= 4 && diff != 0 && std::labs(diff) <= maxindel) {
+                size_t ra = ia + ea, rb = ib + eb;  // first base after each run
+                bool fm = (ra + (size_t)FLANK <= la && rb + (size_t)FLANK <= lb &&
+                           flank_match(A, ra, B, rb, FLANK));
+                if (std::getenv("CAPS_HPDBG"))
+                    fprintf(stderr, "[hp]   candidate diff=%ld flank_ok=%d\n", diff, (int)fm);
+                if (fm) {
+                    if (diff > 0) {                 // A has extra copies: deletion in B
+                        r.type = 0; r.apos = (uint32_t)ia; r.len = (int)diff;
+                    } else {                        // B has extra copies: insertion in B
+                        r.type = 1; r.apos = (uint32_t)ia; r.len = (int)(-diff);
+                        r.ins.assign((size_t)(-diff), rc0);
+                    }
+                    r.ok = true; return r;
+                }
+            }
+        }
+    }
+
     for (int g = 1; g <= maxindel; ++g) {
         if (qB + d + (uint32_t)g + (uint32_t)FLANK > lb) break;
         if (flank_match(A, pA + d, B, qB + d + (uint32_t)g, FLANK)) {
@@ -1043,7 +1092,32 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 bool same = true;
                 for (int t = 0; t < BK; ++t)
                     if (R[(size_t)ra + t] != Aalt[(size_t)rb + t]) { same = false; break; }
-                if (!same) continue;                       // no shared closing k-mer
+                // HOMOPOLYMER-AWARE CLOSING ANCHOR. This test is the dominant
+                // filter -- it drops 1,340 of 13,204 aggregated bubbles -- and
+                // for a homopolymer length change it can NEVER succeed at the
+                // nominal offsets: if the two haplotypes differ by k copies of
+                // the run character, everything after the run is shifted by k
+                // on one side, so R[ra..] and Aalt[rb..] are misaligned by
+                // exactly that amount. Every one of the 9 truth indels
+                // DiscoSNP++ finds and we miss is such an event
+                // (docs/INDEL_LOSS_SKELETAL.md). Slide the alt side by up to
+                // the event length and re-test; a genuine run-length change
+                // closes exactly there.
+                if (!same && !std::getenv("CAPS_NO_HPCLOSE")) {
+                    for (int shift = -(int)bub.len; shift <= (int)bub.len && !same; ++shift) {
+                        if (shift == 0) continue;
+                        long rb2 = (long)rb + shift;
+                        if (rb2 < 0 || (size_t)rb2 + BK > Aalt.size()) continue;
+                        bool ok2 = true;
+                        for (int t = 0; t < BK; ++t)
+                            if (R[(size_t)ra + t] != Aalt[(size_t)rb2 + t]) { ok2 = false; break; }
+                        if (ok2) same = true;
+                    }
+                }
+                if (!same) {
+                    if (std::getenv("CAPS_TRACE"))
+                        fprintf(stderr, "[trace] DROP-CLOSE cid=%u apos=%u\n", rc_, bub.apos);
+                    continue; }
                 // and it must be observed in the reads, not merely in contigs
                 if ((size_t)ra + 31 <= R.size() &&
                     (int)kcount(R.substr(ra, 31)) < MC) continue;
@@ -1110,6 +1184,8 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                     if (mmL + mmR > EXT_TOL) continue;          // diverges: paralog, not a haplotype pair
                 }
             }
+            if (std::getenv("CAPS_TRACE"))
+                fprintf(stderr, "[trace] AGG cid=%u apos=%u type=%d len=%d\n", rc_, bub.apos, bub.type, bub.len);
             auto& a = im[std::make_tuple(rc_, bub.apos, bub.type, bub.len, bub.ins)];
             a.anchors++; a.altcid = ac; a.altpos = ap;
           }
@@ -1181,7 +1257,10 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             int refd = covwin(cid, apos - 1);
             int altd = std::max(medcov[a.altcid], (int)covwin(a.altcid, a.altpos));
             double af = (double)altd / std::max(1, refd + altd);
-            if (refd < MC || altd < MC) continue;
+            if (refd < MC || altd < MC) {
+                if (std::getenv("CAPS_TRACE"))
+                    fprintf(stderr, "[trace] DROP-COV cid=%u apos=%u refd=%d altd=%d\n", cid, apos, refd, altd);
+                continue; }
             // Anchor and junction-support strictness, both gated so the
             // precision/recall trade can be measured rather than guessed.
             // Swept across FIVE windows (not one): mean indel F1 0.5832 (>=3),
@@ -1193,14 +1272,19 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             // chance repeat match.
             int MIN_ANCH = 7;
             if (const char* e = std::getenv("CAPS_INDEL_ANCH")) MIN_ANCH = atoi(e);
-            if (a.anchors < MIN_ANCH) continue;
+            if (a.anchors < MIN_ANCH) {
+                if (std::getenv("CAPS_TRACE"))
+                    fprintf(stderr, "[trace] DROP-ANCH cid=%u apos=%u anchors=%d\n", cid, apos, a.anchors);
+                continue; }
             {
                 std::string left_flank = (apos >= 12) ? cc.substr(apos - 12, 12) : cc.substr(0, apos);
                 std::string indel_seq  = (type == 0)
                     ? ((apos + (uint32_t)len <= cc.size()) ? cc.substr(apos, (size_t)len) : "")
                     : ins;
-                if (!indel_seq.empty() && is_str_event(indel_seq, left_flank) && a.anchors < 5)
-                    continue;
+                if (!indel_seq.empty() && is_str_event(indel_seq, left_flank) && a.anchors < 5) {
+                    if (std::getenv("CAPS_TRACE"))
+                        fprintf(stderr, "[trace] DROP-STR cid=%u apos=%u anchors=%d\n", cid, apos, a.anchors);
+                    continue; }
             }
             // ── READ-LEVEL JUNCTION SUPPORT ──────────────────────────────────
             // Until now an indel was accepted on CONTIG-coverage proxies
@@ -1245,7 +1329,10 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 size_t rs = apos + (type == 0 ? (size_t)len : 0);
                 if (rs > cc.size()) continue;
                 int fl_r = (int)std::min<size_t>((size_t)FL + 1, cc.size() - rs);
-                if (fl_l < FLMIN || fl_r < FLMIN) continue;
+                if (fl_l < FLMIN || fl_r < FLMIN) {
+                    if (std::getenv("CAPS_TRACE"))
+                        fprintf(stderr, "[trace] DROP-CTX cid=%u apos=%u l=%d r=%d\n", cid, apos, fl_l, fl_r);
+                    continue; }
                 std::string alt_hap = cc.substr(apos - (size_t)fl_l, (size_t)fl_l);
                 if (type == 1) alt_hap += ins;         // insertion in alt
                 alt_hap += cc.substr(rs, (size_t)fl_r);
@@ -1271,7 +1358,10 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 if (!any_j) best_sup = 0;
                 int MINSUP = MC;
                 if (const char* e = std::getenv("CAPS_INDEL_SUP")) MINSUP = atoi(e);
-                if ((int)best_sup < MINSUP) continue;  // no read carries this allele
+                if ((int)best_sup < MINSUP) {
+                    if (std::getenv("CAPS_TRACE"))
+                        fprintf(stderr, "[trace] DROP-JUNC cid=%u apos=%u sup=%u\n", cid, apos, best_sup);
+                    continue; }
                 // EBWT2SNP's actual guarantee: the emitted fragment must be a
                 // SUBSTRING of at least C real reads (Hamming <= 2), not merely
                 // a sequence whose k-mers all appear somewhere. A chimeric
@@ -1300,7 +1390,10 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                     if (const char* e = std::getenv("CAPS_KFREQ_CAP")) kcap = atof(e) * (double)H;
                     if ((double)best_sup > kcap) continue;
                 }
-                if (!read_support(alt_hap, MC, 2)) continue;
+                if (!read_support(alt_hap, MC, 2)) {
+                    if (std::getenv("CAPS_TRACE"))
+                        fprintf(stderr, "[trace] DROP-RSUB cid=%u apos=%u\n", cid, apos);
+                    continue; }
                 // Allele fraction ON THE JUNCTION, using the already-frozen
                 // MAF. A true heterozygous indel splits reads ~50/50 between
                 // the ref and alt junctions; a spurious bubble has a ref
