@@ -92,13 +92,54 @@ filter constants (`HDMAX/MAF/DHI/KHI/MC/TRI/HALF`) were **not touched** —
 precision never fell below 0.93 at any point, so recall was never a threshold
 problem.
 
+## Generalization — the number that actually decides it
+
+8 independent evaluations: 5 chr20 windows on HG002 (only `r2` was ever used
+for tuning) plus 3 **unseen individuals**, including HG005 (Han Chinese, the
+most genetically distant from the rest). DiscoSNP++ rerun on every one of
+them, same reads, same scoring.
+
+| dataset | CAPSULE SNV F1 | DiscoSNP++ SNV F1 | Δ |
+|---|---|---|---|
+| HG002 r2 *(tuning)* | 0.878 | 0.840 | **+0.038** |
+| HG002 r3 | 0.862 | 0.886 | −0.024 |
+| HG002 na | 0.897 | 0.914 | −0.017 |
+| HG002 r4 | 0.884 | 0.812 | **+0.072** |
+| HG002 r5 | 0.911 | 0.922 | −0.011 |
+| HG003 r3 *(unseen individual)* | 0.856 | 0.848 | **+0.008** |
+| HG004 r3 *(unseen individual)* | 0.906 | 0.901 | **+0.005** |
+| HG005 r3 *(unseen individual)* | 0.817 | 0.870 | −0.053 |
+| **average** | **0.876** | **0.874** | **+0.002** |
+
+**Statistically a dead heat: 4 wins, 4 losses, average difference +0.002.**
+CAPSULE is now **at parity with the state of the art on het-SNV calling**,
+from a starting point of 0.419 — and the tuning window is *not* where the
+biggest win is (r4, held out, is), which is the signature of a real effect
+rather than an overfit.
+
+Weakest case is HG005 (−0.053), where our precision falls to 0.869 against
+DiscoSNP++'s 0.977. Recall there is comparable (0.771 vs 0.784), so the loss
+is precision-side and specific to the most distant genome — the honest place
+to look next.
+
+Indels across the same evaluations: CAPSULE 0.31–0.46 against DiscoSNP++
+0.58–0.79. **Not at parity, and not hidden.**
+
 ## Honest standing
 
-- **SNV: dominant** on the tuning window (0.88 vs 0.84). Held-out and
-  cross-individual validation is the number that decides it — see the
-  generalization section once complete.
-- **INDEL: behind** (0.45 vs 0.68). Our indels come only from contig bubbles;
-  DiscoSNP++ detects them in a purpose-built graph and is more sensitive.
-  This is the open gap and it is not hidden.
+- **SNV: at parity with SOTA.** 0.876 vs DiscoSNP++'s 0.874 averaged over 8
+  evaluations (5 windows, 3 unseen individuals), 4 wins / 4 losses. Started
+  this session at 0.419. Claiming "dominant" would be wrong; claiming "equal"
+  is supported.
+- **INDEL: behind** (0.31–0.46 vs 0.58–0.79). Our indels come only from contig
+  bubbles; DiscoSNP++ detects them in a purpose-built graph and is both more
+  sensitive and far more precise (0.88–0.97 vs our 0.32–0.63). This is the
+  open gap and it is stated plainly.
+- **Two scoring-harness bugs found and fixed while validating**, both of which
+  had been making our own numbers look worse: contigs were dumped as FASTA but
+  converted again by an inherited TSV awk (symptom: `lifted 0 calls`), and
+  SNV/indel classification ran BEFORE `bcftools norm`, so multi-allelic SNVs
+  (`ALT=C,T`) were filed as indels and then split into SNVs — inflating indel
+  FPs. Normalise first, then classify.
 - The measured recall ceiling is **0.995**, and we are at 0.805 — the
   remaining headroom is real, not exhausted.
