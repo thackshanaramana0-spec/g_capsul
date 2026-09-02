@@ -1341,6 +1341,71 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         // SAME contig, so alt-haplotype reads must reveal their gap.
         if (!std::getenv("CAPS_NO_PCLUSTER")) {
             const int AK = 25, LW = 40;      // anchor k-mer, left window
+            // SUBSTRATE CHOICE. The bubble passes need the two haplotypes to
+            // survive as separate contigs, which is why they run on the mildly
+            // collapsed substrate (dup=0.92). This channel has no such need --
+            // it compares READS against ONE contig -- so it can use the
+            // aggressively collapsed pileup substrate (dup=0.45), where reads
+            // stack far better. Selectable so the two can be compared.
+            // MEASURED: the mildly-collapsed BUBBLE substrate is the right one
+            // here, despite this channel not needing haplotype separation the
+            // way the bubble passes do. On the aggressively collapsed pileup
+            // substrate (dup=0.45) indel F1 falls 0.655 -> 0.526 on r2, because
+            // that collapse merges the two haplotypes into ONE contig: a read
+            // carrying the indel then often matches a contig that already
+            // contains it, and no gap appears at all.
+            const CallData& pc_cd = std::getenv("CAPS_PCLUSTER_COLSUB") ? cd : cdb;
+            // `cov` above is indexed by the BUBBLE substrate's contigs, so it
+            // cannot be reused when this channel runs on a different one --
+            // the ids would silently address the wrong contig. Build coverage
+            // for whichever substrate this channel actually uses.
+            // kidx is built over the BUBBLE substrate's contigs, so its ids
+            // cannot be used to index a different substrate -- doing so
+            // segfaulted immediately. This channel builds its OWN anchor index
+            // over whichever substrate it uses.
+            std::unordered_map<uint64_t, std::pair<uint32_t,uint32_t>> pkidx;
+            {
+                // Count occurrences of the CANONICAL k-mer across BOTH
+                // orientations and keep only those seen exactly once, then use
+                // only the forward-oriented ones. Counting just the
+                // forward-canonical k-mers instead admits anchors that recur in
+                // reverse-complement form elsewhere, which measured as a real
+                // precision loss (r2 indel P 0.760 -> 0.586).
+                std::unordered_map<uint64_t, uint32_t> pcount;
+                std::unordered_map<uint64_t, uint8_t> porient;
+                pcount.reserve(1u << 21); pkidx.reserve(1u << 21);
+                for (uint32_t ci = 0; ci < (uint32_t)pc_cd.contigs.size(); ++ci) {
+                    const std::string& c = pc_cd.contigs[ci];
+                    for (size_t i2 = 0; i2 + 25 <= c.size(); ++i2) {
+                        uint64_t v; if (!pack25(c.data() + i2, v)) continue;
+                        uint64_t rv = rc25(v), cn = v < rv ? v : rv;
+                        if (++pcount[cn] == 1) {
+                            pkidx[cn] = {ci, (uint32_t)i2};
+                            porient[cn] = (uint8_t)(v <= rv ? 0 : 1);
+                        }
+                    }
+                }
+                for (auto it = pkidx.begin(); it != pkidx.end(); )
+                    if (porient[it->first] != 0) it = pkidx.erase(it); else ++it;
+                for (auto it = pkidx.begin(); it != pkidx.end(); )
+                    if (pcount[it->first] != 1) it = pkidx.erase(it); else ++it;
+            }
+            std::vector<std::vector<uint16_t>> pcov;
+            {
+                pcov.resize(pc_cd.contigs.size());
+                for (size_t ci = 0; ci < pc_cd.contigs.size(); ++ci)
+                    pcov[ci].assign(pc_cd.contigs[ci].size(), 0);
+                for (size_t oi = 0; oi < n; ++oi) {
+                    uint32_t cid = pc_cd.read_cid[oi], pos = pc_cd.read_pos[oi];
+                    if (cid >= pc_cd.contigs.size()) continue;
+                    uint16_t clp = (oi < pc_cd.read_clip.size()) ? pc_cd.read_clip[oi] : 0;
+                    int rl = (int)seqs[oi].size() - (int)clp;
+                    for (int j = 0; j < rl; ++j) {
+                        uint32_t pp = pos + (uint32_t)j;
+                        if (pp < pcov[cid].size() && pcov[cid][pp] < 60000) ++pcov[cid][pp];
+                    }
+                }
+            }
             // cluster reads by right-context anchor that is UNIQUE in the contigs
             std::unordered_map<uint64_t, std::vector<std::pair<uint32_t,uint32_t>>> rc_reads;
             rc_reads.reserve(1u << 20);
@@ -1366,12 +1431,10 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             // channel applies via MIN_ANCH. Without it a single anchor's worth
             // of reads can carry an event on its own.
             std::map<std::tuple<uint32_t,uint32_t,int,std::string>, std::unordered_set<uint32_t>> panch;
-            for (auto& kv : kidx) {
-                if (kv.second.size() != 1) continue;          // unique contig anchor
-                uint32_t ccid = std::get<0>(kv.second[0]);
-                uint32_t cpos = std::get<1>(kv.second[0]);
-                if (std::get<2>(kv.second[0]) != 0) continue;   // anchor stored RC: skip
-                const std::string& cc2 = cdb.contigs[ccid];
+            for (auto& kv : pkidx) {
+                uint32_t ccid = kv.second.first;
+                uint32_t cpos = kv.second.second;
+                const std::string& cc2 = pc_cd.contigs[ccid];
                 if (cpos < (uint32_t)LW) continue;
                 auto rit = rc_reads.find(kv.first);
                 if (rit == rc_reads.end()) continue;
@@ -1432,7 +1495,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 if ((int)panch[kv.first].size() < PANCH) continue;
                 uint32_t ccid, apos2; int g; std::string insseq;
                 std::tie(ccid, apos2, g, insseq) = kv.first;
-                const std::string& cc2 = cdb.contigs[ccid];
+                const std::string& cc2 = pc_cd.contigs[ccid];
                 if (apos2 == 0 || apos2 > cc2.size()) continue;
                 // ALLELE FRACTION against the coverage already computed for
                 // this contig. An absolute read-count floor cannot separate a
@@ -1441,8 +1504,8 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 // reads at this locus carry the event. A het indel sits near
                 // 0.5. Reuses the frozen MAF rather than adding a constant.
                 if (!std::getenv("CAPS_NO_PCLUSTER_AF")) {
-                    int dp = (ccid < cov.size() && apos2 < cov[ccid].size())
-                             ? (int)cov[ccid][apos2] : 0;
+                    int dp = (ccid < pcov.size() && apos2 < pcov[ccid].size())
+                             ? (int)pcov[ccid][apos2] : 0;
                     if (dp > 0) {
                         double af = (double)nsup / (double)dp;
                         // Swept over five windows on DISTINCT-read support:
