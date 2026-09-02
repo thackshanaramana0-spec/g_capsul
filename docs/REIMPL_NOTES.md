@@ -2020,7 +2020,16 @@ inert to within 13 B on 6 of 8 datasets. The gain exists only where read
 lengths VARY -- on fixed-length files "length=" is constant and the older
 constant-token elision already handled it.
 
-## Quality: assessed, NOT wired — vendor fqzcomp, do not reimplement (2026-09-02)
+## Quality: assessed, then vendored and wired (2026-09-02)
+
+**UPDATE, same day: wired.** The assessment below stood; the recommendation
+was carried out. `include/quality_coder.h` wraps vendored fqzcomp/htscodecs
+(BSD 3-clause), gated on `CAPS_QUAL=1`, committed `908b769`. It matches
+standalone fqzcomp's output exactly (after fixing an ASCII-vs-offset alphabet
+issue found while wiring — see the commit) and beats it on one dataset by
+trying all 4 strategies per block. A complete 4-line FASTQ rebuilt from decoder
+output alone has been verified byte-identical (same MD5) to the original file.
+See `CLAUDE.md` section 6.3 for the fixes found alongside this work.
 
 Read stages 67/68/71/73/84/92 and measured stage 92 (current) on the 8
 non-human locked datasets, 500K reads each. Round trip VERIFIED 8/8.

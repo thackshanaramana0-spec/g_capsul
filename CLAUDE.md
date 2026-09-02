@@ -12,13 +12,20 @@ not the outer ARCS binary), the locked set is `NEW_DATASET_LOCKED.md`, not the
 2026-09-02 (Drosophila out, Utricularia gibba/Plantae in) and why. Read it
 before running or citing that comparison.
 
-**Current head-to-head result: `docs/PHASE2B_RESULT.md`** (2026-09-02).
-Sequence + read order + names on 14 datasets: **14/14 wins vs SPRING (-22.00%)
-and 14/14 vs Genozip (-72.83%)**, real archive sizes on disk. Sequence-only:
-14/14 vs Genozip, 12/14 vs SPRING, 7/8 vs PgRC2 (which crashed or refused on 6
-of the 14). That file also records two invocation traps that silently produce
-wrong numbers -- read it before running the benchmark yourself. Quality is the
-one column still unwired.
+**`docs/PHASE2B_RESULT.md` is VOID for 4 of 14 datasets — do not quote it.**
+Its numbers (14/14 vs SPRING -22.00%, 14/14 vs Genozip -72.83%) were measured
+before 4 silent data-loss bugs were found and fixed same-day (`23be207`,
+`121fea9`, `f3ab0c2`): the archives for ERR552797, SRR40271341, SRR40402583 and
+SRR32429602 did not actually decode to their input. All four are fixed and
+verified LOSSLESS now (see section 6.3). A full re-run with Phase 1 / Phase 2b
+/ Phase 3 measured separately, each level round-trip verified before its number
+is recorded, is in progress — check for `docs/PHASE3_RESULT.md` or the latest
+ALLPHASES result before citing any size figure from this repo.
+
+**Quality is now wired** (`include/quality_coder.h`, vendored fqzcomp/htscodecs,
+BSD 3-clause, gated on `CAPS_QUAL=1`) — see commit `908b769` and section 6.3.
+The archive can now reproduce a complete 4-line FASTQ from the archive alone;
+verified byte-identical (same MD5) on at least one dataset, full sweep pending.
 
 Repo: `github.com/thackshanaramana0-spec/c_star_pg_advance`, branch
 `c_star_pg_advance`, 127 commits, working tree clean.
@@ -160,7 +167,14 @@ final.** This project had already recorded the identical failure once (totals
 omitting mm_pos and mm_count); the lesson did not generalise because the check
 that enforces it does not exist.
 
-### 6.2 The archive decoder is incomplete
+### 6.2 The archive decoder is incomplete — SUPERSEDED, see 6.3
+
+**This section is historical.** As of 2026-09-02 (commits `908b769` onward)
+`capsule_decode` reconstructs sequence, names, quality AND line 3 from the
+archive alone, and a complete 4-line FASTQ rebuilt from decoder output only has
+been verified byte-identical (same MD5) to the original file. Read 6.3 for the
+current state; this section is kept for the historical record per this file's
+own rule that retractions are marked in place, not deleted.
 
 `stages/capsule_decode.cpp` reads the
 CAPSULE container and inverts the general-purpose coders. Verified identical
@@ -196,6 +210,54 @@ variants for every stream, so those three paths are untested on real data.
   list, "too large, human excluded"). All three published human benchmarks use
   files we either banned or do not have. chr20 at 30x is feasible; full WGS is
   not at ~700M reads.
+
+### 6.3 Four silent data-loss bugs found and fixed, 2026-09-02
+
+Found by actually decoding archives (something Phase 1/2b had never done — see
+6.1) and comparing to the original FASTQ, dataset by dataset, not by trusting
+size tables. All four are fixed, committed, and each is keyed on a measured
+property of the input, not a per-dataset special case (standing rule 1, below).
+
+1. **`23be207`** — mismatch positions were stored in ONE byte; above Lmax=256
+   the encoder clamped every position past 255 to 255, silently corrupting any
+   read longer than 256 bp. Now a varint. Two locked datasets exceed 256 bp
+   (ERR552797 301bp, SRR40271341 300bp) and both were being reported as
+   compression wins from archives that could not reproduce their input.
+2. **`121fea9`, bug 1** — mismatches were still emitted for "orphaned" unique
+   reads that no original read maps to (a containment artifact, variable-length
+   only). The decoder can't derive such a read's length, computed a wrong `ref`
+   byte, and — because the mismatch coder is adaptive — that desynchronised
+   every mismatch symbol after it. 8 bad bytes of 18,774 became 3,712 wrong
+   reads on a C. jejuni sample.
+3. **`121fea9`, bug 2** — a contained reverse-strand read (a prefix in read
+   space is a SUFFIX in pg space) was indexed with the ORIGINAL's length
+   instead of the UNIQUE's, so it was rebuilt from the wrong end. 95 of 100,000
+   on the same sample, all RC, all shorter than their unique — unambiguous
+   signature. The same bug exists in `scripts/decode_105.py`.
+4. **`f3ab0c2`** — the most general one. `FSE_compress` returns a 1-byte RLE
+   result for a constant input, and that byte is NOT the repeated symbol. The
+   decoder's existing "1 byte -> fill with that byte" handling only happened to
+   be correct for an all-ZEROS stream (orig2uid_flags, the case it was written
+   for); any OTHER constant stream silently decoded as zeros. M. tuberculosis
+   has three all-N reads, `n_cnt` was three bytes of `0x23`, FSE wrote `0x00`,
+   and every N in those reads was lost. Not dataset-specific — reachable by any
+   constant non-zero stream on any input. Fixed by rejecting FSE/HUF's RLE
+   result at encode time so the selector falls through to a coder that
+   round-trips.
+
+**Why none of this was flagged earlier:** Phase 1 and Phase 2b measured archive
+SIZE only; nothing ever decoded an archive. The one lossless check that existed
+(`verify_lossless.sh`) tests the DUMPED intermediate streams, not the archive —
+see 6.1 — so the entropy layer, where bug 4 lived, was never exercised at all.
+It had also only ever run on 7 of the 17 locked datasets, none of which were
+the four that turned out to be broken.
+
+**Cost of correctness:** +33 B on E. coli (+0.0009%), the only fixed-length
+dataset affected (it had a zeros-constant stream that took the FSE-RLE path;
+it decoded correctly before the fix by coincidence, so only its bytes changed,
+not its correctness). Verified byte-identical otherwise. Full audit: 11/11
+datasets checked so far are LOSSLESS post-fix; a complete 14-dataset sweep with
+Phase 1/2b/3 measured separately is in progress.
 
 ---
 
