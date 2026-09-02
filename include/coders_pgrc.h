@@ -65,14 +65,24 @@ static std::vector<uint8_t> fse_encode(const uint8_t* src, size_t n){
     if(!n) return {};
     std::vector<uint8_t> out(FSE_compressBound(n)+16);
     size_t r = FSE_compress(out.data(), out.size(), src, n);
-    if(FSE_isError(r) || r==0 || r>=n) return {};   // 0 = not compressible, 1 = RLE
+    // r==1 is FSE's RLE form, and its single byte is NOT the repeated symbol.
+    // The decoder used to reconstruct it as `rawlen copies of src[0]`, which is
+    // only correct when that symbol happens to be zero -- true for the
+    // all-zeros stream the workaround was written for (orig2uid_flags), and
+    // silently WRONG for every other constant stream. Measured: n_cnt on
+    // M. tuberculosis is three bytes of 0x23, FSE emitted 0x00, and the column
+    // decoded as zeros -- so every N in an all-N read was lost. Rejecting r<=1
+    // here makes the selector fall through to a coder that round-trips, and
+    // costs nothing: a constant stream is already handled by const_or_encode,
+    // and any other method codes 1-3 bytes just as small.
+    if(FSE_isError(r) || r<=1 || r>=n) return {};
     out.resize(r); return out;
 }
 static std::vector<uint8_t> huf_encode(const uint8_t* src, size_t n){
     if(!n) return {};
     std::vector<uint8_t> out(HUF_compressBound(n)+16);
     size_t r = HUF_compress(out.data(), out.size(), src, n);
-    if(HUF_isError(r) || r==0 || r>=n) return {};
+    if(HUF_isError(r) || r<=1 || r>=n) return {};   // same RLE hazard as FSE
     out.resize(r); return out;
 }
 
