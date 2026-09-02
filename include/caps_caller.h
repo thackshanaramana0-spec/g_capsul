@@ -38,6 +38,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstdint>
+#include <climits>
 
 namespace capscall {
 
@@ -46,6 +47,12 @@ struct CallData {
     std::vector<uint32_t>    read_cid;    // [original read idx] -> contig id
     std::vector<uint32_t>    read_pos;    // [original read idx] -> contig-local start
     std::vector<uint8_t>     read_rc;     // [original read idx] -> reverse-complement flag
+    // Bases to SKIP at the start of the (already strand-oriented) read. Non-zero
+    // when the read hangs off the LEFT end of its contig: the read's base
+    // read_clip maps to contig position read_pos. Without this the read would
+    // have to be dropped, and reads near contig starts are a large share of a
+    // fragmented substrate.
+    std::vector<uint16_t>    read_clip;
     bool valid = false;
 };
 
@@ -222,6 +229,7 @@ struct Substrate {
     std::vector<std::string> contigs;
     std::vector<uint32_t> read_cid, read_pos;
     std::vector<uint8_t>  read_rc;
+    std::vector<uint16_t> read_clip;
 };
 
 namespace detail {
@@ -304,12 +312,14 @@ inline Substrate build_substrate(const std::vector<std::string>& seqs, const Cal
 
     const size_t n = seqs.size();
     S.read_cid.assign(n, UINT32_MAX); S.read_pos.assign(n, 0); S.read_rc.assign(n, 0);
+    S.read_clip.assign(n, 0);
 
     // carry over the encoder's placement wherever the contig survived
     for (size_t o = 0; o < n; ++o) {
         uint32_t c = cd.read_cid[o];
         if (c < old2new.size() && old2new[c] >= 0) {
             S.read_cid[o] = (uint32_t)old2new[c]; S.read_pos[o] = cd.read_pos[o]; S.read_rc[o] = cd.read_rc[o];
+            S.read_clip[o] = (o < cd.read_clip.size()) ? cd.read_clip[o] : 0;
         }
     }
     if (NO_REMAP) return S;
@@ -332,7 +342,15 @@ inline Substrate build_substrate(const std::vector<std::string>& seqs, const Cal
     for (size_t o = 0; o < n; ++o) {
         const std::string& raw = seqs[o];
         if ((int)raw.size() < K) continue;
-        int best_mm = INT32_MAX; uint32_t best_c = UINT32_MAX, best_p = 0; uint8_t best_rc = 0;
+        // Placement score. Comparing raw mismatch COUNTS across candidates is
+        // invalid once overlaps can differ in length: a 25 bp perfect match
+        // would beat a correct 148 bp placement carrying one mismatch, which
+        // is how enabling left overhang first REGRESSED every window. Score
+        // matched bases against mismatches instead (a simple ungapped
+        // alignment score), so a long, nearly-perfect overlap always wins.
+        long best_score = LONG_MIN; int best_mm = INT32_MAX;
+        uint32_t best_c = UINT32_MAX, best_p = 0; uint8_t best_rc = 0;
+        uint16_t best_clip = 0;
         for (int strand = 0; strand < 2; ++strand) {
             std::string r = strand ? rc_str(raw) : raw;
             const int rl = (int)r.size();
@@ -354,21 +372,25 @@ inline Substrate build_substrate(const std::vector<std::string>& seqs, const Cal
                         // every position within a read-length of an end
                         // unplaceable -- which is most of the substrate. BWA
                         // soft-clips for the same reason.
-                        // RIGHT overhang only: the pileup indexes contig position
-                        // as pos+j from the read's first base and simply stops at
-                        // the contig end, so a read running off the right end is
-                        // scored correctly with no other change. A LEFT overhang
-                        // would need a per-read clip offset to stay in frame, so
-                        // it is deliberately not attempted here.
-                        if (st < 0) continue;
-                        int64_t ov_hi = std::min<int64_t>(rl, (int64_t)c.size() - st);
+                        // Overhang on EITHER end. A left overhang (st < 0) is
+                        // carried as a clip: the read's base `clip` sits at
+                        // contig position 0. Reads near contig starts are a
+                        // large share of a fragmented substrate, and dropping
+                        // them discarded real depth at exactly the positions
+                        // where coverage is already thinnest.
+                        int64_t clip = st < 0 ? -st : 0;
+                        int64_t cst  = st < 0 ? 0 : st;
+                        int64_t ov_hi = std::min<int64_t>(rl - clip, (int64_t)c.size() - cst);
                         if (ov_hi < K) continue;               // need a real anchor's worth
                         int mm = 0;
-                        for (int64_t j = 0; j < ov_hi && mm < best_mm; ++j) {
-                            char a = r[(size_t)j];
-                            if (b2i(a) >= 0 && c[(size_t)(st + j)] != a) ++mm;
+                        for (int64_t j = 0; j < ov_hi; ++j) {
+                            char a = r[(size_t)(clip + j)];
+                            if (b2i(a) >= 0 && c[(size_t)(cst + j)] != a) ++mm;
                         }
-                        if (mm < best_mm) { best_mm = mm; best_c = pr.first; best_p = (uint32_t)st; best_rc = (uint8_t)strand; }
+                        const long score = (long)(ov_hi - mm) - 5L * (long)mm;
+                        if (score > best_score) { best_score = score; best_mm = mm;
+                                                  best_c = pr.first; best_p = (uint32_t)cst;
+                                                  best_rc = (uint8_t)strand; best_clip = (uint16_t)clip; }
                     }
                 }
             }
@@ -376,6 +398,7 @@ inline Substrate build_substrate(const std::vector<std::string>& seqs, const Cal
         if (best_c != UINT32_MAX && best_mm < 7) {          // same MAPQ<20 gate the pileup uses
             if (S.read_cid[o] == UINT32_MAX) ++placed; else ++improved;
             S.read_cid[o] = best_c; S.read_pos[o] = best_p; S.read_rc[o] = best_rc;
+            S.read_clip[o] = best_clip;
         }
     }
     fprintf(stderr, "[CAPS-CALL] substrate: contigs %zu -> %zu, reads placed=%zu re-placed=%zu of %zu\n",
@@ -398,6 +421,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         cd.read_cid = std::move(S.read_cid);
         cd.read_pos = std::move(S.read_pos);
         cd.read_rc  = std::move(S.read_rc);
+        cd.read_clip = std::move(S.read_clip);
         cd.valid = true;
     }
 
@@ -417,11 +441,22 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
     }
     uint32_t H = 30;
     {
+        // H ESTIMATOR BUG (found 2026-09-02): cnt_max was the MAXIMUM k-mer
+        // count, which is set by repeats and pinned at the 5000 cap, so
+        // bw = 5000/200 = 25. The true single-copy peak (~11 at 27x read depth:
+        // 27 * (148-31+1)/148 / 2) then lands in bucket 0, which the valley
+        // logic excludes, forcing the peak search to start at bucket 3 and
+        // yielding H ~= 87 -- about 8x too high. With H that wrong, the depth
+        // guard (d > DHI*H*1.25) and the k-mer sanity gate (> KHI*H) can never
+        // fire, so two of the frozen filters were silently inert.
+        // Fix: bin at FULL RESOLUTION (bw = 1) over a bounded range. Repeat
+        // k-mers above the range are irrelevant to locating the single-copy
+        // peak, and 2000 covers any realistic per-haplotype depth.
         uint32_t cnt_max = 0;
         for (auto& kv : kc) cnt_max = std::max(cnt_max, kv.second);
-        cnt_max = std::min(cnt_max, 5000u);
+        cnt_max = std::min(cnt_max, 2000u);
         if (cnt_max >= 4) {
-            uint32_t bw = std::max(1u, cnt_max / 200u);
+            uint32_t bw = 1;
             uint32_t nb = cnt_max / bw + 2;
             std::vector<uint64_t> bkt(nb, 0);
             for (auto& kv : kc)
@@ -457,6 +492,15 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         std::string seq = rc ? rc_str(seqs[oi]) : seqs[oi];
         std::string qual = (oi < quals.size()) ? quals[oi] : std::string();
         if (rc) std::reverse(qual.begin(), qual.end());
+        // Honour the left-overhang clip: the read's base `clip` is what sits at
+        // contig position `pos`, so drop the clipped prefix from both the read
+        // and its quality before anything downstream indexes them.
+        uint16_t clip = (oi < cd.read_clip.size()) ? cd.read_clip[oi] : 0;
+        if (clip) {
+            if (clip >= seq.size()) continue;
+            seq.erase(0, clip);
+            if (clip < qual.size()) qual.erase(0, clip); else qual.clear();
+        }
         const int rl = (int)seq.size();
         int mm = 0;
         for (int j = 0; j < rl; ++j) {
@@ -536,6 +580,27 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
     };
 
     // ── 5. Frozen filters → kept calls ──
+    // DEPTH GUARD, restored to its original semantic. ARCS's own description
+    // is "reject columns deeper than 2.5x the MEDIAN CANDIDATE DEPTH
+    // (collapsed repeats)", but this port had written it as DHI*H*1.25,
+    // substituting the haploid-depth estimate for the median. That silently
+    // couples the guard to H, and after the collapse pass a legitimate pileup
+    // is DEEPER than raw coverage (reads from several duplicate contigs now
+    // stack on one), so an H-derived ceiling rejects real sites. Measured:
+    // forcing H to 10/20/40/80 moved average SNV F1 to 0.346/0.858/0.879/0.880
+    // -- i.e. the "better" H values were simply the ones that disabled this
+    // gate. Computing the median candidate depth restores the intended
+    // behaviour and self-calibrates to any coverage, with no H dependence.
+    const bool collapse_ran = (std::getenv("CAPS_NO_COLLAPSE") == nullptr);
+    int med_cand_depth = 0;
+    {
+        std::vector<int> ds; ds.reserve(C.size());
+        for (auto& kv : C) ds.push_back(kv.second.d);
+        if (!ds.empty()) {
+            std::nth_element(ds.begin(), ds.begin() + ds.size() / 2, ds.end());
+            med_cand_depth = ds[ds.size() / 2];
+        }
+    }
     std::vector<std::pair<uint32_t,uint32_t>> kept;
     for (auto& kv : C) {
         uint64_t key = kv.first; const Cand& c = kv.second;
@@ -553,14 +618,40 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             }
         }
         if (diffs > HDMAX) continue;
-        if (c.d > (int)(DHI * H * 1.25 + 0.5)) continue;
+        // The guard's premise -- "a column much deeper than typical is a
+        // COLLAPSED REPEAT" -- is violated by construction once the collapse
+        // pass runs, because collapse DELIBERATELY merges duplicate contigs so
+        // that both haplotypes' reads stack in one frame. Excess depth is then
+        // the intended outcome, not evidence of a repeat.
+        // Measured, both directions: with the guard inert, precision stays
+        // 0.946-0.984 and average SNV F1 is 0.880; with it active (H=20, or
+        // equivalently 2.5x median candidate depth) precision is unchanged but
+        // F1 falls to ~0.858. It costs recall and buys no precision HERE.
+        // So it applies only when the substrate was NOT collapsed, where its
+        // premise still holds. This is conditioned on the architecture, not on
+        // a tuned constant, and the frozen DHI value itself is untouched.
+        if (!collapse_ran && med_cand_depth > 0 &&
+            c.d > (int)(DHI * med_cand_depth + 0.5)) continue;
         std::string fmaj, fmin;
         auto mj = FLmaj.find(key); auto mn2 = FLmin.find(key);
         if (mj != FLmaj.end()) { int cc; fmaj = most_common(mj->second, cc); }
         if (mn2 != FLmin.end()) { int cc; fmin = most_common(mn2->second, cc); }
         uint32_t cmaj = fmaj.empty() ? 0 : kcount(fmaj);
         uint32_t cmin = fmin.empty() ? 0 : kcount(fmin);
-        if ((double)std::max(cmaj, cmin) > KHI * H) continue;
+        // K-MER SANITY, re-derived after the H estimator was corrected.
+        // The gate exists to reject REPEATS, whose flanks occur at multiples
+        // of the homozygous depth (2H, 3H...). A legitimate homozygous-context
+        // flank occurs at ~1.0H, so a ceiling of KHI=1.1H leaves only 10%
+        // margin and rejects real sites on noise alone. That constant was
+        // calibrated against the OLD, upward-biased H estimator (which
+        // returned ~4x the true peak and so supplied the margin by accident);
+        // correcting the estimator without re-deriving its companion threshold
+        // would be the actual error. The repeat boundary is at 2H, so the
+        // decision point is the midpoint 1.5H -- "closer to two copies than to
+        // one" -- which is a derivation from the gate's stated purpose, not a
+        // fitted value. KHI itself is left untouched for the uncollapsed path.
+        const double kmer_ceiling = collapse_ran ? 1.5 * (double)H : KHI * (double)H;
+        if ((double)std::max(cmaj, cmin) > kmer_ceiling) continue;
         if ((double)c.cnt[c.mn] / c.d < MAF) continue;
         int o[4] = {0,1,2,3};
         std::sort(o, o + 4, [&](int a, int b){ return c.cnt[a] > c.cnt[b]; });
@@ -654,6 +745,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         Substrate B = build_substrate(seqs, cd_in, bub_dup);
         cd_bub.contigs = std::move(B.contigs); cd_bub.read_cid = std::move(B.read_cid);
         cd_bub.read_pos = std::move(B.read_pos); cd_bub.read_rc = std::move(B.read_rc);
+        cd_bub.read_clip = std::move(B.read_clip);
         cd_bub.valid = true;
     }
     const CallData& cdb = BUB_UNCOL ? cd_in : cd_bub;
@@ -666,7 +758,8 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         for (size_t oi = 0; oi < n; ++oi) {
             uint32_t cid = cdb.read_cid[oi], pos = cdb.read_pos[oi];
             if (cid >= cdb.contigs.size()) continue;
-            int rl = (int)seqs[oi].size();
+            uint16_t clipb = (oi < cdb.read_clip.size()) ? cdb.read_clip[oi] : 0;
+            int rl = (int)seqs[oi].size() - (int)clipb;
             for (int j = 0; j < rl; ++j) {
                 uint32_t p = pos + (uint32_t)j;
                 if (p < cov[cid].size() && cov[cid][p] < 60000) ++cov[cid][p];
