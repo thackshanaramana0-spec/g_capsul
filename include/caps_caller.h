@@ -940,6 +940,50 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             uint32_t qB = opp ? (uint32_t)(cdb.contigs[ac].size() - ap - BK) : ap;
             Bubble bub = extract_bubble(R, rp, Aalt, qB, MAXINDEL, FLANK);
             if (!bub.ok || bub.apos == 0) continue;
+            // EXTENDED AGREEMENT. Read-support tests cannot separate our false
+            // bubbles from true ones: every candidate is built FROM contigs,
+            // which are built from reads, so all of it is read-supported by
+            // construction (measured -- requiring full junction coherence
+            // rather than any-point support moved indel F1 by +0.001).
+            // What actually separates a real haplotype pair from a paralog
+            // pair that happens to share one 25-mer is HOW FAR the two contigs
+            // agree either side of the event: true haplotypes agree over
+            // hundreds of bases, paralogs diverge quickly. Verify a long span
+            // rather than the 15 bp flanks the bubble extractor checks.
+            {
+                // REFUTED and therefore OFF by default (EXT=0). Swept across
+                // five windows: mean indel F1 0.5930 (off), 0.5864 (60bp/tol3),
+                // 0.5644 (120/4), lower still at 200/6. The idea is sound in
+                // principle but our contigs are too SHORT to supply the context
+                // -- demanding 60+60 bp either side rejects true bubbles that
+                // simply run out of contig. Kept behind CAPS_BUB_EXT for
+                // re-measurement on a longer-contig substrate.
+                int EXT = 0, EXT_TOL = 3;
+                if (const char* e = std::getenv("CAPS_BUB_EXT"))     EXT = atoi(e);
+                if (const char* e = std::getenv("CAPS_BUB_EXT_TOL")) EXT_TOL = atoi(e);
+                if (EXT > 0) {
+                    // left of the anchor: walk back in both contigs together
+                    int mmL = 0, okL = 0;
+                    for (int t = 1; t <= EXT; ++t) {
+                        int64_t ia = (int64_t)rp - t, ib = (int64_t)qB - t;
+                        if (ia < 0 || ib < 0) break;
+                        ++okL;
+                        if (R[(size_t)ia] != Aalt[(size_t)ib]) ++mmL;
+                    }
+                    // right of the event: A continues after the indel, B after its own side
+                    uint32_t ra = bub.apos + (bub.type == 0 ? (uint32_t)bub.len : 0u);
+                    uint32_t rb = (uint32_t)(qB + (bub.apos - rp)) + (bub.type == 1 ? (uint32_t)bub.len : 0u);
+                    int mmR = 0, okR = 0;
+                    for (int t = 0; t < EXT; ++t) {
+                        size_t ia = (size_t)ra + t, ib = (size_t)rb + t;
+                        if (ia >= R.size() || ib >= Aalt.size()) break;
+                        ++okR;
+                        if (R[ia] != Aalt[ib]) ++mmR;
+                    }
+                    if (okL + okR < EXT) continue;              // too little context to judge
+                    if (mmL + mmR > EXT_TOL) continue;          // diverges: paralog, not a haplotype pair
+                }
+            }
             auto& a = im[std::make_tuple(rc_, bub.apos, bub.type, bub.len, bub.ins)];
             a.anchors++; a.altcid = ac; a.altpos = ap;
           }
@@ -1012,13 +1056,25 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                     alt_hap += ins;
                     alt_hap += cc.substr(apos, FL + 1);
                 }
-                uint32_t best_sup = 0;
+                // COHERENCE mode. DiscoSNP++'s precision (0.91 vs our 0.73)
+                // comes from kissreads2, which requires every position of a
+                // bubble path to be read-covered -- not merely one point of it.
+                // Taking the MAX over junction-spanning k-mers only asks that
+                // the alt allele exist SOMEWHERE; taking the MIN asks that the
+                // whole junction be traversed by reads, which is the actual
+                // analogue of read coherence. Gated so both can be measured.
+                const bool COH = std::getenv("CAPS_JUNC_MAX") == nullptr;
+                uint32_t best_sup = COH ? UINT32_MAX : 0;
+                bool any_j = false;
                 for (size_t q = 0; q + 31 <= alt_hap.size(); ++q) {
                     // only k-mers that actually straddle the junction
                     if (q + 31 <= (size_t)FL) continue;
                     if (q >= (size_t)FL + (type == 1 ? ins.size() : 0)) break;
-                    best_sup = std::max(best_sup, kcount(alt_hap.substr(q, 31)));
+                    uint32_t c1 = kcount(alt_hap.substr(q, 31));
+                    any_j = true;
+                    best_sup = COH ? std::min(best_sup, c1) : std::max(best_sup, c1);
                 }
+                if (!any_j) best_sup = 0;
                 int MINSUP = MC;
                 if (const char* e = std::getenv("CAPS_INDEL_SUP")) MINSUP = atoi(e);
                 if ((int)best_sup < MINSUP) continue;  // no read carries this allele
