@@ -25,7 +25,18 @@ multi=sorted(chosen[:n_multi]); bi=sorted(chosen[n_multi:])
 truth=[]
 for p in multi:                                        # all K haplotypes differ (up to 4)
     alleles=random.sample(B,K)                          # K distinct bases
-    if hap0[p] not in alleles: alleles[0]=hap0[p]       # keep hap0 = reference base
+    # BUG FIX 2026-09-02: the old guard only fired when hap0's base was ABSENT
+    # from `alleles`. When it was present but NOT at index 0, haps[0][p] was set
+    # to alleles[0] -- a different base -- so ref.fa (written from haps[0])
+    # diverged from truth's REF (taken from the untouched hap0 list). Measured:
+    # 22 of 80 truth records (28%), ALL of them multi-allelic sites, had a REF
+    # that disagreed with the reference genome they were generated against, so
+    # a caller reporting the CORRECT genome base could never match them.
+    # Guarantee alleles[0] == hap0[p] in both cases.
+    if hap0[p] in alleles:
+        _i = alleles.index(hap0[p]); alleles[0], alleles[_i] = alleles[_i], alleles[0]
+    else:
+        alleles[0] = hap0[p]
     for h in range(K): haps[h][p]=alleles[h]
     alts=sorted(set(alleles)-{hap0[p]})
     if alts: truth.append((p+1,hap0[p],",".join(alts)))
