@@ -1070,7 +1070,42 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             bool opp = (ro != ao);
             std::string Aalt = opp ? rc_str(cdb.contigs[ac]) : cdb.contigs[ac];
             uint32_t qB = opp ? (uint32_t)(cdb.contigs[ac].size() - ap - BK) : ap;
+            // MULTI-START EXTRACTION. `extract_bubble` walks right from the
+            // anchor to the FIRST divergence, so it can only ever see the
+            // nearest difference. Measured on the 9 indels DiscoSNP++ finds and
+            // we miss (docs/INDEL_LOSS_SKELETAL.md §6): usable shared anchors
+            // are ABUNDANT for these loci (49-1133 per contig pair), but the
+            // nearest one lies 213-135,453 bp from the event -- so the walk
+            // always terminates on some other difference first and the event is
+            // never examined. Anchors are neither scarce nor over-repeated;
+            // they are simply in the wrong PLACE.
+            // Fix: after taking the first bubble, continue walking past it and
+            // extract again, so one anchor pair can yield several events along
+            // its length instead of only the closest.
             Bubble bub = extract_bubble(R, rp, Aalt, qB, MAXINDEL, FLANK);
+            {
+                int MAXB = 8;
+                if (const char* e = std::getenv("CAPS_MULTIBUBBLE")) MAXB = atoi(e);
+                uint32_t rp2 = rp, qB2 = qB;
+                Bubble b2 = bub;
+                if (std::getenv("CAPS_MBDBG"))
+                    fprintf(stderr,"[mb] enter ok=%d apos=%u rp=%u Rsz=%zu Asz=%zu\n",(int)b2.ok,b2.apos,rp2,R.size(),Aalt.size());
+                for (int it = 1; it < MAXB && b2.ok; ++it) {
+                    // restart just past the event on both sides
+                    uint32_t adv = (b2.apos > rp2) ? (b2.apos - rp2) : 0u;
+                    uint32_t nrp = b2.apos + (b2.type == 0 ? (uint32_t)b2.len : 0u) + (uint32_t)FLANK;
+                    uint32_t nqB = qB2 + adv + (b2.type == 1 ? (uint32_t)b2.len : 0u) + (uint32_t)FLANK;
+                    if (std::getenv("CAPS_MBDBG"))
+                        fprintf(stderr,"[mb]  it=%d nrp=%u nqB=%u\n",it,nrp,nqB);
+                    if (nrp + (uint32_t)BK >= R.size() || nqB + (uint32_t)BK >= Aalt.size()) break;
+                    if (nrp <= rp2) break;                       // no progress: stop
+                    rp2 = nrp; qB2 = nqB;
+                    b2 = extract_bubble(R, rp2, Aalt, qB2, MAXINDEL, FLANK);
+                    if (!b2.ok || b2.apos == 0) break;
+                    auto& a2 = im[std::make_tuple(rc_, b2.apos, b2.type, b2.len, b2.ins)];
+                    a2.anchors++; a2.altcid = ac; a2.altpos = ap;
+                }
+            }
             if (!bub.ok || bub.apos == 0) continue;
             // ── CLOSING ANCHOR: make the bubble anchored at BOTH ends ───────
             // THE structural difference from DiscoSNP++. Its bubble leaves a
