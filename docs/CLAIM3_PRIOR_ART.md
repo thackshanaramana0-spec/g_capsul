@@ -82,8 +82,14 @@ coordinate prior art.
 
 `query` is **O(archive), not O(range)**: it must rebuild the pseudogenome
 because reads are stored as slices of it, so a 1 kb query costs the same as a
-1 Mb one. Measured on E. coli: query 0.530 s vs full decompression 1.74 s —
-a 3.3× saving in time, but the output is ~1/280th the size (11,103 reads
-instead of a 695 MB FASTQ). The advantage is **selectivity, not asymptotics**,
-and the GPU work above genuinely beats us on that axis (0.4 ms, block-local
-decode). State this rather than implying constant-time region access.
+1 Mb one. **Corrected 2026-09-03** (see `docs/CLAIM3_LOCKED.md` §6.4): an
+earlier measurement here claimed "0.530 s vs full decompression 1.74 s =
+3.3×", but that used `capsule_decode`'s cheap stream-dump path (no `outreads`
+argument) as the "full decompression" baseline, not real reconstruction.
+Re-measured correctly, 5 repeats each: mean query 0.862 s vs mean true
+full-decompress 1.398 s = **1.62×**, not 3.3×. The output-size advantage is
+unaffected and is the stronger number: 11,802 of 1,553,259 reads returned
+(132× fewer reads, 112× fewer bytes). The advantage is **selectivity, far
+more than time**, and the GPU work above genuinely beats us on raw decode
+latency (0.4 ms, block-local). State this rather than implying constant-time
+region access or overstating the time saving.
