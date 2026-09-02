@@ -192,6 +192,46 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
     auto selfflags = has("mem_self") ? dec("mem_self") : std::vector<uint8_t>();
     auto src = refc::decode(S["mem_triples"].data(), S["mem_triples"].size(), dst, MAINEND, selfflags);
 
+    // ── CLAIM 3 / coverage — hoisted ABOVE the pseudogenome rebuild ─────────
+    // Per-base depth needs only the pseudogenome LENGTH (already in the header)
+    // and the per-read placements. It does NOT need pg CONTENT, so decoding the
+    // literal stream and replaying every reference is pure waste for this
+    // operation. Doing it here skips both.
+    if(mode=="coverage"){
+        auto posb2=dec("pos_abs"), lenb2=dec("read_lengths",2);
+        std::vector<uint32_t> P(posb2.size()/4);
+        memcpy(P.data(),posb2.data(),P.size()*4);
+        std::vector<uint16_t> L(lenb2.size()/2);
+        memcpy(L.data(),lenb2.data(),L.size()*2);
+        std::vector<int32_t> diff(PGLEN+2,0);
+        size_t placed=0;
+        for(size_t u=0;u<P.size();++u){
+            uint64_t a=P[u]; uint16_t l=(u<L.size())?L[u]:0;
+            if(!l||a>=PGLEN) continue;
+            uint64_t b=std::min<uint64_t>(PGLEN,a+l);
+            ++diff[a]; --diff[b]; ++placed;
+        }
+        FILE* f=fopen(outdir.c_str(),"wb");
+        if(!f){ fprintf(stderr,"cannot write %s\n",outdir.c_str()); return 1; }
+        fprintf(f,"#region\tstart\tend\tdepth\n");
+        long cur=0, run=0; uint64_t rs=0;
+        for(uint64_t i=0;i<PGLEN;++i){
+            cur+=diff[i];
+            if(i==0){ run=cur; rs=0; continue; }
+            if(cur!=run){
+                fprintf(f,"%s\t%llu\t%llu\t%ld\n", rs<MAINEND?"pg_main":"pg_second",
+                        (unsigned long long)rs,(unsigned long long)i,run);
+                run=cur; rs=i;
+            }
+        }
+        fprintf(f,"%s\t%llu\t%llu\t%ld\n", rs<MAINEND?"pg_main":"pg_second",
+                (unsigned long long)rs,(unsigned long long)PGLEN,run);
+        fclose(f);
+        fprintf(stderr,"[coverage] %zu placements over %llu bp -> %s (no pg rebuild)\n",
+                placed,(unsigned long long)PGLEN,outdir.c_str());
+        return 0;
+    }
+
     // ---- rebuild the pseudogenome -----------------------------------------
     // Extension mismatches: a reference may carry positions where the plain
     // copy is WRONG relative to the true content. Two passes, because the
