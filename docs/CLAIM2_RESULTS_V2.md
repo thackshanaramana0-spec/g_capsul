@@ -221,7 +221,10 @@ the identical pipeline (`rtg vcfeval --squash-ploidy`, POS-1 corrected).
 | 7 | 0.843 | 0.938 | **0.888** | 0.500 | 1.000 | 0.667 |
 | 101 | 0.939 | 0.963 | **0.951** | 0.500 | 1.000 | 0.667 |
 
-**CAPSULE wins all three seeds by +0.22 to +0.28.** The mechanism is identical
+**RETRACTED — see the correction immediately below. The apparent win was a
+scoring artifact, not a real difference.**
+
+~~CAPSULE wins all three seeds by +0.22 to +0.28.~~ The mechanism is identical
 every time: DiscoSNP++ recovers every site (R = 1.000) but exactly HALF its
 calls are false (P = 0.500), because at a multi-allelic site it reports the
 variant without resolving which of the three alleles are present. The
@@ -240,3 +243,55 @@ is now measured, against the same competitor, on three independent seeds.
 | polyploid SNV | **0.886–0.951** | 0.667 | **WIN** (3/3 seeds) |
 
 **Two of three variant classes won.**
+
+
+---
+
+## RETRACTION — the polyploid "win" was a scoring artifact (same day)
+
+The comparison above scored DiscoSNP++'s **raw** output. That is not a fair
+comparison, and a reviewer would catch it immediately.
+
+At a multi-allelic truth site (e.g. `A>C,G`) DiscoSNP++ emits **three separate
+biallelic records**: `A>C`, `A>G` — both correct — and `C>G`, a comparison
+between the two ALTERNATE alleles. That third record is not a
+reference-relative variant at all; its REF base does not even match the
+reference genome. DiscoSNP++ never emits multi-allelic records (0 of 161).
+
+Applying the normalization any benchmark should apply — drop records whose REF
+disagrees with the reference, then merge co-located records into multi-allelic
+form (`bcftools norm -m +any`) — gives:
+
+| | P | R | **F1** |
+|---|---|---|---|
+| DiscoSNP++ raw (what was first reported) | 0.500 | 1.000 | 0.667 |
+| DiscoSNP++ after dropping invalid-REF records | 0.667 | 1.000 | 0.800 |
+| **DiscoSNP++ properly normalized** | **1.000** | **1.000** | **1.000** |
+| CAPSULE (seed 42) | 0.812 | 0.975 | 0.886 |
+| CAPSULE (seed 101) | 0.939 | 0.963 | 0.951 |
+
+Verified on two independent seeds: normalized DiscoSNP++ scores a **perfect
+1.000** on this synthetic triploid data, against CAPSULE's 0.886–0.951.
+
+**So DiscoSNP++ does not fail at polyploid calling — it solves it exactly.**
+It simply reports the alleles as separate biallelic records rather than in
+multi-allelic form. **CAPSULE LOSES this class**, it does not win it.
+
+**Lesson, recorded because it nearly went into a paper:** a competitor's output
+must be normalized to the truth set's representation before scoring. This is the
+second representation trap in this project — the first was DiscoSNP++'s POS
+off-by-one, which made it look catastrophically bad (F1 0.004) instead of
+strong. Both times the raw comparison flattered us.
+
+### Corrected Claim 2 scoreboard
+
+| variant class | CAPSULE | DiscoSNP++ | verdict |
+|---|---|---|---|
+| het-SNV | 0.890 | 0.874 | narrow lead, **NOT statistically significant** (paired t=1.42, p>0.10; sign test 5/8, p=0.73) |
+| het-indel | 0.631 | 0.663 | loss, at the field-wide homopolymer ceiling |
+| polyploid SNV | 0.886–0.951 | **1.000** | **loss** |
+
+**Honest position: CAPSULE does not currently beat DiscoSNP++ on any Claim 2
+variant class at the level of statistical significance.** The het-SNV result is
+a real, reproducible lead in point estimate and generalizes across unseen
+individuals, but with n=8 it is within noise and must be reported as such.
