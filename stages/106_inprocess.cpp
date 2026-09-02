@@ -87,6 +87,7 @@ static inline bool pack(const char* p,uint64_t& out){
 #include "coders_inproc.h"
 #include "seqpar_core.h"
 #include "names_coder.h"
+#include "quality_coder.h"
 
 struct MemStream {
     FILE*  f    = nullptr;
@@ -195,6 +196,12 @@ static void phase_init(){ g_t0 = g_tp = std::chrono::steady_clock::now(); }
 // that names_coder.h exists to provide. Two extra streaming passes over the
 // ID column cost ~1 s per 5 M reads and no RAM.
 static const bool CAPS_NAMES = getenv("CAPS_NAMES") != nullptr;
+// ---- quality column (CAPS_QUAL=1) -------------------------------------------
+// Wraps the vendored fqzcomp_qual codec; see include/quality_coder.h for why
+// it is vendored rather than reimplemented. Same gating discipline as names:
+// with CAPS_QUAL unset the archive is byte-identical to one built without it,
+// so the locked Phase 1 result is untouched.
+static const bool CAPS_QUAL  = getenv("CAPS_QUAL")  != nullptr;
 static std::string g_input_path;
 static void phase(const char* name){
     if(!CAPS_PHASE) return;
@@ -2741,6 +2748,23 @@ int main(int argc,char** argv){
             jobs.push_back({"names_body",  [&]{ return NM.body; }});
             jobs.push_back({"names_dict",  [&]{ return best_encode(NM.dict.data(),  NM.dict.size());  }});
             jobs.push_back({"names_index", [&]{ return best_encode(NM.index.data(), NM.index.size()); }});
+        }
+
+        // Quality (Phase 3). Two streams, same shape as names: the fqzcomp
+        // block payloads concatenated (already entropy coded, stored as-is)
+        // and the block index RAW so it goes through best_encode() like every
+        // other stream and its cost lands in the archive rather than in an
+        // estimate. The index carries per block (byte length, read count,
+        // symbol offset) -- all three are needed to invert the column from the
+        // archive alone.
+        static qlc::Encoded QL;
+        if(CAPS_QUAL && !g_input_path.empty()){
+            QL = qlc::encode_from_fastq(g_input_path.c_str());
+            fprintf(stderr,"  [qual] %llu reads / %llu quality bytes in %llu blocks: body %zu B, index %zu B raw\n",
+                    (unsigned long long)QL.n_reads,(unsigned long long)QL.n_qbytes,
+                    (unsigned long long)QL.n_blocks, QL.body.size(), QL.index.size());
+            jobs.push_back({"qual_body",  [&]{ return QL.body; }});
+            jobs.push_back({"qual_index", [&]{ return best_encode(QL.index.data(), QL.index.size()); }});
         }
 
         jobs.push_back({"literal",     [&]{ return seq_encode_mem(litsym, SEQT, SEQT); }});

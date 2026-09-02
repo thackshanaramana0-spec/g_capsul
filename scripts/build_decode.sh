@@ -1,22 +1,14 @@
 #!/bin/bash
-# Build the in-process encoder (stage 106).
-#
-# Recorded as a script because it had only ever existed as a shell-history
-# one-liner -- which is exactly how -fopenmp went missing. Without that flag the
-# single `#pragma omp parallel for` in the sweep is silently discarded and the
-# largest stage runs serial; linking it correctly was worth -45% wall time.
+# Build the archive decoder. Mirrors build106.sh, including the gcc/g++ split
+# for the vendored htscodecs C sources.
 set -e
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OUT="${1:-/tmp/best106}"
-# The vendored htscodecs sources are C, not C++, and must be compiled by gcc:
-# g++ rejects their implicit void* conversions. Built to objects first, then
-# linked, rather than added to the g++ line.
+OUT="${1:-/tmp/capsule_decode}"
 HTSOBJ="$(mktemp -d)"
 gcc -O3 -I"$HERE/thirdparty/htscodecs" -c "$HERE/thirdparty/htscodecs/fqzcomp_qual.c" -o "$HTSOBJ/fqzcomp_qual.o"
 gcc -O3 -I"$HERE/thirdparty/htscodecs" -c "$HERE/thirdparty/htscodecs/utils.c"        -o "$HTSOBJ/utils.o"
-
-g++ -O3 -march=native -std=c++17 -pthread -fopenmp -o "$OUT" \
-    "$HERE/stages/106_inprocess.cpp" \
+g++ -O3 -march=native -std=c++17 -pthread -o "$OUT" \
+    "$HERE/stages/capsule_decode.cpp" \
     "$HERE/thirdparty/ppmd/Ppmd7.c" "$HERE/thirdparty/ppmd/Ppmd7Enc.c" \
     "$HERE/thirdparty/ppmd/Ppmd7Dec.c" "$HERE/thirdparty/ppmd/Alloc.c" \
     "$HERE/thirdparty/ppmd/CpuArch.c" \
