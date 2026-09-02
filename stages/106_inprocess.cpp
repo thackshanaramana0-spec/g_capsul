@@ -88,6 +88,7 @@ static inline bool pack(const char* p,uint64_t& out){
 #include "seqpar_core.h"
 #include "names_coder.h"
 #include "quality_coder.h"
+#include "caps_caller.h"
 
 struct MemStream {
     FILE*  f    = nullptr;
@@ -202,6 +203,16 @@ static const bool CAPS_NAMES = getenv("CAPS_NAMES") != nullptr;
 // with CAPS_QUAL unset the archive is byte-identical to one built without it,
 // so the locked Phase 1 result is untouched.
 static const bool CAPS_QUAL  = getenv("CAPS_QUAL")  != nullptr;
+// ---- Claim 2: reference-free variant calling (CAPS_CALL=1) ------------------
+// Captures each chain (round-1/round-2 main pg, and the second-region sweep)
+// as its own discrete contig BEFORE the MEM self-match stage runs -- MEM only
+// changes which pg bytes get literal-encoded, never the pg content itself, so
+// contig boundaries captured here stay valid for the caller regardless of
+// what MEM later does. See include/caps_caller.h for why this matters (the
+// indel-bubble mechanism needs genuinely separate haplotype contigs, which a
+// single merged pg coordinate space would erase). Zero cost when unset.
+static const bool CAPS_CALL  = getenv("CAPS_CALL")  != nullptr;
+static std::vector<std::pair<uint64_t,uint64_t>> g_contig_spans;   // [start,end) in pg coords
 static std::string g_input_path;
 static void phase(const char* name){
     if(!CAPS_PHASE) return;
@@ -1185,17 +1196,21 @@ int main(int argc,char** argv){
                 continue;
             }
             leftovers.push_back(i);                       // head: one side only
+            const uint64_t _cspan0=pg.size();
             uint32_t cur=nxt[i];
             ppos[cur]=pg.size(); rappend(pg,cur,0);
             while(nxt[cur]!=NONE && nxt[nxt[cur]]!=NONE){
                 uint32_t o=ovl[cur]; cur=nxt[cur];
                 ppos[cur]=pg.size()-o; rappend(pg,cur,o); }
+            if(CAPS_CALL) g_contig_spans.push_back({_cspan0,pg.size()});
             if(nxt[cur]!=NONE) leftovers.push_back(nxt[cur]);   // tail
             continue;
         }
+        const uint64_t _cspan0=pg.size();
         uint32_t cur=i; ppos[cur]=pg.size(); rappend(pg,cur,0);
         while(nxt[cur]!=NONE){ uint32_t o=ovl[cur]; cur=nxt[cur];
                                ppos[cur]=pg.size()-o; rappend(pg,cur,o); }
+        if(CAPS_CALL) g_contig_spans.push_back({_cspan0,pg.size()});
     }
     if(getenv("DBG_OVL")){
         // Overlap-length histogram over committed links, as a FRACTION of read
@@ -1679,9 +1694,11 @@ int main(int argc,char** argv){
         const size_t before=pg.size();
         for(uint32_t i=0;i<n;++i){
             if(!admit[i]||prv[i]!=NONE) continue;            // not a chain head here
+            const uint64_t _cspan0=pg.size();
             uint32_t cur=i; ppos[cur]=pg.size(); rappend(pg,cur,0);
             while(nxt[cur]!=NONE){ uint32_t o=ovl[cur]; cur=nxt[cur];
                                    ppos[cur]=pg.size()-o; rappend(pg,cur,o); }
+            if(CAPS_CALL) g_contig_spans.push_back({_cspan0,pg.size()});
         }
         second_pg=pg.size()-before;
         fprintf(stderr,"second pg: %zu reads -> %zu B (raw would be %zu B)\n",
@@ -1689,6 +1706,75 @@ int main(int argc,char** argv){
     }
     fprintf(stderr,"leftovers=%zu mapped=%zu appended=%zu\n",
             leftovers.size(),n_matched,appended);
+
+    // ── Claim 2: reference-free variant calling (CAPS_CALL=1) ────────────────
+    // g_contig_spans was captured pre-MEM in the two chain-emission loops above
+    // (main pg + second region); pigeonhole-mapped reads land inside an
+    // already-emitted span by construction, so every unique read's ppos/prc
+    // resolves to exactly one contig via a binary search over span starts.
+    if(CAPS_CALL){
+        phase("pre-call");
+        capscall::CallData cd;
+        cd.contigs.reserve(g_contig_spans.size());
+        for(auto& sp:g_contig_spans) cd.contigs.push_back(pg.substr(sp.first, sp.second-sp.first));
+        std::vector<uint64_t> span_starts(g_contig_spans.size());
+        for(size_t k=0;k<g_contig_spans.size();++k) span_starts[k]=g_contig_spans[k].first;
+        auto find_cid=[&](uint64_t p)->uint32_t{
+            auto it=std::upper_bound(span_starts.begin(),span_starts.end(),p);
+            if(it==span_starts.begin()) return UINT32_MAX;
+            size_t ci=(size_t)(it-span_starts.begin())-1;
+            if(p>=g_contig_spans[ci].second) return UINT32_MAX;   // gap: not covered (shouldn't happen)
+            return (uint32_t)ci;
+        };
+        std::vector<uint32_t> uid_cid(n,UINT32_MAX), uid_pos(n,0);
+        for(uint32_t u=0;u<n;++u){
+            if(ppos[u]==UINT64_MAX) continue;
+            uint32_t ci=find_cid(ppos[u]);
+            if(ci==UINT32_MAX) continue;
+            uid_cid[u]=ci; uid_pos[u]=(uint32_t)(ppos[u]-g_contig_spans[ci].first);
+        }
+        const size_t n_orig=orig2uid.size();
+        cd.read_cid.resize(n_orig); cd.read_pos.resize(n_orig); cd.read_rc.resize(n_orig);
+        for(size_t o=0;o<n_orig;++o){
+            uint32_t u=orig2uid[o];
+            cd.read_cid[o]=(u<n)?uid_cid[u]:UINT32_MAX;
+            cd.read_pos[o]=(u<n)?uid_pos[u]:0;
+            cd.read_rc[o] =(u<n)?prc[u]:0;
+        }
+        cd.valid=true;
+
+        // Second FASTQ pass: original reads in original order, seq+qual only,
+        // applying the SAME >1023bp skip the initial load pass uses so indices
+        // stay aligned with orig2uid (see the load loop's `if(b.size()>1023)
+        // continue;`). Loaded fresh rather than cached from the first pass to
+        // keep the no-CAPS_CALL path's memory footprint completely unaffected.
+        std::vector<std::string> call_seqs, call_quals;
+        call_seqs.reserve(n_orig); call_quals.reserve(n_orig);
+        {
+            FILE* fin=fopen(g_input_path.c_str(),"r");
+            if(!fin){ fprintf(stderr,"caps_caller: cannot reopen %s\n",g_input_path.c_str()); }
+            else{
+                char l1[4096],l2[4096],l3[4096],l4[4096];
+                while(fgets(l1,sizeof l1,fin)){
+                    if(!fgets(l2,sizeof l2,fin)||!fgets(l3,sizeof l3,fin)||!fgets(l4,sizeof l4,fin)) break;
+                    size_t sl=strlen(l2); while(sl&&(l2[sl-1]=='\n'||l2[sl-1]=='\r')) l2[--sl]=0;
+                    size_t ql=strlen(l4); while(ql&&(l4[ql-1]=='\n'||l4[ql-1]=='\r')) l4[--ql]=0;
+                    if(sl>1023) continue;                      // mirror the load-pass skip
+                    call_seqs.emplace_back(l2,sl);
+                    call_quals.emplace_back(l4,ql);
+                }
+                fclose(fin);
+            }
+        }
+        if(call_seqs.size()!=n_orig)
+            fprintf(stderr,"caps_caller: WARNING seq count %zu != orig2uid %zu (index skew, calls may be wrong)\n",
+                    call_seqs.size(),n_orig);
+        std::string call_vcf = getenv("CALL_VCF") ? getenv("CALL_VCF") : "out.vcf";
+        int n_calls = capscall::run_variant_call(call_seqs, call_quals, cd, call_vcf);
+        fprintf(stderr,"[CAPS-CALL] %d records -> %s\n", n_calls, call_vcf.c_str());
+        phase("call");
+    }
+
     // STAGE 100 -- ported from 47_mismatch_coder.cpp (58-line diff from this
     // file's base, 46_position_stream.cpp): dumps the real (ref, obs, pos,
     // ctx3) mismatch symbol streams instead of the estimated bits/mismatch
