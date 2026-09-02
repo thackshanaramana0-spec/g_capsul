@@ -1536,8 +1536,18 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                         }
                     }
                 }
+                // ANCHOR UNIQUENESS. Originally occ==1 across ALL contigs.
+                // Measured: near the 1bp-homopolymer events we miss this is
+                // starving -- 851 read-level gap votes collapse to only 64
+                // distinct events, 47 with a single supporting read, because
+                // too few anchors survive for several reads to vote on the same
+                // locus. In a fragmented substrate the same 25-mer legitimately
+                // appears in several overlapping contigs without being a
+                // repeat. Relax to occ<=PUNIQ (first-seen contig used).
+                int PUNIQ = 1;
+                if (const char* e = std::getenv("CAPS_PCLUSTER_UNIQ")) PUNIQ = atoi(e);
                 for (auto it = pkidx.begin(); it != pkidx.end(); )
-                    if (porient[it->first] != 0) it = pkidx.erase(it); else ++it;
+                    if (porient[it->first] != 0 || (int)pcount[it->first] > PUNIQ) it = pkidx.erase(it); else ++it;
                 for (auto it = pkidx.begin(); it != pkidx.end(); )
                     if (pcount[it->first] != 1) it = pkidx.erase(it); else ++it;
             }
@@ -1569,6 +1579,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                     if (vec.size() < 200) vec.push_back({i, (uint32_t)j});
                 }
             }
+            static long g_pc_identical=0, g_pc_nogap=0, g_pc_found=0, g_pc_seen=0;
             // (contig, pos, signed gap, inserted seq) -> supporting reads
             // DISTINCT reads per event, not votes. A read spanning an indel
             // matches many anchors (every unique 25-mer in its right context),
@@ -1576,12 +1587,13 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             // read count at all -- which is why an absolute threshold kept
             // rising without saturating. Counting distinct read ids makes the
             // support interpretable and lets it be compared against coverage.
-            std::map<std::tuple<uint32_t,uint32_t,int,std::string>, std::unordered_set<uint32_t>> pvotes;
+            std::map<std::tuple<std::string,int,std::string>, std::unordered_set<uint32_t>> pvotes;
+            std::map<std::tuple<std::string,int,std::string>, std::pair<uint32_t,uint32_t>> ploc;
             // Distinct ANCHORS backing each event. Independent right-context
             // anchors are independent evidence, the same standard the bubble
             // channel applies via MIN_ANCH. Without it a single anchor's worth
             // of reads can carry an event on its own.
-            std::map<std::tuple<uint32_t,uint32_t,int,std::string>, std::unordered_set<uint32_t>> panch;
+            std::map<std::tuple<std::string,int,std::string>, std::unordered_set<uint32_t>> panch;
             for (auto& kv : pkidx) {
                 uint32_t ccid = kv.second.first;
                 uint32_t cpos = kv.second.second;
@@ -1590,6 +1602,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 auto rit = rc_reads.find(kv.first);
                 if (rit == rc_reads.end()) continue;
                 for (auto& pr : rit->second) {
+                    if (std::getenv("CAPS_PCDBG")) ++g_pc_seen;
                     const std::string& q = seqs[pr.first];
                     uint32_t rpos = pr.second;
                     // orient the read so its anchor reads forward like the contig
@@ -1601,7 +1614,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                     // walk LEFT from the anchor: contig and read agree, then diverge
                     int d = 0;
                     while (d < LW && cc2[cpos - 1 - d] == qq[qp - 1 - d]) ++d;
-                    if (d >= LW) continue;                     // identical: no event
+                    if (d >= LW) { if(std::getenv("CAPS_PCDBG")) ++g_pc_identical; continue; }   // identical: no event
                     // try a single gap of g bases at the divergence point
                     int best_g = 0; std::string best_ins;
                     for (int g = 1; g <= MAXINDEL && !best_g; ++g) {
@@ -1620,20 +1633,46 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                             if (ok) { best_g = -g; best_ins = qq.substr(qp - d - g, (size_t)g); }
                         }
                     }
-                    if (!best_g) continue;
+                    if (!best_g) { if(std::getenv("CAPS_PCDBG")) ++g_pc_nogap; continue; }
+                    if (std::getenv("CAPS_PCDBG")) ++g_pc_found;
                     uint32_t apos2 = cpos - (uint32_t)d;       // contig position of the event
                     if (apos2 == 0) continue;
-                    auto pkey = std::make_tuple(ccid, apos2, best_g, best_ins);
+                    // VOTE KEY. Originally (contig, pos, gap, ins) -- but the
+                    // same genomic locus is covered by 2-7 different contigs
+                    // (measured), and each read anchors to whichever contig its
+                    // 25-mer happens to be unique in, so votes for ONE event
+                    // scatter across several contig ids and never accumulate.
+                    // Measured symptom: 851 read-level gap votes collapsing to
+                    // 64 distinct events, 47 of them with a single supporting
+                    // read. Key instead on the local CONTIG SEQUENCE around the
+                    // event, which is identical across contigs covering the
+                    // same locus and needs no reference genome.
+                    std::string ctx;
+                    {
+                        size_t lo = (apos2 >= 12u) ? (size_t)apos2 - 12u : 0u;
+                        size_t hi = std::min(cc2.size(), (size_t)apos2 + 12u);
+                        if (hi > lo) ctx = cc2.substr(lo, hi - lo);
+                    }
+                    auto pkey = std::make_tuple(ctx, best_g, best_ins);
                     pvotes[pkey].insert(pr.first);
                     panch[pkey].insert(cpos);
+                    ploc[pkey] = std::make_pair(ccid, apos2);
                 }
             }
+            if (std::getenv("CAPS_PCDBG")) {
+                std::map<int,int> hist;
+                for (auto& kv : pvotes) hist[(int)kv.second.size()]++;
+                fprintf(stderr,"[pc] distinct events=%zu  support histogram:", pvotes.size());
+                for (auto& h : hist) if (h.first<=8) fprintf(stderr," %dread(s)x%d", h.first, h.second);
+                fprintf(stderr,"\n");
+            }
+            long pc_drop_min=0, pc_drop_aflo=0, pc_drop_afhi=0, pc_emit=0;
             int PMIN = MC;
             if (const char* e = std::getenv("CAPS_PCLUSTER_MIN")) PMIN = atoi(e);
             size_t n_pc = 0;
             for (auto& kv : pvotes) {
                 const int nsup = (int)kv.second.size();
-                if (nsup < PMIN) continue;
+                if (nsup < PMIN) { ++pc_drop_min; continue; }
                 // MEASURED NEUTRAL-TO-NEGATIVE, so no constraint by default.
                 // Five windows: >=1 gives mean indel F1 0.6478 (identical to
                 // no constraint, a useful sanity check that the code is inert
@@ -1644,8 +1683,9 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 int PANCH = 1;
                 if (const char* e = std::getenv("CAPS_PCLUSTER_ANCH")) PANCH = atoi(e);
                 if ((int)panch[kv.first].size() < PANCH) continue;
-                uint32_t ccid, apos2; int g; std::string insseq;
-                std::tie(ccid, apos2, g, insseq) = kv.first;
+                std::string ctx_; int g; std::string insseq;
+                std::tie(ctx_, g, insseq) = kv.first;
+                uint32_t ccid = ploc[kv.first].first, apos2 = ploc[kv.first].second;
                 const std::string& cc2 = pc_cd.contigs[ccid];
                 if (apos2 == 0 || apos2 > cc2.size()) continue;
                 // ALLELE FRACTION against the coverage already computed for
@@ -1666,7 +1706,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                         // constant.
                         double afmin = MAF;
                         if (const char* e = std::getenv("CAPS_PCLUSTER_AF")) afmin = atof(e);
-                        if (af < afmin) continue;
+                        if (af < afmin) { ++pc_drop_aflo; continue; }
                         // UPPER bound too. A HETEROZYGOUS indel is carried by
                         // roughly half the reads; if essentially EVERY read at
                         // the locus shows the gap, the event is homozygous with
@@ -1676,7 +1716,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                         // positive. The SNV path has always applied a two-sided
                         // band for exactly this reason; the indel path had only
                         // a floor. Upper bound is the symmetric 1-MAF.
-                        if (!std::getenv("CAPS_NO_PCLUSTER_HI") && af > 1.0 - MAF) continue;
+                        if (!std::getenv("CAPS_NO_PCLUSTER_HI") && af > 1.0 - MAF) { ++pc_drop_afhi; continue; }
                     }
                 }
                 char anch = cc2[apos2 - 1];
@@ -1692,8 +1732,14 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 char inf3[96];
                 snprintf(inf3, sizeof inf3, "SVTYPE=INDEL;DP=%d;SOURCE=PCLUSTER", nsup);
                 orecs.push_back({ccid, apos2, ref2, alt2, inf3, BUB_SRC});
-                ++n_pc; ++n_indel;
+                ++n_pc; ++n_indel; ++pc_emit;
             }
+            if (std::getenv("CAPS_PCDBG"))
+                fprintf(stderr,"[pc] drop_minsupport=%ld drop_AF_low=%ld drop_AF_high=%ld EMIT=%ld\n",
+                        pc_drop_min,pc_drop_aflo,pc_drop_afhi,pc_emit);
+            if (std::getenv("CAPS_PCDBG"))
+                fprintf(stderr,"[pc] read-anchor visits=%ld  identical=%ld  no-gap=%ld  GAP-FOUND=%ld\n",
+                        g_pc_seen,g_pc_identical,g_pc_nogap,g_pc_found);
             if (n_pc) fprintf(stderr, "[CAPS-CALL] pcluster indels=%zu\n", n_pc);
         }
 
