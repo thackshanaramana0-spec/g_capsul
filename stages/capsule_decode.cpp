@@ -291,7 +291,18 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
     uint16_t Lmax=0; for(auto L:lengths) if(L>Lmax) Lmax=L;
     const bool MMDELTA = (Lmax<=256);
     std::vector<uint16_t> rlenU(NU,0);
-    for(size_t o=0;o<o2u.size() && o<lengths.size();++o) if(o2u[o]<NU && !rlenU[o2u[o]]) rlenU[o2u[o]]=lengths[o];
+    // The encoder indexes mismatches by the UNIQUE read's own length. Under
+    // containment a shorter read is absorbed into a longer one, so several
+    // ORIGINAL reads of DIFFERENT lengths can share a unique id -- and taking
+    // whichever happened to come first gave the wrong length, which shifts the
+    // reverse-complement index (q+RL-1-j) and so hands the adaptive mismatch
+    // decoder the wrong `ref` byte. From there the model diverges and the
+    // stream decodes to wrong symbols: 3,712 of 100,000 reads on C. jejuni,
+    // most of them wrong in exactly one base. Containment only arises with
+    // variable-length input, which is why fixed-length datasets never showed
+    // it. The unique read is the LONGEST of its group, so take the max.
+    for(size_t o=0;o<o2u.size() && o<lengths.size();++o)
+        if(o2u[o]<NU && lengths[o]>rlenU[o2u[o]]) rlenU[o2u[o]]=lengths[o];
     std::vector<uint8_t> refs; refs.reserve(mmpos.size());
     { size_t off=0;
       auto comp=[](uint8_t b)->uint8_t{ return b=='A'?'T':b=='C'?'G':b=='G'?'C':'A'; };
@@ -349,8 +360,19 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
                     const uint64_t pp=positions[u];
                     const bool rc=strand[u];
                     uint8_t* dst=&flat[rowoff[o]];
+                    // pg[pp .. pp+RLu) holds the reverse complement of the
+                    // UNIQUE read, so a contained original -- a PREFIX in read
+                    // space -- is a SUFFIX in pg space. Indexing with the
+                    // original's own L instead of the unique's RLu therefore
+                    // read the wrong end for every contained reverse-strand
+                    // read: 95 of 100,000 on C. jejuni, all of them RC and all
+                    // shorter than their unique. Containment only occurs with
+                    // variable-length input, which is why fixed-length data
+                    // never showed it. Forward reads are prefixes in both
+                    // spaces and are unaffected.
+                    const uint32_t RLu = (u<rlenU.size() && rlenU[u]>L) ? rlenU[u] : L;
                     if(!rc){ for(uint32_t k=0;k<L;++k) dst[k]=(pp+k<PGLEN)?pg[pp+k]:'A'; }
-                    else   { for(uint32_t k=0;k<L;++k) dst[k]=(pp+L-1-k<PGLEN)?comp(pg[pp+L-1-k]):'A'; }
+                    else   { for(uint32_t k=0;k<L;++k) dst[k]=(pp+RLu-1-k<PGLEN)?comp(pg[pp+RLu-1-k]):'A'; }
                     const uint16_t cnt=(u<mmcount.size())?mmcount[u]:0;
                     if(!cnt) continue;
                     size_t off=mmoff[u]; uint32_t prevj=0;
