@@ -51,7 +51,8 @@ genome anywhere in the pipeline**:
 
 * `query <START-END>` — reads overlapping a **coordinate range**, reference-free.
 * `export` — the assembly itself, already built, no assembler run
-  (E. coli: 0.465 s vs MEGAHIT 135.5 s = **291×**).
+  (E. coli: 0.465 s vs MEGAHIT 135.5 s = **291×**; vs the spec-exact
+  baseline SPAdes 258.15 s = **555×**, peak RAM 5.20 GB for SPAdes).
 * `coverage` — per-base depth with **no alignment and no index**
   (25–33× vs bwa+samtools+mosdepth).
 
