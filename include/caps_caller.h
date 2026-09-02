@@ -1277,6 +1277,29 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 // a sequence whose k-mers all appear somewhere. A chimeric
                 // bubble fails this even when every one of its k-mers exists.
                 (void)FL_used;
+                // K-MER FREQUENCY BAND (Kmer2SNP's principle, applied to
+                // indels). A heterozygous allele is carried by ONE haplotype,
+                // so its k-mers occur at roughly HALF the homozygous peak H.
+                // Counts far ABOVE H indicate a repeat -- the alt "allele" is
+                // sequence that occurs many times in the genome, which is
+                // exactly the paralog class our false bubbles come from.
+                // This is neither a context test, a read-support test, nor a
+                // matching constraint -- all of which failed -- but a frequency
+                // test, and it reuses the frozen KHI against the corrected H.
+                // REFUTED, so opt-in only. Swept across five windows at
+                // 1.0xH: 0.624/0.692/0.613/0.566 against a baseline of
+                // 0.655/0.699/0.635/0.569 -- consistently WORSE, i.e. the cap
+                // removes true indels rather than repeat-derived ones.
+                // Diagnosis: our alt-junction k-mer counts already sit near the
+                // heterozygous level because the candidate came from a contig
+                // built out of those very reads, so a frequency band has no
+                // repeat-specific signal left to cut on. Same underlying reason
+                // the read-support tests were vacuous here.
+                if (std::getenv("CAPS_KFREQ")) {
+                    double kcap = 1.5 * (double)H;
+                    if (const char* e = std::getenv("CAPS_KFREQ_CAP")) kcap = atof(e) * (double)H;
+                    if ((double)best_sup > kcap) continue;
+                }
                 if (!read_support(alt_hap, MC, 2)) continue;
                 // Allele fraction ON THE JUNCTION, using the already-frozen
                 // MAF. A true heterozygous indel splits reads ~50/50 between
