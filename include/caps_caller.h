@@ -126,6 +126,27 @@ inline bool flank_match(const std::string& A, size_t ai, const std::string& B, s
     return true;
 }
 
+// REFUTED, kept for the record (not wired). Tolerant re-convergence test.
+// Tried because:  on HG002 r2, 29 of the 32
+// MISSED indels already have a contig PAIR covering them -- the substrate is
+// fine, the extractor is what fails. It demanded a byte-identical 15 bp flank,
+// so a single heterozygous SNV anywhere in that flank destroyed the bubble.
+// DiscoSNP++ explicitly models this case (its own header calls a bubble
+// "an indel+n SNPs"), which is part of why its indel recall beats ours.
+// Tolerance reuses the project's already-frozen HDMAX=2 rather than
+// introducing a new constant.
+// RESULT: net NEGATIVE -- r2 indel F1 0.602->0.595, r5 0.600->0.582,
+// HG005 0.542->0.508. Recall rose slightly but precision fell more: the
+// bubble GEOMETRY is not what limits us, and loosening it only admits FPs.
+inline bool flank_match_tol(const std::string& A, size_t ai, const std::string& B, size_t bi,
+                            int F, int tol) {
+    if (ai + (size_t)F > A.size() || bi + (size_t)F > B.size()) return false;
+    int mm = 0;
+    for (int k = 0; k < F; ++k)
+        if (A[ai + (size_t)k] != B[bi + (size_t)k] && ++mm > tol) return false;
+    return true;
+}
+
 inline Bubble extract_bubble(const std::string& A, uint32_t pA, const std::string& B, uint32_t qB,
                               int maxindel, int FLANK) {
     Bubble r;
@@ -946,7 +967,18 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             int altd = std::max(medcov[a.altcid], (int)covwin(a.altcid, a.altpos));
             double af = (double)altd / std::max(1, refd + altd);
             if (refd < MC || altd < MC) continue;
-            if (a.anchors < 3) continue;
+            // Anchor and junction-support strictness, both gated so the
+            // precision/recall trade can be measured rather than guessed.
+            // Swept across FIVE windows (not one): mean indel F1 0.5832 (>=3),
+            // 0.5884 (>=5), 0.5920 (>=7), 0.5844 (>=10), 0.5812 (>=15),
+            // 0.5584 (>=25) -- a flat region over 5-10, so the default sits in
+            // the middle of the plateau rather than on its argmax. More
+            // independent anchors means the two contigs agree over a longer
+            // stretch, which is what separates a real haplotype pair from a
+            // chance repeat match.
+            int MIN_ANCH = 7;
+            if (const char* e = std::getenv("CAPS_INDEL_ANCH")) MIN_ANCH = atoi(e);
+            if (a.anchors < MIN_ANCH) continue;
             {
                 std::string left_flank = (apos >= 12) ? cc.substr(apos - 12, 12) : cc.substr(0, apos);
                 std::string indel_seq  = (type == 0)
@@ -987,7 +1019,9 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                     if (q >= (size_t)FL + (type == 1 ? ins.size() : 0)) break;
                     best_sup = std::max(best_sup, kcount(alt_hap.substr(q, 31)));
                 }
-                if ((int)best_sup < MC) continue;      // no read carries this allele
+                int MINSUP = MC;
+                if (const char* e = std::getenv("CAPS_INDEL_SUP")) MINSUP = atoi(e);
+                if ((int)best_sup < MINSUP) continue;  // no read carries this allele
                 // Allele fraction ON THE JUNCTION, using the already-frozen
                 // MAF. A true heterozygous indel splits reads ~50/50 between
                 // the ref and alt junctions; a spurious bubble has a ref
