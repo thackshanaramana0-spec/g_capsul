@@ -1263,7 +1263,24 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 // -- demanding 60+60 bp either side rejects true bubbles that
                 // simply run out of contig. Kept behind CAPS_BUB_EXT for
                 // re-measurement on a longer-contig substrate.
+                // TARGETED PARALOG FILTER. Extended agreement was measured
+                // NET NEGATIVE when applied to ALL events (five-window mean
+                // 0.5930 -> 0.5864 at 60bp) -- because most events are 1-2bp
+                // and our contigs are too short to supply the context, so it
+                // rejected true short indels.
+                // But the FP burden is concentrated in LONG events: pooled over
+                // all 8 evaluations, len>=3 has TP=32 FP=26 (precision 0.55)
+                // against len==1's TP=97 FP=20 (0.83). A long indel also
+                // implies long contigs, so the context IS available exactly
+                // where it is needed. Apply the check only there.
                 int EXT = 0, EXT_TOL = 3;
+                // MEASURED NEUTRAL at 40bp on r2/r4, so OFF by default and
+                // opt-in via CAPS_LONG_EXT. Paralogs agree over 40bp easily, so
+                // the span needed to discriminate exceeds what a ~335bp contig
+                // can supply even for long events.
+                if (bub.len >= 3) {
+                    if (const char* e = std::getenv("CAPS_LONG_EXT")) EXT = atoi(e);
+                }
                 if (const char* e = std::getenv("CAPS_BUB_EXT"))     EXT = atoi(e);
                 if (const char* e = std::getenv("CAPS_BUB_EXT_TOL")) EXT_TOL = atoi(e);
                 if (EXT > 0) {
@@ -1418,7 +1435,27 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             // chance repeat match.
             int MIN_ANCH = 7;
             if (const char* e = std::getenv("CAPS_INDEL_ANCH")) MIN_ANCH = atoi(e);
-            if (a.anchors < MIN_ANCH) {
+            // LENGTH-SCALED EVIDENCE. Pooled over all 8 evaluations (TP=253,
+            // FP=90) the false-positive rate rises sharply with event length:
+            //   len==1  TP 54.5%  FP 30.0%
+            //   len>=3  TP 27.7%  FP 53.3%
+            // A longer divergence has more ways to arise by chance -- from a
+            // paralog, a mis-paired contig or an assembly artefact -- so it
+            // should have to clear a proportionally higher bar. (Homopolymer
+            // context, by contrast, does NOT separate: 37.9% vs 34.4%.)
+            // Blanket rejection of long events was rejected by arithmetic: it
+            // would take precision 0.738 -> 0.813 but recall 0.562 -> 0.407,
+            // i.e. F1 0.637 -> 0.542. Requiring MORE EVIDENCE keeps them
+            // available while removing the unsupported ones.
+            // MEASURED MONOTONICALLY NEGATIVE (four-window mean indel F1
+            // 0.6315 -> 0.6275 at x2, 0.6225 at x5, 0.6195 at x10) and so left
+            // at 0. Anchor count cannot discriminate here: long bubble events
+            // already carry 37-752 anchors (median 81) against MIN_ANCH=7, and
+            // true and false ones are both high.
+            int LONGMULT = 0;
+            if (const char* e = std::getenv("CAPS_LONG_ANCH")) LONGMULT = atoi(e);
+            const int need = MIN_ANCH + LONGMULT * std::max(0, len - 2);
+            if (a.anchors < need) {
                 if (std::getenv("CAPS_TRACE"))
                     fprintf(stderr, "[trace] DROP-ANCH cid=%u apos=%u anchors=%d\n", cid, apos, a.anchors);
                 continue; }
