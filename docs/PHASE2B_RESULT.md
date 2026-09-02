@@ -1,8 +1,20 @@
 # Phase 2b — sequence + read order + names, measured on 14 datasets
 
-**2026-09-02.** The first head-to-head of the CAPSULE archive against real
-SPRING and Genozip on the locked dataset set. Everything below is a real file
-on disk, not a stream total or a log sum.
+> **VOID for 4 of 14 datasets, superseded 2026-09-02.** The numbers below were
+> measured before 4 silent data-loss bugs were found and fixed (commits
+> `23be207`, `121fea9`, `f3ab0c2`) — the archives for **ERR552797,
+> SRR40271341, SRR40402583, SRR32429602** did not actually decode to their
+> input, so their CAPSULE sizes here are not valid comparisons. The other 10
+> datasets were unaffected (all fixed-length, and the bugs are only reachable
+> with variable-length or all-N reads). A full re-run with the fixed binaries,
+> covering Phase 1 / Phase 2b / Phase 3 separately plus combined, each level
+> round-trip verified before its number is recorded, is in progress — see
+> `docs/PHASE3_RESULT.md` (or the latest ALLPHASES result) once it lands, and
+> treat this file as historical until then.
+
+**2026-09-02, original run.** The first head-to-head of the CAPSULE archive
+against real SPRING and Genozip on the locked dataset set. Everything below is
+a real file on disk, not a stream total or a log sum.
 
 Dataset set: `NEW_DATASET_LOCKED.md` (15 accessions). 14 ran — Utricularia
 gibba (SRR10676752, the Plantae entry) is downloaded but its `fasterq-dump`
