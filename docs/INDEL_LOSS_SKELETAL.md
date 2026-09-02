@@ -141,3 +141,60 @@ low-complexity sequence — a change to the anchor index, not to `extract_bubble
 Both implementations are kept behind `CAPS_NO_HPBUBBLE` / `CAPS_NO_HPCLOSE`
 (default ON, measurably harmless) because they are correct in themselves and
 will matter once anchoring reaches these loci.
+
+---
+
+## 7. The real cause, traced to the end: the ASSEMBLER destroys the evidence
+
+Section 6 concluded the loss was anchor pairing. That was also wrong. Tracing
+one more stage back gives the actual chain, and it is a hard ceiling.
+
+**Step 1 — the reads carry both alleles.** Counting homopolymer run lengths in
+reads spanning each missed event (aligned BAM, HG002 r2):
+
+| event | spanning reads | run lengths observed |
+|---|---|---|
+| 3364448 | 12 | **15 × 7 reads, 16 × 5 reads** |
+| 3163221 | 11 | **14 × 7, 13 × 4** |
+| 3349776 | 22 | **14 × 10, 15 × 10** |
+| 3042034 | 23 | **9 × 14, 10 × 8** |
+
+Clean, balanced, heterozygous evidence. The data is not the limit.
+
+**Step 2 — the contigs do not.** At 3364448 three separate contigs cover the
+locus and all three read `CCACTGGATTCTTTTTTTTTTTTTT` — **one identical run
+length**. Where covering contigs do differ (3114402, 3163221) they carry
+unrelated sequence from different loci, not two haplotypes of the same locus.
+
+**Step 3 — why.** Exact suffix-prefix overlap chaining merges reads that differ
+by one repeat unit, because a 15-mer and a 16-mer run still overlap almost
+perfectly over a 148 bp read. The two haplotypes are collapsed into a single
+contig **during assembly**, before any caller stage runs.
+
+**Consequence.** Anchor pairing, bubble extraction, and every filter operate on
+contigs that no longer contain the variant. That is why:
+
+* multi-start extraction ran 16,083 extra iterations and produced **zero** new
+  aggregated bubbles (13,373 either way) — every re-walk re-finds known events;
+* homopolymer-aware extraction and closing anchors fire thousands of times and
+  change nothing;
+* usable anchors are abundant (49–1,133 per pair) yet none is near the event.
+
+**This is a substrate ceiling, not a caller defect.** Recovering these events
+requires the assembler to keep haplotypes with different homopolymer run
+lengths apart — i.e. an overlap criterion that treats a run-length difference
+as a mismatch rather than absorbing it. That is a change to CAPSULE's chaining,
+the same component that produces the Claim 1 compression win, and it would
+have to be shown not to cost archive size.
+
+DiscoSNP++ does not face this because it never assembles: its de Bruijn graph
+keeps a 15-mer and a 16-mer run as distinct paths by construction, so the
+bubble is present in its graph from the start.
+
+**Verdict on flipping the indel class:** not reachable from the caller. Four
+successive hypotheses (filters, extraction, closing anchors, anchor pairing)
+were each implemented and each measured to be irrelevant, because the
+information is destroyed upstream of all of them. The honest claim remains
+complementarity: on this window CAPSULE finds 46% more true indels overall
+(38 vs 26) with fewer false positives, while DiscoSNP++ owns 1 bp homopolymer
+events that our assembly cannot represent.
