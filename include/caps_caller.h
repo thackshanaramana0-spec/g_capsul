@@ -1743,6 +1743,140 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             if (n_pc) fprintf(stderr, "[CAPS-CALL] pcluster indels=%zu\n", n_pc);
         }
 
+        // ── 6b4. LINK-SCAN indel channel (option 2) ──────────────────────
+        // The assembler has ALREADY placed every read (cd_in.read_cid/read_pos
+        // from ppos[]), so this channel needs NO anchor index at all -- which
+        // is the exact bottleneck that starved the positional-clustering
+        // channel (851 read-level gap votes collapsing to 64 events, 47 with a
+        // single supporting read, because too few unique anchors survive near
+        // low-complexity loci).
+        //
+        // What it captures: a read carrying a 1bp homopolymer indel is still
+        // placed on the contig of the OTHER haplotype, because exact-overlap
+        // chaining absorbs a one-repeat-unit difference. Ungapped, such a read
+        // matches up to the run and then mismatches everything after it. Re-
+        // checking each placed read WITH a gap recovers exactly the event the
+        // assembler absorbed, at the point where it was absorbed.
+        // Uses the ORIGINAL assembler placement (cd_in), not the collapsed or
+        // re-mapped substrates, since that is where the absorption happened.
+        // MEASURED: this channel finds almost nothing and is OFF by default.
+        // Of 75,115 placed reads, 63,081 (84%) match their contig PERFECTLY and
+        // only 9 show a gap-explainable divergence -- because the assembler
+        // does NOT absorb alt-haplotype reads into the wrong contig; it places
+        // each read on a contig that already matches it. Kept behind
+        // CAPS_LINKSCAN=1 because the measurement is the useful part.
+        if (std::getenv("CAPS_LINKSCAN")) {
+            const int TAIL_MIN = 20;          // bases of tail that must re-match
+            long ls_nocid=0, ls_outside=0, ls_perfect=0, ls_shortleft=0, ls_shorttail=0, ls_nogap=0, ls_hit=0;
+            std::map<std::tuple<std::string,int,std::string>, std::unordered_set<uint32_t>> lvotes;
+            std::map<std::tuple<std::string,int,std::string>, std::pair<uint32_t,uint32_t>> lloc;
+            for (size_t oi = 0; oi < n; ++oi) {
+                uint32_t cid = cd_in.read_cid[oi];
+                if (cid >= cd_in.contigs.size()) { ++ls_nocid; continue; }
+                uint32_t pos = cd_in.read_pos[oi];
+                const std::string& C = cd_in.contigs[cid];
+                std::string q = cd_in.read_rc[oi] ? rc_str(seqs[oi]) : seqs[oi];
+                uint16_t clp = (oi < cd_in.read_clip.size()) ? cd_in.read_clip[oi] : 0;
+                if (clp) { if (clp >= q.size()) continue; q.erase(0, clp); }
+                const int rl = (int)q.size();
+                if (pos + (uint32_t)rl > C.size()) { ++ls_outside; continue; }
+                // first ungapped divergence
+                int j = 0;
+                while (j < rl && C[pos + (size_t)j] == q[(size_t)j]) ++j;
+                if (j >= rl) { ++ls_perfect; continue; }
+                if (j < 12) { ++ls_shortleft; continue; }
+                if (rl - j < TAIL_MIN + 2) { ++ls_shorttail; continue; }
+                int best_g = 0; std::string best_ins;
+                for (int g = 1; g <= MAXINDEL && !best_g; ++g) {
+                    // DELETION in the read: contig carries g extra bases
+                    if (pos + (size_t)(j + g + TAIL_MIN) <= C.size()) {
+                        int mm = 0, cnt = 0;
+                        for (int t = 0; t < TAIL_MIN; ++t) {
+                            if (j + t >= rl) break;
+                            ++cnt;
+                            if (C[pos + (size_t)(j + g + t)] != q[(size_t)(j + t)]) ++mm;
+                        }
+                        if (cnt >= TAIL_MIN && mm <= 1) best_g = g;
+                    }
+                    // INSERTION in the read: read carries g extra bases
+                    if (!best_g && j + g + TAIL_MIN <= rl &&
+                        pos + (size_t)(j + TAIL_MIN) <= C.size()) {
+                        int mm = 0, cnt = 0;
+                        for (int t = 0; t < TAIL_MIN; ++t) {
+                            ++cnt;
+                            if (C[pos + (size_t)(j + t)] != q[(size_t)(j + g + t)]) ++mm;
+                        }
+                        if (cnt >= TAIL_MIN && mm <= 1) {
+                            best_g = -g; best_ins = q.substr((size_t)j, (size_t)g);
+                        }
+                    }
+                }
+                if (!best_g) { ++ls_nogap; continue; }
+                ++ls_hit;
+                uint32_t apos3 = pos + (uint32_t)j;
+                if (apos3 == 0 || apos3 >= C.size()) continue;
+                std::string ctx;
+                {
+                    size_t lo = (apos3 >= 12u) ? (size_t)apos3 - 12u : 0u;
+                    size_t hi = std::min(C.size(), (size_t)apos3 + 12u);
+                    if (hi > lo) ctx = C.substr(lo, hi - lo);
+                }
+                auto lk = std::make_tuple(ctx, best_g, best_ins);
+                lvotes[lk].insert((uint32_t)oi);
+                lloc[lk] = std::make_pair(cid, apos3);
+            }
+            // per-contig coverage of the ORIGINAL substrate, for allele fraction
+            std::vector<std::vector<uint16_t>> lcov(cd_in.contigs.size());
+            for (size_t ci = 0; ci < cd_in.contigs.size(); ++ci)
+                lcov[ci].assign(cd_in.contigs[ci].size(), 0);
+            for (size_t oi = 0; oi < n; ++oi) {
+                uint32_t cid = cd_in.read_cid[oi];
+                if (cid >= cd_in.contigs.size()) continue;
+                uint32_t pos = cd_in.read_pos[oi];
+                uint16_t clp = (oi < cd_in.read_clip.size()) ? cd_in.read_clip[oi] : 0;
+                int rl = (int)seqs[oi].size() - (int)clp;
+                for (int t = 0; t < rl; ++t) {
+                    uint32_t pp = pos + (uint32_t)t;
+                    if (pp < lcov[cid].size() && lcov[cid][pp] < 60000) ++lcov[cid][pp];
+                }
+            }
+            int LMIN = MC;
+            if (const char* e = std::getenv("CAPS_LINKSCAN_MIN")) LMIN = atoi(e);
+            size_t n_ls = 0;
+            for (auto& kv : lvotes) {
+                const int nsup = (int)kv.second.size();
+                if (nsup < LMIN) continue;
+                std::string ctx_; int g; std::string insseq;
+                std::tie(ctx_, g, insseq) = kv.first;
+                uint32_t cid = lloc[kv.first].first, apos3 = lloc[kv.first].second;
+                const std::string& C = cd_in.contigs[cid];
+                if (apos3 == 0 || apos3 > C.size()) continue;
+                int dp = (cid < lcov.size() && apos3 < lcov[cid].size()) ? (int)lcov[cid][apos3] : 0;
+                if (dp > 0) {
+                    double af = (double)nsup / (double)dp;
+                    if (af < MAF || af > 1.0 - MAF) continue;     // heterozygous band
+                }
+                char anch = C[apos3 - 1];
+                std::string ref3, alt3;
+                if (g > 0) {                                       // deletion in read
+                    if (apos3 + (uint32_t)g > C.size()) continue;
+                    ref3 = std::string(1, anch) + C.substr(apos3, (size_t)g);
+                    alt3 = std::string(1, anch);
+                } else {
+                    ref3 = std::string(1, anch);
+                    alt3 = std::string(1, anch) + insseq;
+                }
+                char inf4[96];
+                snprintf(inf4, sizeof inf4, "SVTYPE=INDEL;DP=%d;SOURCE=LINKSCAN", nsup);
+                orecs.push_back({cid, apos3, ref3, alt3, inf4, 2});
+                ++n_ls; ++n_indel;
+            }
+            if (std::getenv("CAPS_PCDBG"))
+                fprintf(stderr, "[ls] reads=%zu nocid=%ld outside=%ld perfect=%ld shortleft=%ld shorttail=%ld nogap=%ld HIT=%ld events=%zu emitted=%zu\n",
+                        n, ls_nocid, ls_outside, ls_perfect, ls_shortleft, ls_shorttail, ls_nogap, ls_hit, lvotes.size(), n_ls);
+            if (n_ls) fprintf(stderr, "[CAPS-CALL] linkscan indels=%zu\n", n_ls);
+        }
+
         // ── 6b2. Cross-contig SNV pass (default ON for CAPSULE; see the
         // struct-level comment on SnvBubble for why this is the primary
         // signal here rather than an experimental extra) ──
@@ -1821,6 +1955,8 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 fprintf(df, ">contig_%zu\n%s\n", ci, cd.contigs[ci].c_str());
             for (size_t ci = 0; ci < cdb.contigs.size(); ++ci)
                 fprintf(df, ">bcontig_%zu\n%s\n", ci, cdb.contigs[ci].c_str());
+            for (size_t ci = 0; ci < cd_in.contigs.size(); ++ci)
+                fprintf(df, ">lcontig_%zu\n%s\n", ci, cd_in.contigs[ci].c_str());
             fclose(df);
         }
     }
@@ -1832,10 +1968,12 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         fprintf(f, "##contig=<ID=contig_%zu,length=%zu>\n", ci, cd.contigs[ci].size());
     for (size_t ci = 0; ci < cdb.contigs.size(); ++ci)
         fprintf(f, "##contig=<ID=bcontig_%zu,length=%zu>\n", ci, cdb.contigs[ci].size());
+    for (size_t ci = 0; ci < cd_in.contigs.size(); ++ci)
+        fprintf(f, "##contig=<ID=lcontig_%zu,length=%zu>\n", ci, cd_in.contigs[ci].size());
     fprintf(f, "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n");
     for (auto& r : orecs)
         fprintf(f, "%s%u\t%u\t.\t%s\t%s\t.\tPASS\t%s\n",
-                r.src ? "bcontig_" : "contig_", r.cid, r.pos,
+                r.src == 2 ? "lcontig_" : (r.src ? "bcontig_" : "contig_"), r.cid, r.pos,
                 r.ref.c_str(), r.alt.c_str(), r.info.c_str());
     fclose(f);
     fprintf(stderr, "[CAPS-CALL] contigs=%zu H=%u candidates=%zu SNVs=%zu indels=%zu -> %s\n",
