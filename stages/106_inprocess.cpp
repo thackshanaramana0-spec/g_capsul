@@ -1733,7 +1733,26 @@ int main(int argc,char** argv){
         // decoder from read_lengths.bin (max length), so no extra stream and
         // no format flag is needed.
         const bool MMDELTA = (Lmax<=256);
+        // A unique read that NO original read maps to is never emitted by the
+        // decoder, but its mismatches still occupied slots in mm_ref/mm_obs/
+        // mm_pos -- and the decoder, having no original to take a length from,
+        // computed its reverse-complement index with RL=0 and so derived the
+        // WRONG `ref` byte. Since the mismatch coder is adaptive, those few
+        // wrong refs desynchronised the model and corrupted every symbol after
+        // them: on C. jejuni 8 bad refs of 18,774 turned into 6,892 wrong obs
+        // bytes and 3,712 wrong reads. Such uniques arise from containment (a
+        // shorter read absorbed into a longer one), which only happens with
+        // variable-length input -- which is exactly why every fixed-length
+        // dataset round-tripped and three variable-length ones did not.
+        //
+        // Emitting mismatches for a read nobody outputs is pure waste as well
+        // as a correctness break, so they are skipped here. Files with no
+        // orphaned uniques produce byte-identical streams.
+        std::vector<uint8_t> uid_referenced(n, 0);
+        for(uint32_t o : orig2uid) if(o < n) uid_referenced[o] = 1;
+        size_t g_skipped_orphan=0;
         for(uint32_t i=0;i<n;++i){
+            if(!uid_referenced[i]){ ++g_skipped_orphan; continue; }
             if(readMM[i]==255) continue;
             uint32_t prevj=0;
             const uint32_t RL=rlen[i];
