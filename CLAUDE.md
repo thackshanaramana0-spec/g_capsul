@@ -6,6 +6,12 @@ Read this file first. It records what is done, what is verified, what is NOT
 done, and which ideas have already been tested and refuted so they are not
 attempted again.
 
+**For the 15-dataset SPRING/Genozip comparison (this repo, `c_star_pg_advance`,
+not the outer ARCS binary), the locked set is `NEW_DATASET_LOCKED.md`, not the
+17-accession list in `DATASET_LOCKED.md` below.** It records one swap made
+2026-09-02 (Drosophila out, Utricularia gibba/Plantae in) and why. Read it
+before running or citing that comparison.
+
 Repo: `github.com/thackshanaramana0-spec/c_star_pg_advance`, branch
 `c_star_pg_advance`, 127 commits, working tree clean.
 

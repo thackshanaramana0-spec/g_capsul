@@ -104,7 +104,26 @@ struct Model {
     }
 };
 
-enum TokType { ID_ALPHA, ID_DIGIT, ID_CHAR, ID_MATCH, ID_ZEROS, ID_DELTA, ID_END, ID_ZDELTA };
+// ID_SEQLEN: a digit token whose value IS the read's own sequence length.
+//
+// Every SRA-derived FASTQ header here ends in "length=NNN", and that number is
+// the length of the SEQ line two lines below it -- a value the CAPSULE archive
+// ALREADY stores, per original read, in the `read_lengths` stream for sequence
+// reconstruction. Coding it a second time inside the name is paying twice for
+// one fact. Measured cost of that duplication before this token existed:
+// ERR5181310 38,059 of 39,416 B (96.6% of the entire names stream) and
+// ERR552797 269,005 of 1,341,038 B (20.1%). Genozip pays for the same field in
+// its own separate `length` context (25,395 B and 177,459 B on the same two
+// files); we can pay nothing, because we already hold the value.
+//
+// So the token carries NO payload -- just the type symbol, which an adaptive
+// model drives to near-zero when it dominates a token index. The decoder
+// recovers the digits from the read length it has already decoded.
+//
+// This is a cross-column reference, the same class of mechanism Genozip uses
+// (SNIP_REDIRECTION between contexts), but strictly cheaper here because the
+// sequence side needs read_lengths regardless of what names do.
+enum TokType { ID_ALPHA, ID_DIGIT, ID_CHAR, ID_MATCH, ID_ZEROS, ID_DELTA, ID_END, ID_ZDELTA, ID_SEQLEN };
 // Diagnostic only: isolate our two additions over SPRING's baseline coder.
 static const bool NO_ZD   = getenv("NMC_NOZD")!=nullptr;    // drop ID_ZDELTA
 static const bool NO_DICT = getenv("NMC_NODICT")!=nullptr;  // drop the value dictionary
@@ -119,21 +138,76 @@ struct GlobalDict {
     }
     uint32_t lookup(uint32_t v) const { auto it=val2sym.find(v); return it==val2sym.end()?0:it->second; }
 };
+// Adaptive frequency model over the value dictionary.
+//
+// TWO REAL DEFECTS FIXED HERE, both only visible on high-cardinality fields
+// (the X/Y coordinates of raw Illumina headers), which is exactly where
+// Genozip beats us:
+//
+// 1. The rescale ceiling was a hardcoded 60000 while `total` STARTS at N (all
+//    frequencies initialised to 1). So any dictionary with more than ~60k
+//    symbols was already over the limit before coding its first symbol, and
+//    halved every frequency on every symbol thereafter -- the model could
+//    never accumulate a statistic, and the dictionary degenerated to a flat
+//    log2(N) code (~16.6 bits/value at N=98k) while still paying dictionary
+//    overhead. Between ~3.7k and 60k symbols it was impaired rather than
+//    dead. The range coder's ACTUAL constraint is tot <= 2^24 (it computes
+//    range/=tot after normalising range >= 2^24), so 60000 was needlessly
+//    conservative by two orders of magnitude. The ceiling now scales with the
+//    alphabet, giving every dictionary a real adaptation window.
+//
+// 2. encSym/decSym computed the cumulative frequency by LINEAR SCAN, O(N) per
+//    symbol. At N=98k over 500k names that is ~10^11 operations -- this is
+//    what looked like a hang on raw-Illumina headers (it was quadratic
+//    blow-up, not a deadlock), and in decSym the unbounded
+//    `while(lo+freq[sym]<=target)` walk could also run past the array.
+//    Replaced with a Fenwick tree (binary indexed tree): O(log N) prefix sum
+//    to encode, O(log N) binary-lifting search to decode. Standard,
+//    decades-proven for large-alphabet adaptive range coding.
 struct LocalDictFreq {
-    std::vector<uint32_t> freq; uint32_t total;
-    LocalDictFreq(const GlobalDict& g):freq(g.sym2val.size()+1,1),total((uint32_t)freq.size()){}
+    std::vector<uint32_t> freq;   // per-symbol frequency
+    std::vector<uint32_t> bit;    // Fenwick tree, 1-based
+    uint32_t N, total, limit, LOG;
+    explicit LocalDictFreq(const GlobalDict& g)
+        : freq(g.sym2val.size()+1,1), N((uint32_t)freq.size()), total(N) {
+        limit = (uint32_t)std::min<uint64_t>(1u<<22,
+                    std::max<uint64_t>(60000u, (uint64_t)N*8));
+        LOG=1; while((LOG<<1) <= N) LOG<<=1;
+        build();
+    }
+    void build(){
+        bit.assign(N+1,0);
+        for(uint32_t i=1;i<=N;++i){
+            bit[i]+=freq[i-1];
+            uint32_t j=i+(i&(uint32_t)(-(int32_t)i));
+            if(j<=N) bit[j]+=bit[i];
+        }
+    }
+    inline uint32_t prefix(uint32_t i) const {          // sum of freq[0..i-1]
+        uint32_t s=0; while(i){ s+=bit[i]; i-=i&(uint32_t)(-(int32_t)i); } return s;
+    }
+    inline void addAt(uint32_t i,uint32_t v){           // freq[i] += v
+        for(uint32_t x=i+1;x<=N;x+=x&(uint32_t)(-(int32_t)x)) bit[x]+=v;
+    }
+    inline void bump(uint32_t sym){
+        freq[sym]+=16; total+=16; addAt(sym,16);
+        if(total>limit){ total=0; for(auto& f:freq){ f=(f>>1)|1; total+=f; } build(); }
+    }
     void encSym(RangeEnc& rc,uint32_t sym){
-        uint32_t lo=0; for(uint32_t i=0;i<sym;++i) lo+=freq[i];
+        uint32_t lo=prefix(sym);
         rc.encode(lo,lo+freq[sym],total);
-        freq[sym]+=16; total+=16;
-        if(total>60000){ total=0; for(auto& f:freq){ f=(f>>1)|1; total+=f; } }
+        bump(sym);
     }
     uint32_t decSym(RangeDec& rc){
         uint32_t target=rc.getFreq(total);
-        uint32_t sym=0; uint32_t lo=0; while(lo+freq[sym]<=target){ lo+=freq[sym]; ++sym; }
+        uint32_t idx=0, rem=target;
+        for(uint32_t pw=LOG; pw; pw>>=1){
+            if(idx+pw<=N && bit[idx+pw]<=rem){ idx+=pw; rem-=bit[idx]; }
+        }
+        uint32_t sym = idx<N ? idx : N-1;
+        uint32_t lo = target-rem;                        // == prefix(sym)
         rc.decodeUpdate(lo,lo+freq[sym]);
-        freq[sym]+=16; total+=16;
-        if(total>60000){ total=0; for(auto& f:freq){ f=(f>>1)|1; total+=f; } }
+        bump(sym);
         return sym;
     }
 };
@@ -143,7 +217,7 @@ struct IdModels {
     std::vector<Model> zdelta_hi, zdelta_lo;
     std::vector<uint32_t> hit, seen;
     IdModels():
-        token_type(MAXTOK,Model(8)), alpha_len(MAXTOK,Model(256)),
+        token_type(MAXTOK,Model(9)), alpha_len(MAXTOK,Model(256)),
         alpha_value(MAXTOK,Model(128)), chars(MAXTOK,Model(128)),
         zero_run(MAXTOK,Model(256)), delta(MAXTOK,Model(256)),
         integer(MAXTOK*4,Model(256)),
@@ -186,6 +260,10 @@ struct Layout {
     uint32_t ntok=0;                     // highest token count seen
     std::vector<uint8_t> isconst;        // ntok flags
     std::vector<std::string> constant;   // ntok texts (valid where isconst)
+    // A token index where EVERY read's value is that read's own sequence
+    // length. Hoisted into the header exactly like a constant index: the
+    // per-read cost falls from one ID_SEQLEN type symbol to nothing at all.
+    std::vector<uint8_t> isseqlen;
     bool active() const { return ntok>0 && !isconst.empty(); }
 };
 
@@ -205,6 +283,8 @@ static void dict_pass(const char* fq_path, std::array<GlobalDict,MAXTOK>& gdict,
     std::vector<std::string> ctext(MAXTOK);
     std::vector<uint8_t>     cflag(MAXTOK,0);
     std::vector<uint64_t>    cseen(MAXTOK,0);   // reads that HAVE this index
+    std::vector<uint8_t>     sflag(MAXTOK,1);   // every occurrence == seq length
+    std::vector<uint64_t>    sseen(MAXTOK,0);
     uint32_t ntok_max=0;
     // Per-token-index statistics for the dictionary decision. Counted only on
     // tokens that actually reach the ID_DIGIT fallback -- the same routing
@@ -213,14 +293,29 @@ static void dict_pass(const char* fq_path, std::array<GlobalDict,MAXTOK>& gdict,
     std::vector<std::array<std::array<uint32_t,256>,4>> bhist(MAXTOK);
     for(auto& h:bhist) for(auto& q:h) q.fill(0);
     std::vector<uint64_t> vtot(MAXTOK,0);
-    while(fgets(buf.data(),(int)buf.size(),f)){
-        const bool is_header = (lineno%4==0);
-        ++lineno;
-        if(!is_header) continue;
+    // One-line lookahead: a header's "length=NNN" is priced against the SEQ
+    // line that FOLLOWS it, so the header is held until that length is known.
+    // Without this, pass 1 would register the length values in the dictionary
+    // and the gate would price a path pass 2 no longer takes (ID_SEQLEN).
+    std::string pend; bool havepend=false; uint32_t pend_slen=0;
+    while(fgets(buf.data(),(int)buf.size(),f) || havepend){
+        const bool eof_flush = havepend && feof(f);
+        if(!eof_flush){
+            const uint64_t ln = lineno++;
+            if(ln%4==0){
+                size_t L0=strlen(buf.data()); while(L0&&(buf[L0-1]=='\n'||buf[L0-1]=='\r')) --L0;
+                buf[L0]=0; pend.assign(buf.data(),L0); havepend=true; pend_slen=0;
+                continue;
+            }
+            if(ln%4==1 && havepend){
+                size_t L1=strlen(buf.data()); while(L1&&(buf[L1-1]=='\n'||buf[L1-1]=='\r')) --L1;
+                pend_slen=(uint32_t)L1;
+            } else continue;
+        }
+        havepend=false;
+        const uint32_t seqlen = pend_slen;
         ++nn;
-        size_t L=strlen(buf.data()); while(L&&(buf[L-1]=='\n'||buf[L-1]=='\r')) --L;
-        buf[L]=0;
-        const char* id = buf.data();
+        const char* id = pend.c_str();
         if(*id=='@'){ ++id; }               // '@' is structural, not stored
         const char* id_ptr=id;
         uint32_t token_len=0, match_len=0, token_ctr=0, i=0;
@@ -228,7 +323,7 @@ static void dict_pass(const char* fq_path, std::array<GlobalDict,MAXTOK>& gdict,
         const size_t prevlen = prev_id.size();
         auto prevc=[&](uint32_t off)->char{ return off<prevlen ? prevbuf[off] : 0; };
         while(*id_ptr){
-            token_len=0;
+            token_len=0; bool tok_is_seqlen=false;
             match_len = (*id_ptr==prevc(prev_tok_ptr[token_ctr]+token_len)); token_len=1;
             const char* id_ptr_tok=id_ptr+1;
             if(isalpha((unsigned char)*id_ptr)){
@@ -266,13 +361,19 @@ static void dict_pass(const char* fq_path, std::array<GlobalDict,MAXTOK>& gdict,
                 const bool can_zdelta = prev_is_digit && delta>=-32768 && delta<=32767;
                 const bool is_match = prev_is_digit && match_len==token_len &&
                                       !isdigit((unsigned char)prevc(prev_tok_ptr[token_ctr]+token_len));
+                // Independent of the coding branch: a repeated length would be
+                // coded ID_MATCH, which previously hid the property entirely
+                // and stopped the hoist from ever firing.
+                tok_is_seqlen = seqlen && digit_value==seqlen
+                                && !isdigit((unsigned char)*id_ptr_tok);
                 if(!is_match){
                     if(prev_is_digit){
                         ++seen[token_ctr];
                         if(delta>=-2048 && delta<=2048) ++hit[token_ctr];
                     }
                     const bool trust_wide = !NO_ZD && (seen[token_ctr]>=20) && (hit[token_ctr]*10 >= seen[token_ctr]*3);
-                    if(!can_delta && !(can_zdelta && trust_wide) && !NO_DICT){
+                    const bool is_seqlen = tok_is_seqlen;
+                    if(!can_delta && !(can_zdelta && trust_wide) && !NO_DICT && !is_seqlen){
                         ++vcnt[token_ctr][digit_value];
                         ++vtot[token_ctr];
                         for(int bb=0;bb<4;++bb) ++bhist[token_ctr][bb][(digit_value>>(bb*8))&0xff];
@@ -286,6 +387,7 @@ static void dict_pass(const char* fq_path, std::array<GlobalDict,MAXTOK>& gdict,
                        memcmp(ctext[token_ctr].data(),id_ptr,token_len)!=0) cflag[token_ctr]=0;
                 }
                 ++cseen[token_ctr];
+                if(tok_is_seqlen) ++sseen[token_ctr]; else sflag[token_ctr]=0;
             }
             prev_tok_ptr[token_ctr]=i;
             i+=token_len; id_ptr=id_ptr_tok; ++token_ctr;
@@ -333,10 +435,15 @@ static void dict_pass(const char* fq_path, std::array<GlobalDict,MAXTOK>& gdict,
         lay->ntok = ntok_max;
         lay->isconst.assign(ntok_max,0);
         lay->constant.assign(ntok_max,std::string());
+        lay->isseqlen.assign(ntok_max,0);
         for(uint32_t k=0;k<ntok_max;++k){
             if(cflag[k] && cseen[k]==nn){          // invariant AND present in every read
                 lay->isconst[k]=1; lay->constant[k]=ctext[k];
             }
+            // Same admission rule as a constant index: the property must hold
+            // in EVERY read, so the token walk stays terminable. A constant
+            // index wins if both apply (it needs no read_lengths lookup).
+            else if(sflag[k] && sseen[k]==nn && nn>0) lay->isseqlen[k]=1;
         }
     }
     if(n_names_out) *n_names_out = nn;
@@ -346,7 +453,7 @@ static void dict_pass(const char* fq_path, std::array<GlobalDict,MAXTOK>& gdict,
 static void compress_id(RangeEnc& enc, IdModels& m, std::array<GlobalDict,MAXTOK>& gdict,
                         std::array<LocalDictFreq*,MAXTOK>& ldict, const char* id,
                         std::string& prev_id, std::array<uint32_t,MAXTOK>& prev_tok_ptr,
-                        const Layout* lay=nullptr){
+                        const Layout* lay=nullptr, uint32_t seqlen=0){
     const bool ELIDE = lay && lay->active();
     uint32_t token_len=0, match_len=0, token_ctr=0, i=0;
     const char* id_ptr=id;
@@ -360,9 +467,16 @@ static void compress_id(RangeEnc& enc, IdModels& m, std::array<GlobalDict,MAXTOK
         // A token index that is invariant across the whole file is in the
         // header already: measure its length, advance, spend NO bits at all.
         const bool skip = ELIDE && token_ctr<lay->ntok && lay->isconst[token_ctr];
+        const bool skipsl = ELIDE && seqlen && token_ctr<lay->isseqlen.size()
+                            && lay->isseqlen[token_ctr];
         if(skip){
             token_len=(uint32_t)lay->constant[token_ctr].size();
             id_ptr_tok=id_ptr+token_len;
+        } else if(skipsl){
+            // Hoisted: this index is the read's own length in every read, so
+            // no type symbol and no payload -- just advance over the digits.
+            while(isdigit((unsigned char)*id_ptr_tok)) ++id_ptr_tok;
+            token_len=(uint32_t)(id_ptr_tok-id_ptr);
         } else if(isalpha((unsigned char)*id_ptr)){
             while(isalpha((unsigned char)*id_ptr_tok)){
                 match_len += (*id_ptr_tok==prevc(prev_tok_ptr[token_ctr]+token_len));
@@ -409,8 +523,16 @@ static void compress_id(RangeEnc& enc, IdModels& m, std::array<GlobalDict,MAXTOK
             int64_t delta = (int64_t)digit_value - (int64_t)prev_digit;
             const bool can_delta  = prev_is_digit && delta>0 && delta<256;
             const bool can_zdelta = prev_is_digit && delta>=-32768 && delta<=32767;
+            // The read's own length, already in the archive -- emit the type
+            // symbol and nothing else. Guarded on the token ending here so the
+            // decoder's digit run reconstructs to exactly these characters.
+            const bool is_seqlen = seqlen && digit_value==seqlen
+                                   && !isdigit((unsigned char)*id_ptr_tok)
+                                   && digit_value>=(uint32_t)1;
             if(prev_is_digit && match_len==token_len && !isdigit((unsigned char)prevc(prev_tok_ptr[token_ctr]+token_len))){
                 m.token_type[token_ctr].enc(enc,ID_MATCH);
+            } else if(is_seqlen){
+                m.token_type[token_ctr].enc(enc,ID_SEQLEN);
             } else {
                 if(prev_is_digit){
                     ++m.seen[token_ctr];
@@ -459,7 +581,7 @@ static std::string decompress_id(RangeDec& dec, IdModels& m, std::array<GlobalDi
                                  std::array<LocalDictFreq*,MAXTOK>& ldict, std::string& prev_id,
                                  std::array<uint32_t,MAXTOK>& prev_tok_ptr,
                                  std::array<uint32_t,MAXTOK>& prev_tok_len,
-                                 const Layout* lay=nullptr){
+                                 const Layout* lay=nullptr, uint32_t seqlen=0){
     const bool ELIDE = lay && lay->active();
     std::string id; id.reserve(64);
     uint32_t token_ctr=0, i=0;
@@ -470,6 +592,14 @@ static std::string decompress_id(RangeDec& dec, IdModels& m, std::array<GlobalDi
         // Constant index: text is in the header, consume no bits. Safe as a
         // silent append because such an index is present in EVERY read, so it
         // can never be where a shorter header would have stopped.
+        if(ELIDE && seqlen && token_ctr<lay->isseqlen.size() && lay->isseqlen[token_ctr]){
+            char b2[16]; int L2=snprintf(b2,sizeof(b2),"%u",seqlen);
+            id.append(b2,(size_t)L2);
+            prev_tok_ptr[token_ctr]=i; prev_tok_len[token_ctr]=(uint32_t)L2;
+            i+=(uint32_t)L2; ++token_ctr;
+            if(token_ctr>=MAXTOK-1) break;
+            continue;
+        }
         if(ELIDE && token_ctr<lay->ntok && lay->isconst[token_ctr]){
             const std::string& t=lay->constant[token_ctr];
             id.append(t);
@@ -501,6 +631,11 @@ static std::string decompress_id(RangeDec& dec, IdModels& m, std::array<GlobalDi
                 v = gdict[token_ctr].sym2val[sym-1];
             }
             char buf[16]; int L=snprintf(buf,sizeof(buf),"%u",v);
+            id.append(buf,(size_t)L); token_len=(uint32_t)L;
+        } else if(tok==ID_SEQLEN){
+            // No payload: the value is this read's own sequence length, which
+            // the archive already carries in read_lengths.
+            char buf[16]; int L=snprintf(buf,sizeof(buf),"%u",seqlen);
             id.append(buf,(size_t)L); token_len=(uint32_t)L;
         } else if(tok==ID_DELTA){
             uint32_t delta = m.delta[token_ctr].dec(dec);
@@ -536,7 +671,8 @@ static std::string decompress_id(RangeDec& dec, IdModels& m, std::array<GlobalDi
 }
 
 // ---- bounded queue (stage 85's, with its in-flight accounting fix) ---------
-struct Chunk { size_t block_idx=0; std::vector<std::string> lines; };
+struct Chunk { size_t block_idx=0; std::vector<std::string> lines;
+               std::vector<uint32_t> slen; };   // seq length per read (for ID_SEQLEN)
 template<typename T>
 struct BoundedQueue {
     std::deque<T> q; size_t cap;
@@ -586,6 +722,11 @@ static std::vector<uint8_t> serialize_dict(const std::array<GlobalDict,MAXTOK>& 
             pv(o,k); pv(o,lay.constant[k].size());
             o.insert(o.end(), lay.constant[k].begin(), lay.constant[k].end());
         }
+        uint32_t ns=0;
+        for(uint32_t k=0;k<lay.ntok;++k) if(k<lay.isseqlen.size() && lay.isseqlen[k]) ++ns;
+        pv(o, ns);
+        for(uint32_t k=0;k<lay.ntok;++k)
+            if(k<lay.isseqlen.size() && lay.isseqlen[k]) pv(o,k);
     }
     uint32_t used=0;
     for(uint32_t k=0;k<MAXTOK;++k) if(!gdict[k].sym2val.empty()) ++used;
@@ -624,6 +765,12 @@ static void deserialize_dict(const std::vector<uint8_t>& in, std::array<GlobalDi
                 lay.isconst[k]=1; lay.constant[k].assign((const char*)p,(size_t)len);
             }
             p+=len;
+        }
+        lay.isseqlen.assign(lay.ntok,0);
+        const uint64_t ns=gv(p,end);
+        for(uint64_t c=0;c<ns && p<end;++c){
+            const uint64_t k=gv(p,end);
+            if(k<lay.ntok) lay.isseqlen[k]=1;
         }
     }
     const uint64_t used=gv(p,end);
@@ -678,14 +825,19 @@ static Encoded encode_from_fastq(const char* fq_path, size_t BLOCK=250000,
         uint64_t lineno=0; size_t block_idx=0;
         Chunk cur; cur.block_idx=0; cur.lines.reserve(BLOCK);
         while(fgets(buf.data(),(int)buf.size(),f)){
-            const bool is_header=(lineno%4==0); ++lineno;
-            if(!is_header) continue;
+            const uint64_t ln=lineno++; 
+            if(ln%4==1){ // SEQ line: its length is what "length=NNN" duplicates
+                size_t L=strlen(buf.data()); while(L&&(buf[L-1]=='\n'||buf[L-1]=='\r')) --L;
+                if(!cur.slen.empty()) cur.slen.back()=(uint32_t)L;
+                continue;
+            }
+            if(ln%4!=0) continue;
             size_t L=strlen(buf.data()); while(L&&(buf[L-1]=='\n'||buf[L-1]=='\r')) --L;
             const char* s=buf.data(); size_t off=(L&&s[0]=='@')?1:0;
-            cur.lines.emplace_back(s+off,L-off);
+            cur.lines.emplace_back(s+off,L-off); cur.slen.push_back(0);
             if(cur.lines.size()>=BLOCK){
                 workQ.push(std::move(cur));
-                ++block_idx; cur=Chunk(); cur.block_idx=block_idx; cur.lines.reserve(BLOCK);
+                ++block_idx; cur=Chunk(); cur.block_idx=block_idx; cur.lines.reserve(BLOCK); cur.slen.reserve(BLOCK);
             }
         }
         if(!cur.lines.empty()){ workQ.push(std::move(cur)); ++block_idx; }
@@ -704,7 +856,9 @@ static Encoded encode_from_fastq(const char* fq_path, size_t BLOCK=250000,
             for(uint32_t k=0;k<MAXTOK;++k) ldict[k]=new LocalDictFreq(gdict[k]);
             RangeEnc enc; enc.out.reserve(c.lines.size()*4);
             std::string prev_id; std::array<uint32_t,MAXTOK> pp{}; pp.fill(0);
-            for(auto& nm:c.lines) compress_id(enc,m,gdict,ldict,nm.c_str(),prev_id,pp,&lay);
+            for(size_t z=0;z<c.lines.size();++z)
+                compress_id(enc,m,gdict,ldict,c.lines[z].c_str(),prev_id,pp,&lay,
+                            z<c.slen.size()?c.slen[z]:0u);
             enc.flush();
             { std::lock_guard<std::mutex> lk(outMu);
               if(blockOut.size()<=c.block_idx){ blockOut.resize(c.block_idx+1); blockCnt.resize(c.block_idx+1,0); }
@@ -731,10 +885,15 @@ static Encoded encode_from_fastq(const char* fq_path, size_t BLOCK=250000,
 // Decode straight to a FILE*, one block at a time -- the decoder keeps the
 // same bounded-memory property as the encoder. `at` prefixes each line with
 // '@' when a FASTQ header column is wanted rather than a bare name column.
+// `slens` supplies each read's sequence length, in original read order, for
+// ID_SEQLEN. The archive already decodes read_lengths before it reaches the
+// names column, so this costs the container nothing. Passing nullptr is only
+// valid for inputs that contain no ID_SEQLEN token.
 static uint64_t decode_to_file(const std::vector<uint8_t>& body,
                                const std::vector<uint8_t>& dictRaw,
                                const std::vector<uint8_t>& indexRaw,
-                               FILE* out, bool at=false){
+                               FILE* out, bool at=false,
+                               const std::vector<uint32_t>* slens=nullptr){
     std::array<GlobalDict,MAXTOK> gdict;
     Layout lay;
     deserialize_dict(dictRaw, gdict, lay);
@@ -751,7 +910,8 @@ static uint64_t decode_to_file(const std::vector<uint8_t>& body,
         RangeDec dec; dec.init(body.data()+boff, (size_t)blen);
         std::string prev; std::array<uint32_t,MAXTOK> pp{}, pl{}; pp.fill(0); pl.fill(0);
         for(uint64_t r=0;r<bcnt;++r){
-            std::string got=decompress_id(dec,m,gdict,ldict,prev,pp,pl,&lay);
+            const uint32_t sl = (slens && written<slens->size()) ? (*slens)[(size_t)written] : 0u;
+            std::string got=decompress_id(dec,m,gdict,ldict,prev,pp,pl,&lay,sl);
             line.clear();
             if(at) line.push_back('@');
             line += got; line.push_back('\n');
