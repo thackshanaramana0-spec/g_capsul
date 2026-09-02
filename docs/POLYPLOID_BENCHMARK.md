@@ -1,45 +1,40 @@
-# Polyploid / multi-allelic calling — real data is the primary evidence
+# Multi-allelic calling (real data) and polyploid calling (synthetic only)
 
-Written 2026-09-02, updated 2026-09-03.
+Written 2026-09-02, corrected 2026-09-03.
 
-## 0. HEADLINE — use the REAL-DATA result, not the synthetic one
+## 0. THE TWO CLASSES ARE NOT THE SAME — an earlier version of this document
+## conflated them, and the claim must be stated separately for each
 
-**Real data outranks synthetic here, and the two disagree, so this ordering
-matters.**
+* **Multi-allelic** = ONE SITE carrying two or more alternate alleles
+  (`REF=C ALT=A,G`). An ordinary **diploid** sample has these wherever the
+  genotype is `1/2`: both haplotypes non-reference and different from each
+  other. HG002 has **952** on chr20 alone.
+* **Polyploid** = an ORGANISM with three or more haplotypes (triploid wheat,
+  tetraploid potato). A different thing entirely.
 
-| evidence | CAPSULE | DiscoSNP++ | status |
+They share a code path (`CAPS_PLOIDY=k` admits up to k co-occurring alleles),
+which is why they were run together — but they are different claims and only
+one of them has real-data evidence.
+
+| class | data available | result | claimable? |
 |---|---|---|---|
-| **REAL, multi-allelic sites (chr20, 25 Mb, two independent regions)** | **11 / 18** | **0 / 18** | **PRIMARY — WIN** |
-| **REAL, overall SNV F1** (1–6 Mb / 6–26 Mb) | 0.855 / 0.870 | 0.854 / 0.873 | PRIMARY — parity |
-| synthetic triploid F1 (3 seeds) | 0.981 | 0.994 | SECONDARY — see §5 |
+| **multi-allelic** | **REAL** (GIAB GT=1/2 sites) | **CAPSULE 11/18 vs DiscoSNP++ 0/18** | **YES — this is the claim** |
+| polyploid | **synthetic only** | CAPSULE 0.981 vs DiscoSNP++ 0.994 | **NO — we lose, and it is not real data** |
 
-**Why the real-data result is authoritative and the synthetic one is not:**
+**Why polyploid has no real-data evidence.** Humans are diploid, so GIAB
+provides none. Pooling individuals does not create it — measured: pooling all
+four GIAB samples yields **1 multi-allelic site in 763**, because human SNPs
+are essentially always biallelic in the population (§1). Genuinely polyploid
+organisms are sequenced (wheat, potato, strawberry), but **no GIAB-quality
+truth set exists for any of them**, so accuracy cannot be scored. The only
+polyploid test available is therefore synthetic — and we lose it.
 
-1. **The synthetic generator was broken.** `sim_polyploid.py` wrote truth
-   records whose REF contradicted the reference genome it generated — 22 of 80
-   records (28%), and **all of them at multi-allelic sites**, i.e. 55% of the
-   sites that actually exercise the capability. Fixed in commit `d92a5b1`, but
-   every polyploid number produced before that fix — including the outer ARCS
-   project's published triploid figures — is void.
-2. **The synthetic result is representation-dependent.** On identical corrected
-   data the winner changes with the scoring convention (raw 0.886 vs 0.800;
-   split 0.658 vs 0.664; joined 0.981 vs 0.994). A result that flips with
-   formatting is not a measurement of calling ability.
-3. **The real-data result is neither.** Real reads, GIAB truth, identical
-   normalisation applied to both tools, replicated on two non-overlapping
-   regions — and the margin is a **capability** (DiscoSNP++ emitted 0
-   multi-allelic records in 25 Mb) rather than a threshold or format artefact.
-4. **Synthetic data flatters everyone.** DiscoSNP++'s own paper reports 99.1%
-   recall / 99.2% precision on simulated human chr1; the same tool measures
-   F1 0.874 on real GIAB here. Never compare a real number to a published
-   simulated one.
-
-**Rule for the paper: quote the real-data multi-allelic result as the claim for
-this class. The synthetic triploid numbers may be shown as a controlled
-secondary check, always labelled synthetic, and never as the headline.**
+**Conclusion: drop the polyploid claim. Claim multi-allelic calling on real
+data instead.** It is the capability the polyploid code path actually
+provides, it is measured on real reads against real truth, and DiscoSNP++
+cannot do it at all.
 
 ---
-
 ## 1. Real human data CANNOT test polyploid calling — measured
 
 The obvious real-data design is to pool GIAB individuals: N diploid people
