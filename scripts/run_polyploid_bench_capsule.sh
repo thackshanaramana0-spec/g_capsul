@@ -8,7 +8,7 @@ cd "$WD"
 export CAPS_CALL=1 CALL_VCF="$WD/calls.vcf" CAPS_DUMP_CONTIGS="$WD/contigs.tsv" CAPS_PLOIDY=$K
 "$CAPS" reads.fq 3 16 16 22 16 16 1 24 64 1 > /dev/null 2>&1 || true
 grep -E "CAPS-CALL" "$WD"/*.log 2>/dev/null || true
-awk -F'\t' '{print ">"$1"\n"$2}' contigs.tsv > contigs.fa
+cp contigs.tsv contigs.fa   # CAPS_DUMP_CONTIGS already emits FASTA (see run_window_bench_capsule.sh)
 [ -s ref.fa.bwt ] || bwa index ref.fa 2>/dev/null
 bwa mem -t4 ref.fa contigs.fa 2>/dev/null > c2r.sam
 python3 "$SC/lift_vcf.py" calls.vcf c2r.sam ref.fa $CHROM lifted.vcf contigs.fa
