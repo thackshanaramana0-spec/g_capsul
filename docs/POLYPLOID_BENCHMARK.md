@@ -185,3 +185,24 @@ triploid comparison — where a broken generator and the choice of representatio
 decided the result — this is real reads, real truth, identical normalisation,
 and the margin is a capability the competitor does not have rather than a
 threshold artefact.
+
+## 7. INDEPENDENT VALIDATION — chr20:6–26 Mb (non-overlapping, 4× larger)
+
+3,931,113 real reads, 16,188 truth SNV sites after joining.
+
+| | P | R | F1 | multi-allelic sites correct | multi-allelic records emitted |
+|---|---|---|---|---|---|
+| **CAPSULE** | 0.941 | **0.808** | 0.870 | **6 / 11** | **29** |
+| DiscoSNP++ | **0.956** | 0.802 | **0.873** | **0 / 11** | **0** |
+
+**The capability result replicates exactly**: DiscoSNP++ recovers none of the
+multi-allelic sites in either region and emits zero multi-allelic records in
+25 Mb of real sequence. Combined over both regions: **CAPSULE 11/18, DiscoSNP++
+0/18.**
+
+Overall SNV F1 is a tie at scale (0.855 vs 0.854 on 5 Mb; 0.870 vs 0.873 on
+20 Mb) — CAPSULE consistently higher recall, DiscoSNP++ consistently higher
+precision.
+
+**Final position for this class: the win is the capability, replicated on two
+independent real-data regions, with overall SNV accuracy at parity.**
