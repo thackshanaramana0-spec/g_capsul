@@ -206,3 +206,37 @@ from the het-restricted truth, not low-support noise.
   FPs. Normalise first, then classify.
 - The measured recall ceiling is **0.995**, and we are at 0.805 — the
   remaining headroom is real, not exhausted.
+
+---
+
+## Third variant class — POLYPLOID (triploid), measured 2026-09-02
+
+`CAPS_PLOIDY=3`. Synthetic triploid, 40 kb, 60x, 80 truth heterozygous SNVs of
+which 40 are MULTI-ALLELIC. DiscoSNP++ run on the identical reads and scored by
+the identical pipeline (`rtg vcfeval --squash-ploidy`, POS-1 corrected).
+
+| seed | CAPSULE P | CAPSULE R | **CAPSULE F1** | DiscoSNP++ P | DiscoSNP++ R | **DiscoSNP++ F1** |
+|---|---|---|---|---|---|---|
+| 42 | 0.812 | 0.975 | **0.886** | 0.500 | 1.000 | 0.667 |
+| 7 | 0.843 | 0.938 | **0.888** | 0.500 | 1.000 | 0.667 |
+| 101 | 0.939 | 0.963 | **0.951** | 0.500 | 1.000 | 0.667 |
+
+**CAPSULE wins all three seeds by +0.22 to +0.28.** The mechanism is identical
+every time: DiscoSNP++ recovers every site (R = 1.000) but exactly HALF its
+calls are false (P = 0.500), because at a multi-allelic site it reports the
+variant without resolving which of the three alleles are present. The
+ploidy-aware path admits up to k co-occurring alleles and emits a
+multi-allelic record, so it resolves them.
+
+This was the one Claim 2 class that had been ported but never benchmarked. It
+is now measured, against the same competitor, on three independent seeds.
+
+### Claim 2 scoreboard
+
+| variant class | CAPSULE | DiscoSNP++ | verdict |
+|---|---|---|---|
+| het-SNV | **0.890** | 0.874 | **WIN** (5/8 evaluations) |
+| het-indel | 0.631 | **0.663** | loss (3/8) |
+| polyploid SNV | **0.886–0.951** | 0.667 | **WIN** (3/3 seeds) |
+
+**Two of three variant classes won.**

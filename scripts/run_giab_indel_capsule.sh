@@ -18,7 +18,7 @@ BEDURL="$FTP/HG002_GRCh37_1_22_v4.2.1_benchmark_noinconsistent.bed"
 export CAPS_CALL=1 CALL_VCF="$WD/calls.vcf" CAPS_DUMP_CONTIGS="$WD/contigs.tsv"
 [ -s calls.vcf ] || "$CAPS" "$READS" 3 16 16 22 16 16 1 24 64 1 > /dev/null 2> capsule_call.log
 grep -E "CAPS-CALL" capsule_call.log || true
-awk -F'\t' '{print ">"$1"\n"$2}' contigs.tsv > contigs.fa
+cp contigs.tsv contigs.fa   # CAPS_DUMP_CONTIGS already emits FASTA (see run_window_bench_capsule.sh)
 
 # 2. Place contigs (eval-only coordinate lift)
 [ -s "$REF.bwt" ] || bwa index "$REF" 2>/dev/null

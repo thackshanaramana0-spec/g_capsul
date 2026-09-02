@@ -16,7 +16,7 @@ cd "$WD"
 export CAPS_CALL=1 CALL_VCF="$WD/calls.vcf" CAPS_DUMP_CONTIGS="$WD/contigs.tsv"
 "$CAPS" reads.fq 3 16 16 22 16 16 1 24 64 1 > /dev/null 2> capsule_call.log
 grep -E "CAPS-CALL" capsule_call.log || true
-awk -F'\t' '{print ">"$1"\n"$2}' contigs.tsv > contigs.fa
+cp contigs.tsv contigs.fa   # CAPS_DUMP_CONTIGS already emits FASTA (see run_window_bench_capsule.sh)
 
 # 2. Place contigs on the reference with BWA (evaluation-only coordinate lift)
 bwa index ref.fa 2> bwa_index.log
