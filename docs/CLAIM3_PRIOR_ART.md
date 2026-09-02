@@ -18,6 +18,27 @@ novel** and the paper must not claim it is.
 So: record-level and byte-level random access on FASTQ is well established, and
 coordinate-level access exists for *aligned* formats.
 
+**None of the above have the three specific operations.** Checked directly,
+not inferred from "has some access mechanism":
+
+| tool | export (assembly output) | coverage (per-base depth) | query (coordinate range) |
+|---|---|---|---|
+| BEETL-fastq | no | no | no — retrieves by read id / k-mer, not a coordinate range |
+| CIndex | no | no | no — k-mer to containing-reads lookup only |
+| sFASTQ | no | no | no — record-id random access, not coordinate range |
+| GPU LZ77 (2026) | no | no | no — byte/block-range decode, not a genomic coordinate |
+| CRAM/BAM + samtools/mosdepth | no (no assembly step — it aligns to a supplied reference) | **yes** | **yes** |
+| PgRC / Minicom / NanoSpring | no — build an internal pseudogenome/contigs but never expose it | no | no |
+
+The assembly-based compressors (PgRC, Minicom, NanoSpring) are the closest
+architectural relatives — they build the same kind of pseudogenome/contig set
+CAPSULE does — but per their papers and released tools, none expose it as a
+user-facing operation. That is the strongest point for novelty, not a weak
+one: the capability was structurally available in that whole family and
+nobody surfaced it. CRAM/BAM is the only prior art with genuine
+coverage+query, and it requires a reference genome and a prior alignment step
+that CAPSULE does not have.
+
 ## 2. What is actually different here
 
 Every FASTQ tool above is keyed on a **record identifier, byte offset, or k-mer
