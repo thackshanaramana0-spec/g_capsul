@@ -198,15 +198,41 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
     // literal stream and replaying every reference is pure waste for this
     // operation. Doing it here skips both.
     if(mode=="coverage"){
+        // INDEXING: pos_abs is per-UNIQUE read, read_lengths is per-ORIGINAL
+        // read (see 106_inprocess.cpp's "read_lengths is indexed by ORIGINAL
+        // read, always" invariant). Indexing both with one counter silently
+        // undercounts every DUPLICATE read, since duplicates share a unique's
+        // placement but are separate reads for coverage purposes.
+        // Measured before this fix on E. coli: 185,346,900 covered bases
+        // against the reads' true 232,988,850 -- a 20% undercount.
+        // Expand originals through orig2uid, exactly as the read
+        // reconstruction path does.
         auto posb2=dec("pos_abs"), lenb2=dec("read_lengths",2);
+        auto o2f2=dec("orig2uid_flags"), o2v2=dec("orig2uid_vals");
         std::vector<uint32_t> P(posb2.size()/4);
         memcpy(P.data(),posb2.data(),P.size()*4);
         std::vector<uint16_t> L(lenb2.size()/2);
         memcpy(L.data(),lenb2.data(),L.size()*2);
+        const size_t NO2 = L.size();
+        std::vector<uint32_t> o2u2;
+        if(!o2v2.empty()||!o2f2.empty()){
+            size_t k=0;
+            for(size_t i=0;i<NO2;++i){
+                bool nz = (i>>3)<o2f2.size() ? ((o2f2[i>>3]>>(7-(i&7)))&1) : 0;
+                int32_t d=0; if(nz && k+4<=o2v2.size()){ memcpy(&d,&o2v2[k],4); k+=4; }
+                o2u2.push_back((uint32_t)d);
+            }
+            uint32_t exp=0;
+            for(auto& v:o2u2){ int32_t d=(int32_t)v; if(d==0){ v=exp; ++exp; } else v=exp-d; }
+        } else {
+            o2u2.resize(NO2); for(size_t i=0;i<NO2;++i) o2u2[i]=(uint32_t)i;
+        }
         std::vector<int32_t> diff(PGLEN+2,0);
         size_t placed=0;
-        for(size_t u=0;u<P.size();++u){
-            uint64_t a=P[u]; uint16_t l=(u<L.size())?L[u]:0;
+        for(size_t o=0;o<NO2;++o){
+            uint32_t u = o<o2u2.size()? o2u2[o] : (uint32_t)o;
+            if(u>=P.size()) continue;
+            uint64_t a=P[u]; uint16_t l=L[o];          // length from the ORIGINAL read
             if(!l||a>=PGLEN) continue;
             uint64_t b=std::min<uint64_t>(PGLEN,a+l);
             ++diff[a]; --diff[b]; ++placed;
@@ -218,7 +244,10 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
         for(uint64_t i=0;i<PGLEN;++i){
             cur+=diff[i];
             if(i==0){ run=cur; rs=0; continue; }
-            if(cur!=run){
+            // Force a run break at the main/second region boundary: without it
+            // a run spanning MAINEND is emitted as one row labelled by its
+            // START, so part of it is attributed to the wrong region.
+            if(cur!=run || i==MAINEND){
                 fprintf(f,"%s\t%llu\t%llu\t%ld\n", rs<MAINEND?"pg_main":"pg_second",
                         (unsigned long long)rs,(unsigned long long)i,run);
                 run=cur; rs=i;
@@ -365,6 +394,10 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
           qa=strtoull(modearg.c_str(),nullptr,10); qb=strtoull(d+1,nullptr,10); }
         FILE* f=fopen(outdir.c_str(),"wb");
         if(!f){ fprintf(stderr,"cannot write %s\n",outdir.c_str()); return 1; }
+        // Emit one record per UNIQUE read. A duplicate read has the same
+        // placement AND the same sequence, so emitting it again would return
+        // byte-identical records; callers wanting original multiplicity should
+        // use the coverage output, which does count every original read.
         size_t n=0;
         for(size_t u=0;u<P.size();++u){
             uint64_t a=P[u]; uint16_t l=u<L.size()?L[u]:0;
