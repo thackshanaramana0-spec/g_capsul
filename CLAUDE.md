@@ -31,9 +31,14 @@ An independent from-scratch implementation of pseudogenome-based read
 compression, benchmarked head-to-head against PgRC2 (`/root/arcs-clean/method_c`,
 cloned separately, GPL-3, never vendored).
 
-**Locked scope: sequence + read order.** Names and quality are out of scope for
-now; the stage history contains name/quality coders (stages 61-75, 84-85, 92)
-but they are not part of any current claim. The `U` in CAPSULE anticipates them.
+**Scope as of 2026-09-02: sequence + read order + names + line 3.** Names are
+now really in the archive (`include/names_coder.h`, streams `names_body` /
+`names_dict` / `names_index`, behind `CAPS_NAMES=1`; Phase 1 stays
+byte-identical with it unset) and line 3 is stored as a one-byte file mode.
+**Quality is the one column still out** -- see the quality section of
+`docs/REIMPL_NOTES.md`: assessed and measured, the decision is to vendor
+fqzcomp (BSD 3-clause) rather than reimplement. Stage 92 is our own quality
+coder and beats SPRING 7/8 and Genozip 8/8, but loses to real fqzcomp 0/8.
 
 Method, in order: greedy overlap chaining builds a pseudogenome from
 well-tiling reads -> remaining reads are pigeonhole-mapped onto it -> unmapped
