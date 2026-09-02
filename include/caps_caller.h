@@ -684,11 +684,24 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         }
         struct Agg { int anchors = 0; uint32_t altcid = 0, altpos = 0; };
         std::map<std::tuple<uint32_t,uint32_t,int,int,std::string>, Agg> im;
+        // ANCHOR MULTIPLICITY. The rule used to be `occ.size() != 2 -> skip`,
+        // i.e. an anchor was only usable if its 25-mer occurred EXACTLY twice
+        // in the whole contig set. A genuine hap1/hap2 pair whose k-mer also
+        // appears in any third fragment was therefore discarded silently.
+        // Now every cross-contig PAIR among a small number of occurrences is
+        // tried; the bubble extractor itself rejects pairs that do not
+        // diverge-and-reconverge, so admitting more candidates costs
+        // specificity only where the geometry genuinely looks like a bubble.
+        // MAXOCC is bounded to keep repeats from exploding the pair count.
+        int MAXOCC = 4;
+        if (const char* e = std::getenv("CAPS_MAXOCC")) MAXOCC = atoi(e);
         for (auto& kv : kidx) {
             auto& occ = kv.second;
-            if (occ.size() != 2) continue;
+            if ((int)occ.size() < 2 || (int)occ.size() > MAXOCC) continue;
+          for (size_t oi_ = 0; oi_ + 1 < occ.size(); ++oi_)
+          for (size_t oj_ = oi_ + 1; oj_ < occ.size(); ++oj_) {
             uint32_t ca, pa, cb, pb; uint8_t oa, ob;
-            std::tie(ca, pa, oa) = occ[0]; std::tie(cb, pb, ob) = occ[1];
+            std::tie(ca, pa, oa) = occ[oi_]; std::tie(cb, pb, ob) = occ[oj_];
             if (ca == cb) continue;
             uint32_t rc_, rp, ac, ap; uint8_t ro, ao;
             if (cdb.contigs[ca].size() >= cdb.contigs[cb].size()) { rc_=ca; rp=pa; ro=oa; ac=cb; ap=pb; ao=ob; }
@@ -701,6 +714,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             if (!bub.ok || bub.apos == 0) continue;
             auto& a = im[std::make_tuple(rc_, bub.apos, bub.type, bub.len, bub.ins)];
             a.anchors++; a.altcid = ac; a.altpos = ap;
+          }
         }
         auto covwin = [&](uint32_t ci, uint32_t p) -> int {
             const auto& cv = cov[ci]; if (cv.empty()) return 0;
@@ -733,6 +747,63 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                     : ins;
                 if (!indel_seq.empty() && is_str_event(indel_seq, left_flank) && a.anchors < 5)
                     continue;
+            }
+            // ── READ-LEVEL JUNCTION SUPPORT ──────────────────────────────────
+            // Until now an indel was accepted on CONTIG-coverage proxies
+            // (covwin / medcov) -- never on evidence that any READ actually
+            // carries the alt allele. That is precisely the job DiscoSNP++
+            // gives kissreads2, and precisely why its indel precision is
+            // 0.88-0.97 against our 0.32-0.63.
+            // Build the ALT haplotype across the junction and require its
+            // k-mers to exist in the reads. The read 31-mer table `kc` is
+            // already built for the coverage model, so this costs nothing
+            // extra. A spurious bubble's alt junction does not occur in any
+            // read and is rejected; a real het indel's does, ~H/2 times.
+            // Keyed on read evidence, not on any per-dataset constant.
+            if (!std::getenv("CAPS_NO_JUNCTION")) {
+                const int FL = 15;
+                if (apos < (uint32_t)FL) continue;
+                std::string alt_hap = cc.substr(apos - FL, FL);
+                if (type == 0) {                       // deletion in alt
+                    size_t rs = apos + (size_t)len;
+                    if (rs + FL + 1 > cc.size()) continue;
+                    alt_hap += cc.substr(rs, FL + 1);
+                } else {                               // insertion in alt
+                    if (apos + FL + 1 > cc.size()) continue;
+                    alt_hap += ins;
+                    alt_hap += cc.substr(apos, FL + 1);
+                }
+                uint32_t best_sup = 0;
+                for (size_t q = 0; q + 31 <= alt_hap.size(); ++q) {
+                    // only k-mers that actually straddle the junction
+                    if (q + 31 <= (size_t)FL) continue;
+                    if (q >= (size_t)FL + (type == 1 ? ins.size() : 0)) break;
+                    best_sup = std::max(best_sup, kcount(alt_hap.substr(q, 31)));
+                }
+                if ((int)best_sup < MC) continue;      // no read carries this allele
+                // Allele fraction ON THE JUNCTION, using the already-frozen
+                // MAF. A true heterozygous indel splits reads ~50/50 between
+                // the ref and alt junctions; a spurious bubble has a ref
+                // junction that is well covered and an alt junction that is
+                // barely there. Comparing the two directly is a far stronger
+                // test than an absolute count, and it introduces no new
+                // constant -- MAF=0.20 is the same threshold the SNV path has
+                // always used for exactly this purpose.
+                {
+                    std::string ref_hap = cc.substr(apos - FL, FL);
+                    size_t rr = apos + (type == 0 ? 0 : 0);
+                    if (rr + FL + 1 <= cc.size()) {
+                        ref_hap += cc.substr(rr, FL + 1);
+                        uint32_t ref_sup = 0;
+                        for (size_t q = 0; q + 31 <= ref_hap.size(); ++q) {
+                            if (q + 31 <= (size_t)FL) continue;
+                            if (q >= (size_t)FL) break;
+                            ref_sup = std::max(ref_sup, kcount(ref_hap.substr(q, 31)));
+                        }
+                        double tot = (double)ref_sup + (double)best_sup;
+                        if (tot > 0 && (double)best_sup / tot < MAF) continue;
+                    }
+                }
             }
             char anchor = cc[apos - 1];
             std::string ref, alt;
