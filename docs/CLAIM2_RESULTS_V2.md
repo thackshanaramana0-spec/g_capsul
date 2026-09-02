@@ -1,22 +1,30 @@
 # Claim 2 — results after the substrate rebuild
 
-Supersedes the "we lose" conclusion in `docs/CLAIM2_RESULTS.md` for SNVs.
+Supersedes the "we lose" conclusion in `docs/CLAIM2_RESULTS.md`.
 Everything here is `rtg vcfeval` (GA4GH), het-restricted, inside the GIAB
 confident regions, on identical reads for every tool, with DiscoSNP++ rerun
 per window rather than quoted (and its POS off-by-one corrected — see
 `docs/DISCOSNP_INTERNALS.md`, without that correction it scores 0.004).
 
-## Headline — HG002 r2 (the designated tuning window)
+## FINAL — 8 evaluations: 5 chr20 windows + 3 unseen individuals
 
-| tool | SNV P | SNV R | **SNV F1** | INDEL F1 |
-|---|---|---|---|---|
-| **CAPSULE** | 0.953–0.976 | 0.805 | **0.873–0.882** | 0.453 |
-| DiscoSNP++ | 0.971 | 0.740 | **0.840** | 0.679 |
+| dataset | CAPSULE SNV | DiscoSNP++ SNV | Δ | CAPSULE INDEL | DiscoSNP++ INDEL |
+|---|---|---|---|---|---|
+| HG002 r2 *(tuning)* | 0.887 | 0.840 | **+0.047** | 0.602 | 0.679 |
+| HG002 r3 | 0.879 | 0.886 | −0.007 | 0.598 | 0.581 |
+| HG002 na | 0.902 | 0.914 | −0.012 | 0.598 | 0.593 |
+| HG002 r4 | 0.888 | 0.812 | **+0.076** | 0.540 | 0.781 |
+| HG002 r5 | 0.926 | 0.922 | **+0.004** | 0.600 | 0.789 |
+| HG003 r3 *(unseen)* | 0.871 | 0.848 | **+0.023** | 0.672 | 0.613 |
+| HG004 r3 *(unseen)* | 0.906 | 0.901 | **+0.005** | 0.500 | 0.598 |
+| HG005 r3 *(unseen)* | 0.860 | 0.870 | −0.010 | 0.542 | 0.667 |
+| **average** | **0.8899** | **0.8741** | **+0.016** | **0.5815** | **0.6626** |
 
-**SNV: we now beat DiscoSNP++** (0.88 vs 0.84), driven by higher recall at
-comparable precision. **INDEL: we still lose** (0.45 vs 0.68).
+**het-SNV: CAPSULE WINS — 0.890 vs 0.874, 5 of 8 evaluations, and the wins
+are larger than the losses** (+0.047/+0.076/+0.023 against −0.007/−0.012/
+−0.010). Session start was **0.419**.
 
-Progression on this window: **0.419 → 0.541 → 0.821 → 0.882**.
+**het-indel: still behind — 0.582 vs 0.663** (3 of 8). Session start ~0.36.
 
 ## How it was found — diagnosis before engineering
 
