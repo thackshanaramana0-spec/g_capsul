@@ -6,8 +6,12 @@ mechanism currently in the archive: what it does, why it exists, and where its
 code lives. This is the reference to read before touching any stage file.
 
 Scope covered here: sequence, read order, names, quality, line 3 — the full
-FASTQ. Not covered: Claim 2 (variant calling) or Claim 3 (addressability),
-which live in the outer `/root/arcs-clean` project, not this sandbox.
+FASTQ (§1-8) — **plus, as of 2026-09-03, Claim 2 (variant calling, §9) and
+Claim 3 (addressability, §10), both of which now live in this sandbox**
+(`include/caps_caller.h` and `stages/capsule_decode.cpp`'s export/coverage/
+query modes respectively), not only in the outer `/root/arcs-clean` project.
+This scope line was wrong for several weeks after Claims 2 and 3 were built
+here — corrected now, not carried forward.
 
 ---
 
@@ -452,3 +456,170 @@ CAPS_NAMES=1 CAPS_QUAL=1 DUMP_LIT=1 DUMP_PERM=1 DUMP_MM=1 \
 `DUMP_PERM=1 DUMP_MM=1` are REQUIRED, not optional debug flags — see the
 failures document — they gate the per-read streams that make the archive
 decodable at all.
+
+---
+
+## 9. Variant calling — `include/caps_caller.h` (Claim 2)
+
+Added 2026-09-03 to this document; the code itself and its numbers predate
+this addition — see `docs/CLAIM2_FINAL_VERDICT.md` for the full evaluation
+history and `docs/CLAIM2_TABLES_AND_INDEL_SCAN.md` for the locked table
+structure. This section covers architecture only.
+
+### 9.0 The one-sentence description
+
+Reference-free heterozygous SNV and indel calling from the SAME
+pseudogenome and read-placement data the encoder already computed for
+compression (`CallData`, populated pre-MEM in `stages/106_inprocess.cpp`,
+gated on `CAPS_CALL=1`) — no separate assembler, no alignment to a
+reference genome, activated as an in-process side effect of compressing.
+
+### 9.1 `CallData` — what the encoder hands the caller
+
+Captured **before** the MEM self-match step removes redundancy (§2.6),
+because calling needs the pre-collapse contig structure, not the
+maximally-deduplicated archive form: `contigs[]` (the pre-MEM chained
+sequences), `read_cid[]`/`read_pos[]`/`read_rc[]`/`read_clip[]` — each
+original read's contig id, offset, strand, and clip amount. A second FASTQ
+pass reloads sequence+quality once `CAPS_CALL=1` is set, since the encoder's
+own in-memory reads may already be partially consumed by that point.
+
+### 9.2 Dual-substrate design — the central architectural decision
+
+A single collapse level cannot serve both SNV and indel calling well, so
+the caller builds the SAME contig set at **two different collapse
+aggressiveness levels**, controlled by `dup_frac` in `collapse_contigs()`:
+
+* **Aggressive collapse (`dup_frac≈0.45`)** for SNV pileup — merges more
+  contigs together, which concentrates read depth and makes minor-allele
+  fraction (`MAF=0.20`, ploidy-scaled via `MAF_K = MAF*2/PLOIDY`) estimation
+  reliable on a diploid sample.
+* **Mild collapse (`dup_frac≈0.92`)** for bubble/indel calling — keeps
+  contigs closer to their pre-collapse form, which preserves the two-path
+  bubble structure (`extract_bubble`, `extract_snv_bubble`) an indel call
+  needs; over-collapsing here merges the very two haplotype paths a bubble
+  call depends on distinguishing.
+
+`build_substrate()` is called twice per input, once per collapse level, and
+`Substrate` (defined at line 353) is the shared result type both paths
+consume downstream.
+
+### 9.3 The three candidate-generation channels
+
+1. **SNV pileup** (aggressive substrate) — per-position allele counting
+   against the ploidy-scaled MAF threshold.
+2. **Bubble/indel extraction** (mild substrate) — `extract_bubble` walks
+   right from a shared anchor comparing two contigs, `scan_pair` does a
+   whole-pair gapped alignment scan for indels the anchor-walk alone
+   misses, and `extract_snv_bubble` is the cross-contig SNV analogue used
+   when a variant sits between contigs rather than within pileup depth on
+   one.
+3. **Positional-clustering indel channel** (`pcluster`, line ~1891) —
+   eBWT2SNP-inspired: clusters reads by a right-context anchor that is
+   unique across the contig set, catching indels neither pileup nor bubble
+   extraction reaches. This channel, plus read-level junction support and
+   closing-anchor (both-ends-anchored bubble) detection, are the three
+   mechanisms that moved indel F1 from ~0.36 to 0.637 over this project's
+   history (`docs/HOW_DISCOSNP_WINS.md` §3).
+
+### 9.4 Multi-allelic emission
+
+`CAPS_PLOIDY=k` admits up to `k` co-occurring alleles at a site and emits a
+native multi-allelic VCF record (`ALT=C,G`), rather than DiscoSNP++'s
+behavior of emitting separate biallelic records plus invalid alt-vs-alt
+rows for the same site — a real capability difference, not a scoring
+artifact (verified real-vs-synthetic distinction in
+`docs/POLYPLOID_BENCHMARK.md`).
+
+### 9.5 Why filtering alone cannot close the remaining indel gap
+
+The structural finding from `docs/HOW_DISCOSNP_WINS.md` §4, load-bearing
+enough to repeat here: CAPSULE's indel candidates are built FROM contigs,
+which are built FROM reads — every candidate is read-supported by
+construction, so a read-validation filter (the mechanism that gives
+DiscoSNP++'s `kissreads2` its precision) has nothing to reject. DiscoSNP++'s
+candidates are graph-traversal *hypotheses* that can be unsupported by any
+single read; ours cannot be. Four filter attempts confirmed this
+empirically (net negative or neutral, every time) — closing the gap
+requires a different candidate *generator* (both-ends k-mer anchoring, the
+eBWT/dBG route in `docs/CALLER_ARCHITECTURE_PLAN.md`), not another filter
+on top of the current one.
+
+### 9.6 Testing
+
+`scripts/test_claim2.sh` (added 2026-09-03) — a synthetic diploid genome
+with known het SNVs and clean (non-homopolymer) het indels, run through the
+real caller → bwa-alignment → `lift_vcf.py` pipeline, checked for recall.
+This is the first automated test this 2132-line file has ever had; see
+`docs/INDUSTRIAL_CHECKLIST_CLAIM2.md` for the bug this test itself had (and
+caught in itself) before being trusted.
+
+---
+
+## 10. Addressability — `stages/capsule_decode.cpp` export/coverage/query (Claim 3)
+
+Added 2026-09-03; code and numbers predate this addition — see
+`docs/CLAIM3_LOCKED.md` for the full evaluation, bug history, and prior-art
+position. This section covers architecture only.
+
+### 10.0 The one-sentence description
+
+Three operations a conventional pipeline computes from scratch — assemble a
+genome, align reads to compute per-base depth, index reads for coordinate
+lookup — are instead served by decoding archive streams the compressor
+already wrote for its own purposes, because the pseudogenome (§2) already
+**is** the assembly, and `pos_abs`/`read_lengths` (§3) already **are** the
+placement index.
+
+### 10.1 Three early-exit modes, one function
+
+`capsule_decode_all()` (`stages/capsule_decode.cpp:164`) takes a `mode`
+argument and returns as soon as the streams that mode needs are decoded —
+none of the three pays for full read reconstruction:
+
+* **`export`** (line 318) — decodes `literal` + `mem_triples` (+ the
+  mismatch-override streams) to rebuild the pseudogenome byte array, emits
+  it as FASTA, stops. No per-read stream touched.
+* **`coverage`** (line 195) — hoisted **above** the pseudogenome rebuild
+  entirely: needs only `PGLEN` (header) and `pos_abs`/`read_lengths`, not
+  one byte of pg content. A difference-array depth computation,
+  O(reads + PGLEN), not O(reads × length).
+* **`query`** (line 390) — the one mode that DOES need the rebuilt pg (it
+  must return actual sequence), then does a linear overlap scan of
+  `pos_abs` against the requested range, one record per UNIQUE read
+  (duplicates share a placement and would return byte-identical records).
+
+### 10.2 The `orig2uid` indexing invariant — and the bug it caused
+
+`pos_abs` is indexed by UNIQUE read; `read_lengths` is indexed by ORIGINAL
+read, always (an invariant `106_inprocess.cpp` states explicitly). Walking
+both with one shared loop counter is only correct when there are zero
+duplicate reads — the first version of `coverage` did exactly this and
+silently dropped every duplicate read's contribution to depth, a 20%
+undercount on E. coli, found and fixed this session
+(`stages/capsule_decode.cpp:208-239`, expanding through `orig2uid_flags`/
+`orig2uid_vals` exactly as the main read-reconstruction path already did).
+Kept here as a permanent architectural note, not just a changelog entry,
+because this exact asymmetry is a standing trap for any future code that
+touches both streams together.
+
+### 10.3 Limitation: `query` is O(archive), not O(range)
+
+No range index exists over `pos_abs` (no interval tree, no sorted-offset
+table) — reads are stored as slices of the pg, so `query` must rebuild the
+whole pg before answering any range. Measured, corrected 2026-09-03 (an
+earlier figure compared against the wrong baseline — see `CLAIM3_LOCKED.md`
+§6.4): query and full reconstruction cost about the same in time (1.62×
+saving), and the real advantage is **output selectivity** — 132× fewer
+reads, 112× fewer bytes returned for a narrow range on E. coli — not
+asymptotic speed.
+
+### 10.4 Testing
+
+`scripts/test_claim3.sh` (added 2026-09-03) — invariant checks (export is
+pure ACGT, coverage's total covered-base-units equals the true sum of read
+lengths, query's full-range record count equals the encoder's own unique
+count) rather than hand-computed expected pg bytes. Verified to actually
+catch the §10.2 bug: running the pre-fix binary against this test's
+synthetic input reproduces an 18.8% coverage undercount, the same failure
+class measured on real data.

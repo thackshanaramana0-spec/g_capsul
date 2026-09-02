@@ -137,10 +137,44 @@ for download, not included here or in the 14-dataset count above.
 ## How to regenerate these tables
 
 ```bash
-bash /tmp/allphases.sh    # or its committed equivalent once promoted into scripts/
-cat /tmp/allph/r.csv
+bash /tmp/allphases.sh    # NOT committed to scripts/ -- a real, named gap,
+                          # see docs/INDUSTRIAL_CHECKLIST_CLAIM1.md
+cat results/phase_a/allphases_14dataset.csv   # rescued from /tmp/allph/r.csv 2026-09-03
 ```
 
 Column order in that CSV: `dataset,raw,p1,p1ok,p2,p2ok,p3,p3ok,spr1,spr2,spr3,gz1,gz2,gz3`.
 A phase's `pN` value is only meaningful where the paired `pNok` column reads
 `OK` — this is the round-trip gate described in Table 3.
+
+---
+
+## Table 4 — Claim 2 competitors (added 2026-09-03)
+
+Not a compression comparison — DiscoSNP++ and Kmer2SNP are the only two
+tools identified as applicable to this exact task (reference-free
+heterozygous variant calling from a single diploid sample; see
+`docs/HET_INDEL_SOTA.md` §2 for the literature survey ruling out
+DeepVariant/GATK/Clair3/etc. as reference-based, and `ska lo`/eBWT2SNP as
+solving a different problem). Full numbers and per-window breakdown live in
+`docs/CLAIM2_TABLES_AND_INDEL_SCAN.md` — this table is the summary anchor.
+
+| tool | het-SNV F1 | het-indel F1 | multi-allelic sites found | notes |
+|---|---|---|---|---|
+| **CAPSULE** | **0.890** | 0.637 | **11/18** | wins SNV + multi-allelic, loses indel |
+| DiscoSNP++ v2.6.2-12 | 0.874 | **0.663** | 0/18 | strongest applicable competitor; cannot emit true multi-allelic records |
+| Kmer2SNP | 0.464 | not applicable (SNP-only by construction) | not applicable | weakest of the three; real compatibility fixes required to even run it, see `docs/KMER2SNP_BENCHMARK.md` |
+
+## Table 5 — Claim 3 competitors (added 2026-09-03)
+
+Addressability has no direct single-tool competitor — it is compared
+per-operation against the conventional pipeline that would otherwise
+compute the same thing. Full numbers in `docs/CLAIM3_LOCKED.md` §6;
+per-operation prior-art position (why none of these tools offer the same
+*combination* of operations) in `docs/CLAIM3_LOCKED.md` §4.
+
+| operation | conventional tool | CAPSULE speedup | spec target |
+|---|---|---|---|
+| export | SPAdes v4.0.0 (spec-exact) | **555-656×** | ≥40× |
+| export | MEGAHIT 1.2.9 (earlier substitute, kept on record) | 254-314× | ≥40× |
+| coverage | bwa 0.7.17 + samtools + mosdepth 0.3.6 | 23-33× | 2-5× |
+| query | full decompression (same binary) | 1.62× (corrected — an earlier 3.3x figure was measured against the wrong baseline, see `CLAIM3_LOCKED.md` §6.4) | not spec'd; real advantage is 132× output selectivity, not time |
