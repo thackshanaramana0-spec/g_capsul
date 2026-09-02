@@ -381,7 +381,12 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
         if(nf){
             auto ndict = dec("names_dict");
             auto nindex= dec("names_index");
-            const uint64_t nw = nmc::decode_to_file(S["names_body"], ndict, nindex, nf, false);
+            // ID_SEQLEN codes "length=NNN" in the header as a reference to the
+            // read's own length, which we have already decoded above into
+            // `lengths` (per ORIGINAL read, the same order names are in). Hand
+            // it over: without this the names column cannot be reconstructed.
+            std::vector<uint32_t> slens(lengths.begin(), lengths.end());
+            const uint64_t nw = nmc::decode_to_file(S["names_body"], ndict, nindex, nf, false, &slens);
             fclose(nf);
             fprintf(stderr,"  names written: %llu -> %s\n",(unsigned long long)nw,npath.c_str());
         }
