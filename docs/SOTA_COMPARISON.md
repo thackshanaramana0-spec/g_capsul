@@ -8,11 +8,11 @@ layers to line up against (SPRING is read-relative, Genozip has no assembly
 step at all); (3) what specifically changes between Phase 1 / Phase 2b /
 Phase 3 and why each tool's number means something different at each phase.
 
-**Status note:** a full 14-dataset Phase1/Phase2b/Phase3 benchmark with
-per-level round-trip verification is running as this is written (see
-`docs/PHASE3_RESULT.md` once complete, or `CLAUDE.md` §6.3 for the interim
-state) — the numbers in Table 3 below are the CURRENT LOCKED figures where
-final, and marked PENDING where the re-run has not yet confirmed them.
+**Status note (updated 2026-09-02, run complete):** the full 14-dataset
+Phase1/Phase2b/Phase3 benchmark finished — every number in Table 3 below is
+final and round-trip-verified, no PENDING rows remain. Source of truth:
+`/tmp/allph/r.csv`. The 15th locked dataset (Utricularia gibba) is still
+queued for download and not included.
 
 ---
 
@@ -106,26 +106,31 @@ does and does not include.
 | **Known result pattern so far** | 12/14 vs SPRING, 14/14 vs Genozip, 7/8 vs PgRC2 (PRE bug-fix numbers, re-confirming) | Adding names IMPROVES the SPRING standing (12/14 → 14/14 in the earlier run) because names is where CAPSULE's margin over SPRING is largest | 7/7 tested so far beat BOTH SPRING and Genozip on the full file — see interim table below |
 | **Datasets affected by the 4-bug-fix session** | ERR552797, SRR40271341 (the >256bp clamp, bug A.1) affected Phase 1 numbers directly | same 2, PLUS SRR40402583/SRR32429602 whose Phase 2b names/line3 columns were fine but whose SEQUENCE column (shared across all 3 phases) was not | all 4 affected, since Phase 3 = Phase 1 + Phase 2b's columns plus quality |
 
-### Phase 3 interim results (7 of 14 datasets complete as of this writing, full run in progress)
+### Phase 3 final results — 14/14 datasets complete, run finished 2026-09-02
 
 All three levels round-trip verified per dataset before being recorded.
+**14/14 whole-file (Phase 3) wins vs both SPRING and Genozip.** Source of
+truth: `/tmp/allph/r.csv` (all 14 rows `p1ok=p2ok=p3ok=OK`).
 
-| dataset | Phase 1 | Phase 2b | Phase 3 (whole FASTQ) |
-|---|---|---|---|
-| ERR5181310 (SARS-CoV-2) | 836,191 | 838,696 | 8,686,774 |
-| SRR554369 (P. aeruginosa) | 8,981,037 | 8,985,459 | 57,320,645 |
-| ERR552797 (M. tuberculosis) | 4,716,998 | 5,983,492 | 46,964,185 |
-| SRR2584863 (E. coli) | 8,225,993 | 12,246,611 | 68,677,977 |
-| SRR29296997 (H. salinarum) | 2,756,247 | 3,748,338 | 15,654,489 |
-| ERR12954017 (S. acidocaldarius) | 3,141,277 | 4,136,647 | 15,159,145 |
-| SRR40402583 (C. jejuni) | 3,806,837 | 5,265,313 | 9,040,464 |
-| SRR40271341 (H. pylori) | 3,853,956 | 4,693,232 | 40,620,675 |
+| dataset | Phase 1 | Phase 2b | Phase 3 (whole FASTQ) | vs SPRING P3 | vs Genozip P3 |
+|---|---|---|---|---|---|
+| ERR5181310 (SARS-CoV-2) | 836,191 | 838,696 | 8,686,774 | −7.5% | −5.8% |
+| SRR554369 (P. aeruginosa) | 8,981,037 | 8,985,459 | 57,320,645 | −3.1% | −35.5% |
+| ERR552797 (M. tuberculosis) | 4,716,998 | 5,983,492 | 46,964,185 | −9.9% | −43.3% |
+| SRR2584863 (E. coli) | 8,225,993 | 12,246,611 | 68,677,977 | −7.2% | −42.6% |
+| SRR29296997 (H. salinarum) | 2,756,247 | 3,748,338 | 15,654,489 | −10.5% | −42.5% |
+| ERR12954017 (S. acidocaldarius) | 3,141,277 | 4,136,647 | 15,159,145 | −10.7% | −61.7% |
+| SRR40402583 (C. jejuni) | 3,806,837 | 5,265,313 | 9,040,464 | −5.3% | −70.7% |
+| SRR40271341 (H. pylori) | 3,853,956 | 4,693,232 | 40,620,675 | −11.2% | −34.7% |
+| ERR17740259 (S. aureus) | 13,522,261 | 20,046,973 | 83,421,422 | −9.6% | −49.2% |
+| SRR37283774 (P. falciparum) | 17,161,828 | 24,135,957 | 67,382,606 | −5.3% | −29.1% |
+| DRR976266 (S. cerevisiae) | 21,822,808 | 30,781,796 | 56,684,465 | −8.2% | −71.8% |
+| SRR36741279 (L. major) | 27,954,749 | 39,252,551 | 106,342,010 | −9.5% | −45.4% |
+| SRR32429602 (HCMV) | 27,444,199 | 34,701,936 | 55,694,667 | −2.9% | −47.9% |
+| SRR39257532 (A. fumigatus) | 37,904,777 | 54,463,895 | 108,558,425 | −29.3% | −52.2% |
 
-**Every row above is now the FIXED, post-bug-fix number, all OK on
-round-trip.** Competitor (SPRING/Genozip) columns for these 8 and the
-remaining 6 datasets are being collected in the same run; see
-`docs/PHASE3_RESULT.md` for the completed head-to-head table once the run
-finishes (`/tmp/allph.log` / `/tmp/allph/r.csv` while in progress).
+Utricularia gibba (`SRR10676752`, the 15th locked dataset) is still queued
+for download, not included here or in the 14-dataset count above.
 
 ---
 

@@ -1,5 +1,9 @@
 # CAPSULE Claim 2 builder — status, 2026-09-02
 
+**Data/tools inventory + the CAPSULE-adapted benchmark scripts live in
+`docs/CLAIM2_DATA_AND_TOOLS.md`** — read that first if you're about to
+actually run a GIAB/synthetic benchmark rather than extend the caller.
+
 Reference-free variant calling ported from the outer ARCS project's caller
 (`/root/arcs-clean/src/caller.cpp`) and wired directly onto CAPSULE's own
 assembly. This is the first working end-to-end version — smoke-tested, not

@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# CAPSULE version of the outer ARCS project's run_giab_indel.sh: REAL-GIAB
+# reference-free SNV+indel benchmark, HG002 chr20:2.0-2.4M, ~30x, scored by
+# rtg vcfeval against GIAB v4.2.1 truth restricted to het + the confident BED.
+# Only the caller invocation differs from the ARCS original.
+#   usage: run_giab_indel_capsule.sh <capsule_exe> <scripts_dir> <reads.fq> <ref.fa>
+set -e
+export PATH=~/miniconda3/bin:$PATH
+CAPS="$1"; SC="$2"; READS="$3"; REF="$4"
+CHROM=20; RLO=2000000; RHI=2400000; REGION="$CHROM:$RLO-$RHI"
+WD=~/giab_indel_capsule; mkdir -p "$WD"; cd "$WD"
+FTP=https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/release/AshkenazimTrio/HG002_NA24385_son/NISTv4.2.1/GRCh37
+VCFURL="$FTP/HG002_GRCh37_1_22_v4.2.1_benchmark.vcf.gz"
+BEDURL="$FTP/HG002_GRCh37_1_22_v4.2.1_benchmark_noinconsistent.bed"
+
+# 1. CAPSULE reference-free call + dump contigs (fixed MAXMAP/MINOV, not the
+#    encode_adaptive.sh sweep -- see docs/CLAIM2_BUILDER.md for why).
+export CAPS_CALL=1 CALL_VCF="$WD/calls.vcf" CAPS_DUMP_CONTIGS="$WD/contigs.tsv"
+[ -s calls.vcf ] || "$CAPS" "$READS" 3 16 16 22 16 16 1 24 64 1 > /dev/null 2> capsule_call.log
+grep -E "CAPS-CALL" capsule_call.log || true
+awk -F'\t' '{print ">"$1"\n"$2}' contigs.tsv > contigs.fa
+
+# 2. Place contigs (eval-only coordinate lift)
+[ -s "$REF.bwt" ] || bwa index "$REF" 2>/dev/null
+bwa mem -t4 "$REF" contigs.fa 2>/dev/null > c2r.sam
+
+# 3. Lift contig-coordinate calls to genome coords
+python3 "$SC/lift_vcf.py" calls.vcf c2r.sam "$REF" $CHROM lifted.vcf contigs.fa
+
+# 4. Truth for the region (remote tabix), header patched with contig length
+tabix -h "$VCFURL" "$REGION" 2>/dev/null | awk -v OFS='\t' '
+  /^##contig/{next} /^#CHROM/{print "##contig=<ID=20,length=63025520>"; print; next}
+  /^#/{print; next} {print}' > truth.vcf
+
+# 5. Confident BED subset to the eval region (download once)
+[ -s giab_conf.bed ] || curl -s "$BEDURL" -o giab_conf.bed
+awk -v c=$CHROM -v lo=$RLO -v hi=$RHI '$1==c && $3>lo && $2<hi{
+  s=($2>lo?$2:lo); e=($3<hi?$3:hi); if(e>s) print c"\t"s"\t"e}' giab_conf.bed > regions.bed
+echo "confident bp in region: $(awk '{n+=$3-$2}END{print n}' regions.bed)"
+
+# 6. rtg SDF + split SNV/indel + score each restricted to the confident region
+rm -rf sdf; rtg format -o sdf "$REF" > /dev/null 2>&1
+snv()   { awk -F'\t' '/^#/{print;next} length($4)==1 && length($5)==1'; }
+indel() { awk -F'\t' '/^#/{print;next} length($4)!=1 || length($5)!=1'; }
+het()   { awk -F'\t' '/^#/{print;next} {split($10,g,":"); gt=g[1]; if(gt=="0/1"||gt=="1/0"||gt=="0|1"||gt=="1|0") print}'; }
+prep(){ eval "$3" < "$1" > "$2.v.vcf"
+  (grep '^#' "$2.v.vcf"; grep -v '^#' "$2.v.vcf"|sort -k2,2n) > "$2.s.vcf"
+  bcftools norm -f "$REF" -m -any "$2.s.vcf" 2>/dev/null | bcftools sort 2>/dev/null | bgzip > "$2.vcf.gz" \
+    || { bgzip -c "$2.s.vcf" > "$2.vcf.gz"; }
+  tabix -f -p vcf "$2.vcf.gz"; }
+prep truth.vcf  t_snv   'het | snv'
+prep truth.vcf  t_ind   'het | indel'
+prep lifted.vcf c_snv   snv
+prep lifted.vcf c_ind   indel
+score(){ rm -rf "e_$1"; rtg vcfeval -b "$2" -c "$3" -t sdf --squash-ploidy \
+    --bed-regions regions.bed -o "e_$1" >/dev/null 2>&1 || true
+  if [ -f "e_$1/summary.txt" ]; then
+    awk 'NR>2{tp=$3;fp=$4;fn=$5;p=$6;r=$7;f=$8} END{printf "%-6s TP=%s FP=%s FN=%s  P=%.3f R=%.3f F1=%.3f\n","'$1'",tp,fp,fn,p,r,f}' "e_$1/summary.txt"
+  else echo "$1: no summary"; fi; }
+echo "======== REAL-GIAB HG002 chr20:2.0-2.4M — CAPSULE — rtg vcfeval (gold-standard) ========"
+score SNV   t_snv.vcf.gz c_snv.vcf.gz
+score INDEL t_ind.vcf.gz c_ind.vcf.gz
+echo "=========================================================================================="
+echo "truth het-indel in region: $(zcat t_ind.vcf.gz|grep -vc '^#')   capsule indel calls: $(zcat c_ind.vcf.gz|grep -vc '^#')"
