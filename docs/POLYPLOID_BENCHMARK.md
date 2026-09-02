@@ -141,3 +141,47 @@ from a broken truth set or a favourable representation. Stated honestly:
   per 763, so the capability is unexercised there.
 
 The defensible paper claim is the capability, not an accuracy win.
+
+---
+
+## 6. REAL-DATA RESULT — multi-allelic calling, HG002 chr20:1–6 Mb
+
+The first polyploid/multi-allelic measurement in this project made on **real
+reads with real truth**. 971,250 real Illumina reads at 30×, GIAB v4.2.1 truth
+restricted to the confident regions, 4,376 truth SNV sites after joining, both
+tools normalised identically (SNV-only, REF must match the genome, records
+joined to multi-allelic form, DiscoSNP++'s POS off-by-one corrected).
+
+### Overall SNV accuracy
+
+| | TP | FP | FN | P | R | **F1** |
+|---|---|---|---|---|---|---|
+| **CAPSULE** | 3316 | 192 | 930 | 0.945 | **0.781** | **0.855** |
+| DiscoSNP++ | 3247 | 112 | 999 | **0.967** | 0.765 | 0.854 |
+
+CAPSULE wins on recall and on F1 (marginally), DiscoSNP++ on precision. This is
+**12× more truth sites than a single 400 kb window**, so it is the most
+statistically substantial head-to-head in the project.
+
+### Multi-allelic sites — the capability under test
+
+| | sites called of 7 | with BOTH alleles correct |
+|---|---|---|
+| **CAPSULE** | **5** | **5** |
+| DiscoSNP++ | **0** | **0** |
+
+Examples: truth `A>G,T` → CAPSULE `G,T`; truth `G>C,T` → CAPSULE `C,T`.
+DiscoSNP++ returns nothing at any of them.
+
+Record counts confirm the structural difference: CAPSULE emitted **8
+multi-allelic records**, DiscoSNP++ emitted **0**. It cannot represent two
+alternate alleles at one position, so every GT=1/2 site is out of its reach.
+
+### Verdict for this class
+
+**On real data CAPSULE wins multi-allelic calling outright (5/7 vs 0/7) while
+matching DiscoSNP++ on overall SNV F1 (0.855 vs 0.854).** Unlike the synthetic
+triploid comparison — where a broken generator and the choice of representation
+decided the result — this is real reads, real truth, identical normalisation,
+and the margin is a capability the competitor does not have rather than a
+threshold artefact.
