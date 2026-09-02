@@ -899,6 +899,19 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         cntout = bc; return best;
     };
 
+    // PLOIDY-SCALED MINOR-ALLELE THRESHOLD.
+    // MAF=0.20 is a DIPLOID constant: a heterozygous allele sits at ~0.5, so a
+    // 0.20 floor is generous. In a k-ploid sample a single-haplotype allele
+    // sits at ~1/k -- 0.33 at k=3, 0.25 at k=4 -- and sampling plus
+    // contig-frame partial coverage pushes real alleles below 0.20 (measured:
+    // a true site at AF 0.167 was rejected, and recall on synthetic triploid
+    // was 0.950-0.975 against DiscoSNP++'s 1.000 across three seeds, entirely
+    // on missed sites).
+    // Scale by 2/k so the expected allele fraction and the threshold move
+    // together. k=2 gives exactly MAF, so the diploid path -- and every
+    // het-SNV result -- is byte-identical.
+    const double MAF_K = MAF * 2.0 / (double)PLOIDY;
+
     // ── 5. Frozen filters → kept calls ──
     // DEPTH GUARD, restored to its original semantic. ARCS's own description
     // is "reject columns deeper than 2.5x the MEDIAN CANDIDATE DEPTH
@@ -972,7 +985,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         // fitted value. KHI itself is left untouched for the uncollapsed path.
         const double kmer_ceiling = collapse_ran ? 1.5 * (double)H : KHI * (double)H;
         if ((double)std::max(cmaj, cmin) > kmer_ceiling) continue;
-        if ((double)c.cnt[c.mn] / c.d < MAF) continue;
+        if ((double)c.cnt[c.mn] / c.d < MAF_K) continue;
         int o[4] = {0,1,2,3};
         std::sort(o, o + 4, [&](int a, int b){ return c.cnt[a] > c.cnt[b]; });
         if (PLOIDY < 4 && (double)c.cnt[o[PLOIDY]] > TRI * c.d) continue;
@@ -1009,7 +1022,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             for (int t = 0; t < PLOIDY; ++t) {
                 int a = o[t];
                 if (a == refb) continue;
-                if ((double)c.cnt[a] / c.d < MAF) continue;
+                if ((double)c.cnt[a] / c.d < MAF_K) continue;
                 if (!alts.empty()) alts += ",";
                 alts += "ACGT"[a & 3];
                 ++nalt;
