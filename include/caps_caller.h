@@ -564,6 +564,89 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
     if (const char* pe = std::getenv("CAPS_PLOIDY")) { int v = atoi(pe); if (v >= 2 && v <= 4) PLOIDY = v; }
 
 
+    // ── READ SEED INDEX (for the read-substring test below) ──────────────
+    // EBWT2SNP's precision mechanism, from its paper: every emitted fragment
+    // of length 2k+1 must be an actual SUBSTRING of at least C real READS
+    // (within Hamming distance 2). It reports 99.13% precision against
+    // DiscoSNP++'s 77.80% on chr22, and that guarantee is why.
+    // Our previous test only asked whether individual 31-mers appear in the
+    // read k-mer TABLE -- far weaker, because a CHIMERIC junction (two
+    // paralogs joined at a shared anchor) can have every one of its 31-mers
+    // present, each contributed by a different read, while no single read
+    // contains the whole fragment. That is precisely our false-positive class.
+    std::unordered_map<uint64_t, std::vector<std::pair<uint32_t,uint32_t>>> ridx;
+    const bool WANT_RSUB = std::getenv("CAPS_NO_READSUB") == nullptr;
+    if (WANT_RSUB) {
+        ridx.reserve(1u << 22);
+        for (uint32_t i = 0; i < (uint32_t)seqs.size(); ++i) {
+            const std::string& q = seqs[i];
+            for (size_t j = 0; j + 25 <= q.size(); j += 5) {
+                uint64_t v; if (!detail::pack25(q.data() + j, v)) continue;
+                uint64_t rv = detail::rc25(v), cn = v < rv ? v : rv;
+                auto& vec = ridx[cn];
+                if (vec.size() < 40) vec.push_back({i, (uint32_t)j});
+            }
+        }
+    }
+    // Is `frag` a substring of at least `need` reads, allowing <= tol mismatches?
+    auto read_support = [&](const std::string& frag, int need, int tol) -> bool {
+        if (!WANT_RSUB) return true;
+        if (frag.size() < 25) return true;
+        std::unordered_set<uint32_t> hits;
+        const int L = (int)frag.size();
+        // Query EVERY fragment offset. The read index is built at stride 5,
+        // so a genuine containment is only discoverable when some indexed
+        // read position falls inside the fragment -- querying the fragment
+        // at stride 5 as well made that a 1-in-5 coincidence and silently
+        // rejected ~80% of true matches (measured: indel F1 collapsed to
+        // 0.344 before this fix).
+        for (int off = 0; off + 25 <= L; off += 1) {
+            uint64_t v; if (!detail::pack25(frag.data() + off, v)) continue;
+            uint64_t rv = detail::rc25(v), cn = v < rv ? v : rv;
+            auto it = ridx.find(cn);
+            if (it == ridx.end()) continue;
+            for (auto& pr : it->second) {
+                const std::string& q = seqs[pr.first];
+                // try the read forward and reverse-complemented
+                for (int st = 0; st < 2; ++st) {
+                    std::string qq = st ? detail::rc_str(q) : q;
+                    // the seed sits at pr.second (fwd) -- for rc, recompute by search
+                    for (int shift = -2; shift <= 2; ++shift) {
+                        long start = (st ? -1 : (long)pr.second - off + shift);
+                        if (st) break;                       // rc handled by frag rc below
+                        if (start < 0 || start + L > (long)qq.size()) continue;
+                        int mm = 0;
+                        for (int t = 0; t < L && mm <= tol; ++t)
+                            if (qq[(size_t)(start + t)] != frag[(size_t)t]) ++mm;
+                        if (mm <= tol) { hits.insert(pr.first); break; }
+                    }
+                }
+                if ((int)hits.size() >= need) return true;
+            }
+        }
+        if ((int)hits.size() >= need) return true;
+        // also try the reverse complement of the fragment
+        std::string rf = detail::rc_str(frag);
+        if (rf == frag) return false;
+        for (int off = 0; off + 25 <= L; off += 1) {
+            uint64_t v; if (!detail::pack25(rf.data() + off, v)) continue;
+            uint64_t rv = detail::rc25(v), cn = v < rv ? v : rv;
+            auto it = ridx.find(cn);
+            if (it == ridx.end()) continue;
+            for (auto& pr : it->second) {
+                const std::string& q = seqs[pr.first];
+                long start = (long)pr.second - off;
+                if (start < 0 || start + L > (long)q.size()) continue;
+                int mm = 0;
+                for (int t = 0; t < L && mm <= tol; ++t)
+                    if (q[(size_t)(start + t)] != rf[(size_t)t]) ++mm;
+                if (mm <= tol) hits.insert(pr.first);
+                if ((int)hits.size() >= need) return true;
+            }
+        }
+        return (int)hits.size() >= need;
+    };
+
     // ── 1. Internal canonical-31-mer counts ──
     std::unordered_map<uint64_t, uint32_t> kc;
     kc.reserve(1u << 21);
@@ -1087,18 +1170,41 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             // read and is rejected; a real het indel's does, ~H/2 times.
             // Keyed on read evidence, not on any per-dataset constant.
             if (!std::getenv("CAPS_NO_JUNCTION")) {
-                const int FL = 15;
-                if (apos < (uint32_t)FL) continue;
-                std::string alt_hap = cc.substr(apos - FL, FL);
-                if (type == 0) {                       // deletion in alt
-                    size_t rs = apos + (size_t)len;
-                    if (rs + FL + 1 > cc.size()) continue;
-                    alt_hap += cc.substr(rs, FL + 1);
-                } else {                               // insertion in alt
-                    if (apos + FL + 1 > cc.size()) continue;
-                    alt_hap += ins;
-                    alt_hap += cc.substr(apos, FL + 1);
-                }
+                // Fragment half-length. EBWT2SNP emits 2k+1 with k=30 (61 bp)
+                // and requires that whole fragment to be a read substring --
+                // the length is what gives the test its power. At FL=15 (31 bp)
+                // the test rejected nothing, because a 31 bp window around a
+                // chimeric junction still occurs in some read by chance.
+                // MEASURED: 31bp (FL=15) is the optimum here, not EBWT2SNP's
+                // 61bp. Five-window mean indel F1 0.5976 (15) / 0.5782 (30) /
+                // 0.5540 (45), and adaptive context did not recover it, so the
+                // loss is not short contigs truncating the window -- the longer
+                // fragment genuinely rejects TRUE indels. Reason: our alt
+                // fragment splices the REF contig's flanks onto the ALT allele,
+                // so any nearby heterozygous SNV makes it a sequence no read
+                // ever contains. EBWT2SNP does not have this problem because it
+                // reads both haplotype fragments straight out of the eBWT
+                // cluster instead of constructing one.
+                int FL = 15;
+                if (const char* e = std::getenv("CAPS_JUNC_FL")) FL = atoi(e);
+                // ADAPTIVE CONTEXT. Fixing the half-length and REJECTING any
+                // candidate without that much contig either side is what made
+                // longer fragments look harmful (five-window mean indel F1
+                // 0.5976 at 31bp, 0.5782 at 61bp, 0.5540 at 91bp): the loss was
+                // not bad candidates being caught, it was good candidates near
+                // contig ends being discarded unexamined. Our contigs are short,
+                // so take as much context as EXISTS, down to a floor, and judge
+                // the candidate on that.
+                const int FLMIN = 15;
+                int fl_l = (int)std::min<size_t>((size_t)FL, apos);
+                size_t rs = apos + (type == 0 ? (size_t)len : 0);
+                if (rs > cc.size()) continue;
+                int fl_r = (int)std::min<size_t>((size_t)FL + 1, cc.size() - rs);
+                if (fl_l < FLMIN || fl_r < FLMIN) continue;
+                std::string alt_hap = cc.substr(apos - (size_t)fl_l, (size_t)fl_l);
+                if (type == 1) alt_hap += ins;         // insertion in alt
+                alt_hap += cc.substr(rs, (size_t)fl_r);
+                const int FL_used = std::min(fl_l, fl_r);
                 // COHERENCE mode. DiscoSNP++'s precision (0.91 vs our 0.73)
                 // comes from kissreads2, which requires every position of a
                 // bubble path to be read-covered -- not merely one point of it.
@@ -1111,8 +1217,8 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 bool any_j = false;
                 for (size_t q = 0; q + 31 <= alt_hap.size(); ++q) {
                     // only k-mers that actually straddle the junction
-                    if (q + 31 <= (size_t)FL) continue;
-                    if (q >= (size_t)FL + (type == 1 ? ins.size() : 0)) break;
+                    if (q + 31 <= (size_t)fl_l) continue;
+                    if (q >= (size_t)fl_l + (type == 1 ? ins.size() : 0)) break;
                     uint32_t c1 = kcount(alt_hap.substr(q, 31));
                     any_j = true;
                     best_sup = COH ? std::min(best_sup, c1) : std::max(best_sup, c1);
@@ -1121,6 +1227,12 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 int MINSUP = MC;
                 if (const char* e = std::getenv("CAPS_INDEL_SUP")) MINSUP = atoi(e);
                 if ((int)best_sup < MINSUP) continue;  // no read carries this allele
+                // EBWT2SNP's actual guarantee: the emitted fragment must be a
+                // SUBSTRING of at least C real reads (Hamming <= 2), not merely
+                // a sequence whose k-mers all appear somewhere. A chimeric
+                // bubble fails this even when every one of its k-mers exists.
+                (void)FL_used;
+                if (!read_support(alt_hap, MC, 2)) continue;
                 // Allele fraction ON THE JUNCTION, using the already-frozen
                 // MAF. A true heterozygous indel splits reads ~50/50 between
                 // the ref and alt junctions; a spurious bubble has a ref
@@ -1130,14 +1242,14 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 // constant -- MAF=0.20 is the same threshold the SNV path has
                 // always used for exactly this purpose.
                 {
-                    std::string ref_hap = cc.substr(apos - FL, FL);
-                    size_t rr = apos + (type == 0 ? 0 : 0);
-                    if (rr + FL + 1 <= cc.size()) {
-                        ref_hap += cc.substr(rr, FL + 1);
+                    std::string ref_hap = cc.substr(apos - (size_t)fl_l, (size_t)fl_l);
+                    size_t rr = apos;
+                    if (rr + (size_t)fl_r <= cc.size()) {
+                        ref_hap += cc.substr(rr, (size_t)fl_r);
                         uint32_t ref_sup = 0;
                         for (size_t q = 0; q + 31 <= ref_hap.size(); ++q) {
-                            if (q + 31 <= (size_t)FL) continue;
-                            if (q >= (size_t)FL) break;
+                            if (q + 31 <= (size_t)fl_l) continue;
+                            if (q >= (size_t)fl_l) break;
                             ref_sup = std::max(ref_sup, kcount(ref_hap.substr(q, 31)));
                         }
                         double tot = (double)ref_sup + (double)best_sup;
