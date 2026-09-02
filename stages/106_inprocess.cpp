@@ -1797,19 +1797,24 @@ int main(int argc,char** argv){
         std::vector<std::string> call_seqs, call_quals;
         call_seqs.reserve(n_orig); call_quals.reserve(n_orig);
         {
-            FILE* fin=fopen(g_input_path.c_str(),"r");
+            // std::getline, NOT fgets with a fixed buffer: the main load pass
+            // uses getline, and any read line longer than the buffer would be
+            // split across two fgets calls, desynchronising the 4-line rhythm
+            // and silently misindexing every subsequent read against
+            // orig2uid. Same failure class as the four silent data-loss bugs
+            // this project already found the hard way -- match the load pass
+            // exactly rather than approximately.
+            std::ifstream fin(g_input_path);
             if(!fin){ fprintf(stderr,"caps_caller: cannot reopen %s\n",g_input_path.c_str()); }
             else{
-                char l1[4096],l2[4096],l3[4096],l4[4096];
-                while(fgets(l1,sizeof l1,fin)){
-                    if(!fgets(l2,sizeof l2,fin)||!fgets(l3,sizeof l3,fin)||!fgets(l4,sizeof l4,fin)) break;
-                    size_t sl=strlen(l2); while(sl&&(l2[sl-1]=='\n'||l2[sl-1]=='\r')) l2[--sl]=0;
-                    size_t ql=strlen(l4); while(ql&&(l4[ql-1]=='\n'||l4[ql-1]=='\r')) l4[--ql]=0;
-                    if(sl>1023) continue;                      // mirror the load-pass skip
-                    call_seqs.emplace_back(l2,sl);
-                    call_quals.emplace_back(l4,ql);
+                std::string a,b,c,d;
+                while(std::getline(fin,a)&&std::getline(fin,b)&&std::getline(fin,c)&&std::getline(fin,d)){
+                    while(!b.empty()&&(b.back()=='\n'||b.back()=='\r')) b.pop_back();
+                    while(!d.empty()&&(d.back()=='\n'||d.back()=='\r')) d.pop_back();
+                    if(b.size()>1023) continue;                // mirror the load-pass skip
+                    call_seqs.push_back(b);
+                    call_quals.push_back(d);
                 }
-                fclose(fin);
             }
         }
         if(call_seqs.size()!=n_orig)
