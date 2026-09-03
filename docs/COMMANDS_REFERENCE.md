@@ -114,9 +114,27 @@ tuning, per this project's own held-out discipline):
 bash scripts/run_window_bench_capsule.sh /tmp/best106 scripts ~/refs/chr20.fa HG002 r2
 ```
 
-**Real multi-allelic validation** (synthetic-triploid or real-pooled
-workdir must already contain `reads.fq`; `K` is the ploidy passed to
-`CAPS_PLOIDY`):
+**T5.2 real multi-allelic benchmark** (one command, downloads/streams the
+reads itself — a SINGLE individual's own GT=1/2 sites, NOT pooled samples;
+pooling was tried and refuted, see `docs/POLYPLOID_BENCHMARK.md` §1):
+```bash
+bash scripts/run_capsule.sh 2 multiallelic HG002 20:1000000-6000000
+# or directly:
+bash scripts/run_multiallelic_bench_capsule.sh /tmp/best106 scripts ~/refs/chr20.fa HG002 20:1000000-6000000
+```
+
+**T5.3 real tetraploid benchmark** (one command — mixes two real
+individuals' real reads per Cooke, Wedge & Lunter 2022; nothing simulated):
+```bash
+bash scripts/run_capsule.sh 2 tetraploid HG003 HG004 4
+# or directly:
+bash scripts/run_tetraploid_bench_capsule.sh /tmp/best106 scripts ~/refs/chr20.fa HG003 HG004 4
+```
+
+**Older, lower-level polyploid scorer** (assumes a workdir with `reads.fq`,
+`truth.vcf`, `ref.fa`, `regions.bed` already built by hand — superseded for
+real T5.2/T5.3 use by the two one-command scripts above, kept for synthetic
+sanity checks with `CAPS_PLOIDY` set arbitrarily):
 ```bash
 bash scripts/run_polyploid_bench_capsule.sh /path/to/workdir /tmp/best106 scripts 3
 ```
