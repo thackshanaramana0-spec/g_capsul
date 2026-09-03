@@ -101,12 +101,52 @@ def hapflank_lift(rn,cp1,cref,calt):
     if gp0 is None: return None
     gpos=gp0[0]
     lo=max(0,gpos-300); hi=min(len(refseq),gpos+300); gw=refseq[lo:hi].upper()
-    # match whichever haplotype the genome carries; that allele becomes REF, the other ALT
+    # Match whichever haplotype the genome carries; that allele becomes REF, the
+    # other ALT.
+    #
+    # POLARITY FIX (2026-09-03). This loop used to take the FIRST haplotype that
+    # matched anywhere in the +/-300bp window, which silently made hapR win by
+    # loop order. Inside a tandem repeat BOTH haplotypes match -- shifted copies
+    # of the repeat unit exist on either side -- so the winner was decided by
+    # iteration order rather than by evidence, and at repeats it lands on the
+    # wrong one. Measured on the tetraploid benchmark: truth TTTTA->T (deletion)
+    # came out as T->Tttta (insertion) at 20:3332481, TTTTATTTA->T as
+    # T->TTTTATTTA at 20:3346020, GCA->G as G->GCA at 20:3097933 -- the same two
+    # haplotypes each time, with REF and ALT swapped.
+    #
+    # The alignment already knows where this locus belongs: c2g() returns the
+    # genome coordinate of the contig anchor, so a TRUE haplotype match starts
+    # at about (gpos-1-K) while a repeat-shifted spurious match starts a whole
+    # number of repeat units away. Collect every candidate match and keep the
+    # one closest to that expected start. Ties keep the previous hapR-first
+    # order, so any locus where only one haplotype matches is unchanged.
+    _cands=[]
     for hap,mine,other in ((hapR,cref,calt),(hapO,calt,cref)):
         for ori in (hap, rc(hap)):
-            k=gw.find(ori)
-            if k<0: continue
-            gstart=lo+k                                  # 0-based genome start of matched haplotype
+            st=0
+            while True:
+                k=gw.find(ori,st)
+                if k<0: break
+                _cands.append((abs((lo+k)-(gpos-1-K)), lo+k, hap, ori, mine, other))
+                st=k+1
+    _cands.sort(key=lambda c:c[0])
+    # AMBIGUITY GUARD (2026-09-03). Inside a tandem repeat BOTH haplotypes match
+    # the genome window, so a sequence search cannot decide which one the genome
+    # actually carries -- and picking either way is a coin flip on insertion vs
+    # deletion polarity. When both hapR and hapO match, refuse to decide here and
+    # fall through to the CIGAR-based path below, which has real alignment
+    # evidence (a D operation in the reference contig's own alignment means the
+    # genome carries those bases, i.e. the event is a deletion). Measured on the
+    # tetraploid benchmark: contig_97 aligns 7M1I433M8D294M -- an explicit 8bp
+    # deletion -- at the (TTTA)n locus 20:3346020 where truth is TTTTATTTA->T and
+    # the sequence-search path emitted the inverse T->TTTTATTTA.
+    if len({id(c[2]) for c in _cands}) > 1:
+        _hapset = {('R' if c[2] is hapR else 'O') for c in _cands}
+        if len(_hapset) > 1:
+            return None
+    for _d,_gs,hap,ori,mine,other in _cands:
+        if True:
+            gstart=_gs                                   # 0-based genome start of matched haplotype
             if ori==hap:                                 # forward strand: allele sits after lf
                 apos=gstart+K                            # 0-based anchor position
                 ref_al=mine; alt_al=other                # genome frame == contig frame
@@ -193,6 +233,27 @@ for line in open(CALLS):
             op = cig_op_at(rn, body0)
             if op=='M':   is_del=True                     # body aligns to genome
             elif op in ('I','S'): is_del=False            # body inserted vs genome
+        else:
+            # INSERTION-TYPE, CIGAR EVIDENCE (2026-09-03). Previously the CIGAR
+            # was consulted ONLY when the caller had already guessed deletion,
+            # so an insertion-labelled call never got the benefit of the
+            # alignment -- even though the caller's ref/alt polarity is
+            # arbitrary (it labels the longer contig "reference"). If the
+            # reference contig's own alignment carries a D/N operation of the
+            # same length within a repeat-unit's reach of the anchor, the GENOME
+            # holds those bases and the event is really a deletion.
+            if rn in cmap:
+                _rs,_cig,_rev,_clen = cmap[rn]
+                _t = (_clen-1-((cp1-1))) if _rev else (cp1-1)
+                _ri, _qi = 0, 0
+                for _n,_op in re.findall(r'(\d+)([MIDNSHP=X])', _cig):
+                    _n=int(_n)
+                    if _op in 'M=X': _ri+=_n; _qi+=_n
+                    elif _op in 'IS': _qi+=_n
+                    elif _op in 'DN':
+                        if _n==d and abs(_qi-_t) <= max(2*d, 12):
+                            is_del=True; break
+                        _ri+=_n
         if is_del is None:                                # insertion-type, or CIGAR indeterminate
             if not rev: is_del = (refseq[gpos:gpos+d].upper()==fwd)
             else:       is_del = (refseq[gpos-d:gpos].upper()==fwd)
