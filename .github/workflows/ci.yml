@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [c_star_pg_advance, main]
+  pull_request:
+    branches: [c_star_pg_advance, main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential liblzma-dev bwa bcftools tabix samtools
+
+      - name: Build encoder
+        run: bash scripts/build106.sh /tmp/best106
+
+      - name: Build decoder
+        run: bash scripts/build_decode.sh /tmp/capsule_decode
+
+      - name: Generate a small synthetic FASTQ for the lossless check
+        run: |
+          python3 - <<'PY'
+          import random
+          random.seed(1)
+          with open('/tmp/ci_reads.fq', 'w') as f:
+              for i in range(2000):
+                  seq = ''.join(random.choice('ACGT') for _ in range(100))
+                  qual = 'I' * 100
+                  f.write(f"@read{i}\n{seq}\n+\n{qual}\n")
+          PY
+
+      - name: COMPACT — lossless round-trip (Claim 1)
+        run: BEST=/tmp/best106 bash scripts/verify_lossless.sh /tmp/ci_reads.fq /tmp/ci_verify
+
+      - name: FAITHFUL — caller regression test (Claim 2)
+        run: bash scripts/test_claim2.sh /tmp/ci_claim2
+
+      - name: ADDRESSABLE — decoder regression test (Claim 3)
+        run: bash scripts/test_claim3.sh /tmp/ci_claim3

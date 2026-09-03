@@ -1,6 +1,6 @@
 # CAPSULE: Compact, Addressable, Pseudogenome-Structured, Unified Lossless Compressor
 
-[![Build](https://img.shields.io/badge/CI-not%20yet%20wired-lightgrey.svg)](docs/INDUSTRIAL_CHECKLIST_OVERALL.md)
+[![CI](https://github.com/thackshanaramana0-spec/c_star_pg_advance/actions/workflows/ci.yml/badge.svg)](https://github.com/thackshanaramana0-spec/c_star_pg_advance/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-undecided-lightgrey.svg)](docs/INDUSTRIAL_CHECKLIST_OVERALL.md)
 [![Platform](https://img.shields.io/badge/platform-Linux-lightgrey.svg)](#build)
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://en.cppreference.com/w/cpp/17)
