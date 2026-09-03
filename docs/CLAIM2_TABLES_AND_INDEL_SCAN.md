@@ -17,11 +17,11 @@ than the honest loss is.
 
 | table | content | result |
 |---|---|---|
-| **T3** | het-SNV F1 — CAPSULE vs DiscoSNP++ vs Kmer2SNP, HG002-HG005 chr20 | **WIN** 0.890 vs 0.874 vs 0.464 |
-| **T4** | coverage sweep — CAPSULE F1 at 10×/15×/20×/30× (HG002 only) | sensitivity curve, not a win/loss comparison |
-| **T5** | het-indel F1 — CAPSULE vs DiscoSNP++, HG002-HG005 chr20 | **WIN as of 2026-09-03: 0.666 vs 0.639**, 5 of 8 evaluations. Previously recorded as a loss (0.637 vs 0.663); a scoring bug that misfiled multi-allelic SNVs as indel false positives — and could only ever penalise CAPSULE — was found and fixed. Neither caller changed. Full evidence, and the check that the win is invariant to scoring convention, in `docs/HET_INDEL_FRESH_SCAN.md` Finding 4. |
-| **T5.2** *(new)* | multi-allelic sites recovered — CAPSULE vs DiscoSNP++, real diploid GT=1/2 sites | **WIN** 11/18 vs 0/18, replicated on two independent chr20 regions |
-| **T5.3** *(new)* | tetraploid SNV + indel F1 — CAPSULE vs DiscoSNP++, real HG003+HG004 mix (Cooke et al. 2022 method) | **SNV WIN** 0.836 vs 0.782; **indel WIN** 0.567 vs 0.553 (see §T5.3 below) |
+| **T3** | het-SNV F1 — G_CAPSUL vs DiscoSNP++ vs Kmer2SNP, HG002-HG005 chr20 | **WIN** 0.890 vs 0.874 vs 0.464 |
+| **T4** | coverage sweep — G_CAPSUL F1 at 10×/15×/20×/30× (HG002 only) | sensitivity curve, not a win/loss comparison |
+| **T5** | het-indel F1 — G_CAPSUL vs DiscoSNP++, HG002-HG005 chr20 | **WIN as of 2026-09-03: 0.666 vs 0.639**, 5 of 8 evaluations. Previously recorded as a loss (0.637 vs 0.663); a scoring bug that misfiled multi-allelic SNVs as indel false positives — and could only ever penalise G_CAPSUL — was found and fixed. Neither caller changed. Full evidence, and the check that the win is invariant to scoring convention, in `docs/HET_INDEL_FRESH_SCAN.md` Finding 4. |
+| **T5.2** *(new)* | multi-allelic sites recovered — G_CAPSUL vs DiscoSNP++, real diploid GT=1/2 sites | **WIN** 11/18 vs 0/18, replicated on two independent chr20 regions |
+| **T5.3** *(new)* | tetraploid SNV + indel F1 — G_CAPSUL vs DiscoSNP++, real HG003+HG004 mix (Cooke et al. 2022 method) | **SNV WIN** 0.836 vs 0.782; **indel WIN** 0.567 vs 0.553 (see §T5.3 below) |
 
 ### T5.3 — TETRAPLOID (added 2026-09-03)
 
@@ -49,7 +49,7 @@ individuals' confident BEDs (373,982 bp in-window). Scored with the same
 `rtg vcfeval --squash-ploidy` pipeline used everywhere else in Claim 2,
 with DiscoSNP++'s documented POS off-by-one corrected.
 
-| variant class | CAPSULE | DiscoSNP++ | result |
+| variant class | G_CAPSUL | DiscoSNP++ | result |
 |---|---|---|---|
 | **SNV F1** | **0.836** (P 0.947, R 0.749) | 0.782 (P 0.979, R 0.651) | **WIN, +0.054** |
 | indel F1 | **0.567** (P 0.803, R 0.438) | 0.553 (P 0.936, R 0.393) | **WIN, +0.014** |
@@ -62,13 +62,13 @@ indels** — all STR loci where the two samples merely used different-length
 representations of the same event (`GAT→G` vs `GATATAT→G`). That biased the
 indel truth toward easy indels. Corrected by normalising each individual
 before the union (`scripts/build_tetraploid_truth_v2.py`), dropping nothing:
-154 in-window indel truth sites instead of 130. Effect: CAPSULE 0.547 → 0.555,
+154 in-window indel truth sites instead of 130. Effect: G_CAPSUL 0.547 → 0.555,
 DiscoSNP++ 0.571 → 0.553. **The correction was made for correctness — the
 dropped sites were real truth — and it happens to move the result in
-CAPSULE's favour, so it is stated explicitly here rather than folded in
+G_CAPSUL's favour, so it is stated explicitly here rather than folded in
 silently.**
 
-**CAPSULE wins tetraploid SNV calling and is close on indels**, on fully
+**G_CAPSUL wins tetraploid SNV calling and is close on indels**, on fully
 real data, against the only applicable reference-free competitor. As in the
 diploid case, the win comes from recall (0.749 vs 0.651) while DiscoSNP++
 holds higher precision.
@@ -105,7 +105,7 @@ SNVs misfiled as indel FPs; indel polarity decided by loop order instead of
 the alignment CIGAR — see `docs/HET_INDEL_FRESH_SCAN.md` Findings 4 and 5). Whichever exact figure appears in the
 paper, cite the commit it came from, not a doc that predates the last fix.
 
-## 3. Where CAPSULE loses on het-indel — the deep scan, consolidated
+## 3. Where G_CAPSUL loses on het-indel — the deep scan, consolidated
 
 This section does not re-derive the root cause — it was already found and
 is fully documented across three existing docs
@@ -117,13 +117,13 @@ consolidated, final answer those four documents converge on.
 
 On the measured breakdown (`HOW_DISCOSNP_WINS.md` §2):
 
-| | CAPSULE | DiscoSNP++ |
+| | G_CAPSUL | DiscoSNP++ |
 |---|---|---|
 | indel precision | 0.729 | **0.910** |
 | indel recall | 0.497 | 0.522 |
 
 Recall is nearly tied (DiscoSNP++ +0.025). **The entire F1 gap is
-precision** — CAPSULE is not failing to *find* real indels, it is failing
+precision** — G_CAPSUL is not failing to *find* real indels, it is failing
 to *reject* false ones.
 
 ### 3.2 The structural reason precision resists filtering
@@ -139,13 +139,13 @@ windows, all kept in-code behind flags rather than deleted
 | Full junction coherence (kissreads2 analogue) | neutral, +0.001 |
 | Extended contig agreement (60-200bp paralog filter) | net negative |
 
-The diagnostic explaining all four failures: **CAPSULE's indel candidates
+The diagnostic explaining all four failures: **G_CAPSUL's indel candidates
 are built FROM contigs, which are built FROM reads — so every candidate is
 read-supported by construction, and a read-support test has nothing left to
 reject.** DiscoSNP++'s candidates are *hypotheses from de Bruijn graph
 traversal* — a path can be proposed that no single read actually
 traverses — so its `kissreads2` read-validation step has real work to do.
-Applying the same kind of test to CAPSULE's already-read-derived candidates
+Applying the same kind of test to G_CAPSUL's already-read-derived candidates
 is structurally close to a no-op, which is exactly what was measured.
 
 **Consequence:** this is not a tunable-threshold problem. Closing the gap
@@ -162,11 +162,11 @@ inside 7-8bp homopolymers. GIAB's own genome-stratification resource
 this exact stratum as harder than low-mappability or GC-extreme regions —
 for *every* method, reference-based or not. Reference-based callers with a
 genome to anchor against score 0.89-0.97 on indels overall; reference-free
-tools (DiscoSNP++ and CAPSULE, the only two applicable to this exact task —
+tools (DiscoSNP++ and G_CAPSUL, the only two applicable to this exact task —
 single diploid sample, no reference, heterozygous — per `HET_INDEL_SOTA.md`
 §2's literature survey) both sit in the 0.6-0.66 range. The gap between
 reference-free methods and reference-based ones is a property of the
-problem; the smaller gap between CAPSULE and DiscoSNP++ is the one this
+problem; the smaller gap between G_CAPSUL and DiscoSNP++ is the one this
 project is actually responsible for.
 
 ## 4. Did the earlier, outer ARCS project ever win on het-indel?
@@ -184,10 +184,10 @@ DiscoSNP++'s POS off-by-one corrected the same way):
 That document's own framing calls it "neck-and-neck" (a 0.008 gap), but by
 the numbers it is still a loss, on a single window, not an average.
 
-**This means the CAPSULE het-indel loss is not a regression introduced by
+**This means the G_CAPSUL het-indel loss is not a regression introduced by
 the reimplementation.** Both the outer ARCS project and this sandbox lose
 narrowly to DiscoSNP++ on het-indel, independently, on different (though
-overlapping-methodology) evaluations. If anything, CAPSULE's *absolute*
+overlapping-methodology) evaluations. If anything, G_CAPSUL's *absolute*
 indel F1 (0.637) is well above the outer project's (0.505) — a real
 improvement in absolute terms — even though DiscoSNP++'s own comparison
 number differs between the two evaluations (0.513 single-window vs 0.663

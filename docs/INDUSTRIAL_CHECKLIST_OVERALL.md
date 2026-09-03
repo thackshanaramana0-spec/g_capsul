@@ -1,6 +1,6 @@
-# Industrial checklist — CAPSULE, the whole product
+# Industrial checklist — G_CAPSUL, the whole product
 
-Written 2026-09-03. CAPSULE is marketed as three claims (COMPACT, FAITHFUL,
+Written 2026-09-03. G_CAPSUL is marketed as three claims (COMPACT, FAITHFUL,
 ADDRESSABLE) but ships as **one archive format and one pair of binaries**
 — `stages/106_inprocess.cpp` (encoder, all three claims' write paths) and
 `stages/capsule_decode.cpp` (decoder, all three claims' read paths). This

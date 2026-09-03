@@ -1,6 +1,6 @@
-# CAPSULE — complete technical architecture
+# G_CAPSUL — complete technical architecture
 
-**Compact, Addressable, Pseudogenome-Structured, Unified Lossless Encoder.**
+**Genomic, Compact, Addressable, Pseudogenome-Structured, Unified Lossless.**
 Written 2026-09-02 as a from-scratch, layer-by-layer account of every
 mechanism currently in the archive: what it does, why it exists, and where its
 code lives. This is the reference to read before touching any stage file.
@@ -38,7 +38,7 @@ so the sequence-only archive is untouched when they are off.
 File: `stages/106_inprocess.cpp`, struct `Archive`. On-disk layout:
 
 ```
-magic     "CAPSULE\0"           8 B
+magic     "CAPSULE\0"           8 B   (unchanged -- on-disk format byte, not the product name)
 version   uint16                2 B
 pg_len, main_pg_end  uint64 x2 16 B
 minmem    uint32                4 B
@@ -534,7 +534,7 @@ artifact (verified real-vs-synthetic distinction in
 ### 9.5 Why filtering alone cannot close the remaining indel gap
 
 The structural finding from `docs/HOW_DISCOSNP_WINS.md` §4, load-bearing
-enough to repeat here: CAPSULE's indel candidates are built FROM contigs,
+enough to repeat here: G_CAPSUL's indel candidates are built FROM contigs,
 which are built FROM reads — every candidate is read-supported by
 construction, so a read-validation filter (the mechanism that gives
 DiscoSNP++'s `kissreads2` its precision) has nothing to reject. DiscoSNP++'s

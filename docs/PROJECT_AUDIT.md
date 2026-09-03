@@ -28,7 +28,7 @@ is complete.
 All measured on real GIAB data with DiscoSNP++ rerun on identical reads and
 identical scoring (its POS off-by-one corrected — without that it scores 0.004).
 
-| class | CAPSULE | DiscoSNP++ | verdict |
+| class | G_CAPSUL | DiscoSNP++ | verdict |
 |---|---|---|---|
 | **het-SNV** | **0.890** | 0.874 | **WIN**, 5/8 evaluations, generalises to unseen individuals |
 | **multi-allelic** | **11/18 sites** | **0/18** | **WIN** — capability the competitor lacks, replicated on two independent regions |
@@ -52,7 +52,7 @@ Session movement: het-SNV **0.419 → 0.890**; het-indel **~0.36 → 0.637**.
 
 Was **unbuilt in both projects** — no `export`/`coverage`/`query` existed
 anywhere, and no assembler was installed to compare against. All three are now
-implemented as early-exit modes in the CAPSULE decoder, and MEGAHIT was
+implemented as early-exit modes in the G_CAPSUL decoder, and MEGAHIT was
 installed as the de-novo baseline.
 
 | dataset | export | MEGAHIT | speedup | coverage | bwa+mosdepth | speedup | query |
@@ -71,11 +71,11 @@ closed.**
 
 Both beat the spec's targets (≥40× export, 2–5× coverage) by a wide margin, and
 the coverage figure is **conservative** — the conventional side used a
-pre-built BWA index, while CAPSULE needs no reference at all. `query` has no
+pre-built BWA index, while G_CAPSUL needs no reference at all. `query` has no
 competitor: it requires per-read coordinates that only an addressable archive
 retains.
 
-**Gap: these three operations exist in CAPSULE only.** The outer
+**Gap: these three operations exist in G_CAPSUL only.** The outer
 `/root/arcs-clean/build/arcs` binary still has no such subcommands, so if the
 paper describes them as ARCS features they must be ported.
 

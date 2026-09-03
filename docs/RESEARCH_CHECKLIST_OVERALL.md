@@ -1,7 +1,7 @@
-# Research / academic checklist — CAPSULE, the whole product
+# Research / academic checklist — G_CAPSUL, the whole product
 
 Written 2026-09-03. Synthesizes `RESEARCH_CHECKLIST_CLAIM{1,2,3}.md` into
-one product-level view. The paper frames CAPSULE as three claims about one
+one product-level view. The paper frames G_CAPSUL as three claims about one
 archive format; this document checks whether the *product-level* claim —
 "one pseudogenome, three properties" — holds up, not just whether each
 property holds up in isolation. Statistical methodology remains N/A
@@ -18,7 +18,7 @@ Status legend: 🔴 critical, 🟠 important. ✅ done · ⚠️ partial/scoped 
 | **Data integrity** | 🔴 | ⚠️ — identical gap in all three per-claim checklists (no checksums recorded anywhere). Genuinely one product-wide gap, not three coincidentally identical ones — worth one fix (a checksum manifest) rather than three. |
 | **Ground truth** | 🔴 | ✅ (Claim 2) / N/A (Claims 1, 3) — only Claim 2 has a ground-truth-scored metric; the other two are measured directly (archive size, wall time), so this row is only meaningfully evaluable for Claim 2, where it's sound (GIAB v4.2.1, third-party `rtg vcfeval`). |
 | **Experimental configuration** | 🔴 | ✅ product-wide. Every frozen constant in every claim is named with its value and, where relevant, its provenance (ported from ARCS, measured as an interior optimum, etc.) — a consistent discipline, not an accident of one claim. |
-| **Deterministic execution** | 🔴 | ✅ (CAPSULE itself, all claims) / ⚠️ (competitor tools) — the archive and every operation on it are deterministic product-wide; SPAdes/DiscoSNP++/MEGAHIT's own determinism was not independently re-verified in any claim. |
+| **Deterministic execution** | 🔴 | ✅ (G_CAPSUL itself, all claims) / ⚠️ (competitor tools) — the archive and every operation on it are deterministic product-wide; SPAdes/DiscoSNP++/MEGAHIT's own determinism was not independently re-verified in any claim. |
 | **Baseline implementation** | 🔴 | ✅ product-wide with one shared, named gap: Claim 1's PgRC2 version isn't pinned, Claim 2's Kmer2SNP is only run as one aggregate (not per-individual), Claim 3's SPAdes is now the spec-exact baseline (fixed this session, was MEGAHIT). Three different specific gaps, same underlying category: baseline precision varies claim to claim. |
 | **Fair comparison** | 🔴 | ✅ product-wide — same reads, same machine, same measurement tool, in every claim, with every known asymmetry disclosed rather than hidden (Claim 3's pre-built BWA index favoring the baseline; Claim 1's idle-machine qualifier). |
 | **Metric implementation** | 🔴 | ✅ product-wide, and this session directly demonstrated the discipline working: Claim 3's query-speedup metric was found to be measuring the wrong thing (a stream-dump path, not real reconstruction) and was corrected with a real re-measurement rather than left standing. |

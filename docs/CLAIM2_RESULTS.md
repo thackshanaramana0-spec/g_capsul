@@ -1,4 +1,4 @@
-# CAPSULE Claim 2 — first real GIAB results (2026-09-02)
+# G_CAPSUL Claim 2 — first real GIAB results (2026-09-02)
 
 Real reads, real GIAB v4.2.1 truth, `rtg vcfeval` (the GA4GH engine `hap.py`
 wraps), het-restricted, inside the GIAB confident regions — the same
@@ -34,8 +34,8 @@ is actually *higher* on the held-out window.)
 ## Where it stands against ARCS — VERIFIED BY RERUN, not quoted
 
 **Correction to an earlier version of this document.** It first compared
-CAPSULE against ARCS's *published* 0.923/0.954, which was wrong twice over:
-those numbers are **HG001**, while CAPSULE was run on **HG002**, and they
+G_CAPSUL against ARCS's *published* 0.923/0.954, which was wrong twice over:
+those numbers are **HG001**, while G_CAPSUL was run on **HG002**, and they
 were quoted from `VARIANT_ANALYSIS_MASTER.md` rather than reproduced. ARCS
 has now been rerun on the **identical `reads.fq`** through the **identical**
 lift-and-score pipeline. The real picture:
@@ -44,7 +44,7 @@ lift-and-score pipeline. The real picture:
 |---|---|---|---|---|
 | ARCS, default config | — | — | **0.000** (0 SNVs called) | 0.46 (46 lifted) |
 | ARCS, `ARCS_XSNV=1` | 0.981 | 0.635 | **0.771** | 0.710 |
-| **CAPSULE (this repo)** | 0.939 | 0.270 | **0.419** | 0.357 |
+| **G_CAPSUL (this repo)** | 0.939 | 0.270 | **0.419** | 0.357 |
 
 ## The competitor that actually sets the bar — DiscoSNP++, rerun here
 
@@ -53,17 +53,17 @@ lift-and-score pipeline. The real picture:
 | **DiscoSNP++** (`-T -G`, POS-1 corrected) | 0.971 | 0.740 | **0.840** | 0.491 |
 | ARCS, `ARCS_XSNV=1` | 0.981 | 0.635 | **0.771** | **0.710** |
 | ARCS, default config | — | — | **0.000** | ~0.46 |
-| **CAPSULE (this repo)** | 0.939 | 0.270 | **0.419** | 0.357 |
+| **G_CAPSUL (this repo)** | 0.939 | 0.270 | **0.419** | 0.357 |
 | Kmer2SNP | *running* | | | |
 
 **DiscoSNP++ sets the real bar at 0.840 SNV F1** — it is the strongest tool
-on this window, ahead of ARCS itself. CAPSULE's 0.419 is roughly half of it.
+on this window, ahead of ARCS itself. G_CAPSUL's 0.419 is roughly half of it.
 Note DiscoSNP++'s POS is off by one (326 of 331 REF bases match the genome at
 `POS-1`, only 80 at `POS`); uncorrected it scores F1 0.004, so **any
 comparison that does not apply this correction is meaningless** — the outer
 project documented the same quirk.
 
-Note also that CAPSULE currently has the *best indel/SNV balance problem in
+Note also that G_CAPSUL currently has the *best indel/SNV balance problem in
 reverse*: ARCS beats everything on indels (0.710) while DiscoSNP++ leads on
 SNVs (0.840).
 
@@ -73,12 +73,12 @@ Two findings that matter more than the ranking:
    configuration produces `candidates=0, SNVs=0+0` here — zero SNV calls.
    The published numbers must come from a different read preparation
    (pairing, source, or depth), so **no ARCS figure should be quoted as a
-   baseline for CAPSULE without rerunning it on the same input**, which is
+   baseline for G_CAPSUL without rerunning it on the same input**, which is
    exactly the mistake this document originally made.
-2. **CAPSULE beats ARCS's shipped default** (0.419 vs 0.000) because the
+2. **G_CAPSUL beats ARCS's shipped default** (0.419 vs 0.000) because the
    cross-contig bubble pass is default-ON here and off there — the finding
    recorded in `docs/CLAIM2_BUILDER.md`. Against ARCS with that same pass
-   enabled, CAPSULE still loses 0.419 vs 0.771. The honest gap is **0.771 vs
+   enabled, G_CAPSUL still loses 0.419 vs 0.771. The honest gap is **0.771 vs
    0.419 on equal footing**, not 0.954 vs 0.419.
 
 ## Root cause: the contigs are far too short
@@ -92,7 +92,7 @@ mean length = 335 bp   (~2.3 reads long)
 total contig bp = 1,520,128  (3.8x the window — haplotype fragments never merged)
 ```
 
-CAPSULE's chaining requires an **exact** suffix-prefix overlap. Every
+G_CAPSUL's chaining requires an **exact** suffix-prefix overlap. Every
 heterozygous site, every sequencing error at an overlap boundary, breaks the
 chain. The result is an assembly that is excellent for *compression* (it is
 what wins Claim 1 by 14/14) but is nearly read-length fragments for
@@ -113,7 +113,7 @@ simply cannot see most variants.
 ARCS's Method B (`vodbg_pg`) does global greedy-overlap growth with
 mismatch-tolerant read placement, producing long consensus contigs where
 both haplotypes co-occupy one contig and het sites appear as pileup columns.
-CAPSULE's exact-overlap chaining splits them instead. **Same caller, same
+G_CAPSUL's exact-overlap chaining splits them instead. **Same caller, same
 frozen parameters, different assembly — and the assembly is the whole
 difference.** This confirms, from the opposite direction, the finding
 recorded in `docs/CLAIM2_BUILDER.md`.
@@ -127,9 +127,9 @@ that.** Comparing the two assemblers' contigs on the same window:
 | | contigs | mean len | ≥1 kb | total bp (window = 400 kb) |
 |---|---|---|---|---|
 | ARCS (`ARCS_XSNV=1`) — 0.771 F1 | 4,307 | **249** | 97 | 1,072,468 (2.7×) |
-| CAPSULE — 0.419 F1 | 4,537 | **335** | 326 | 1,520,128 (3.8×) |
+| G_CAPSUL — 0.419 F1 | 4,537 | **335** | 326 | 1,520,128 (3.8×) |
 
-CAPSULE's contigs are **longer** on average, with **3× more** ≥1 kb contigs,
+G_CAPSUL's contigs are **longer** on average, with **3× more** ≥1 kb contigs,
 and it still gets half the recall. Lengthening contigs would not have fixed
 anything — the proposed fix was aimed at the wrong quantity.
 
@@ -143,20 +143,20 @@ assembler's contigs:
 | | distinct 25-mers | occ==1 | **occ==2** | occ==3 | occ≥4 |
 |---|---|---|---|---|---|
 | ARCS | 648,780 | 511,804 | **92,163 (14.2%)** | 17,876 | 26,937 |
-| CAPSULE | 670,082 | 281,411 | **253,945 (37.9%)** | 61,100 | 73,626 |
+| G_CAPSUL | 670,082 | 281,411 | **253,945 (37.9%)** | 61,100 | 73,626 |
 
-CAPSULE has **2.75× more** exactly-2-occurrence anchors than ARCS. Anchor
+G_CAPSUL has **2.75× more** exactly-2-occurrence anchors than ARCS. Anchor
 supply is not the bottleneck either.
 
 ## What the evidence actually points to
 
-CAPSULE carries 3.8× the window in contig bases against ARCS's 2.7×. For a
+G_CAPSUL carries 3.8× the window in contig bases against ARCS's 2.7×. For a
 diploid the *ideal* is ~2× — one contig per haplotype. The excess is
 **same-allele duplication**: because exact-overlap chaining breaks a chain at
 every het site *and* every error, one haplotype's sequence ends up spread
 across several separate contigs.
 
-That predicts exactly the failure observed: most of CAPSULE's abundant
+That predicts exactly the failure observed: most of G_CAPSUL's abundant
 `occ==2` anchor pairs are **two copies of the same allele**, which walk
 along matching and never diverge, so `extract_snv_bubble` finds no bubble —
 and worse, a same-allele duplicate *consumes the 2-occurrence slot* that the
@@ -167,7 +167,7 @@ above: more anchors, longer contigs, more total sequence, fewer bubbles.
 **Next experiments, in order (both cheap, neither yet run):**
 
 1. **Collapse duplicate/contained contigs before calling.** Targets the
-   excess redundancy directly. Note the irony: CAPSULE's MEM self-match
+   excess redundancy directly. Note the irony: G_CAPSUL's MEM self-match
    already finds precisely this redundancy for compression — but the caller
    deliberately captures contigs *pre*-MEM to preserve haplotype separation,
    which preserves same-allele duplication along with it. A dedup pass that

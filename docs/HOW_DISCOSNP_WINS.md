@@ -27,7 +27,7 @@ is ambiguous in a repeat.
 
 Averages over the 8 evaluations (5 chr20 windows, 3 unseen individuals):
 
-| | CAPSULE | DiscoSNP++ |
+| | G_CAPSUL | DiscoSNP++ |
 |---|---|---|
 | SNV precision | 0.951 | **0.975** |
 | SNV recall | **0.837** | 0.794 |

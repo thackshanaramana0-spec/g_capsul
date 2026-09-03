@@ -10,7 +10,7 @@ met with evidence, not assertion.
 
 ## 1. The research idea — what it is, and that it was actually done
 
-**Idea:** A CAPSULE archive is not only a compressed file — it is
+**Idea:** A G_CAPSUL archive is not only a compressed file — it is
 *addressable*. Three operations a conventional pipeline computes from
 scratch (assemble a genome, align reads to compute per-base depth, index
 reads for coordinate lookup) can instead be served by decoding streams the
@@ -37,13 +37,13 @@ locked summary in `CLAIM3_LOCKED.md` §4): BEETL-fastq, CIndex, sFASTQ and a
 none of them offer export, coverage, or query specifically. CRAM/BAM has
 genuine coverage+query, but requires a reference genome and prior alignment
 — a different architecture. PgRC/Minicom/NanoSpring build the same *kind* of
-internal pseudogenome/contig structure CAPSULE does, for compression only,
+internal pseudogenome/contig structure G_CAPSUL does, for compression only,
 and never expose it. The idea is real and, as far as this survey found,
 unmatched in this specific combination.
 
 ## 2. The result — dominant, established on real measurement
 
-| operation | CAPSULE | conventional | result |
+| operation | G_CAPSUL | conventional | result |
 |---|---|---|---|
 | export (E. coli) | 0.390–0.465 s | SPAdes 256–258 s | **555–656×**, spec bar was ≥40× |
 | export (HG002/HG005 windows) | 0.028–0.045 s | MEGAHIT 8.14–12.31 s | **254–314×** |

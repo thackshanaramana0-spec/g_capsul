@@ -18,7 +18,7 @@ evidence base is not yet at the scale the claim requires.
 ## 1. The research idea — what it is, and that it was actually done
 
 **Idea:** call heterozygous SNVs and indels reference-free, as a byproduct
-of the same pseudogenome assembly CAPSULE builds for compression — no
+of the same pseudogenome assembly G_CAPSUL builds for compression — no
 alignment to a reference genome, no separate assembler.
 
 **Built, not just proposed:** `include/caps_caller.h` implements a real
@@ -53,8 +53,8 @@ fixed — neither of them a caller change:
 1. A benchmark classifier tested `length($5)` on the raw ALT **string**, so a
    genuine multi-allelic SNV (`T→C,A`, ALT string length 3) was filed as an
    INDEL and split by `bcftools norm` into SNV-shaped rows that scored as
-   indel false positives. This could **only ever penalise CAPSULE**, because
-   CAPSULE is the only tool here that emits native multi-allelic records.
+   indel false positives. This could **only ever penalise G_CAPSUL**, because
+   G_CAPSUL is the only tool here that emits native multi-allelic records.
 2. Indel polarity was decided by loop order rather than evidence: inside a
    tandem repeat both haplotypes match the genome window, and the
    authoritative bwa CIGAR (`...8D...`) was consulted only for

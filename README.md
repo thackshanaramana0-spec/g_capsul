@@ -1,6 +1,6 @@
-# CAPSULE: Compact, Addressable, Pseudogenome-Structured, Unified Lossless Compressor
+# G_CAPSUL: Genomic, Compact, Addressable, Pseudogenome-Structured, Unified Lossless
 
-[![CI](https://github.com/thackshanaramana0-spec/capsule/actions/workflows/ci.yml/badge.svg)](https://github.com/thackshanaramana0-spec/capsule/actions/workflows/ci.yml)
+[![CI](https://github.com/thackshanaramana0-spec/g_capsul/actions/workflows/ci.yml/badge.svg)](https://github.com/thackshanaramana0-spec/g_capsul/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-undecided-lightgrey.svg)](docs/INDUSTRIAL_CHECKLIST_OVERALL.md)
 [![Platform](https://img.shields.io/badge/platform-Linux-lightgrey.svg)](#build)
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://en.cppreference.com/w/cpp/17)
@@ -22,7 +22,7 @@ export/coverage/coordinate-query in one pass over the reads.
 
 ## Proposed Solution
 
-CAPSULE builds one structure — a **pseudogenome** assembled directly from the reads at
+G_CAPSUL builds one structure — a **pseudogenome** assembled directly from the reads at
 compress time by greedy suffix-prefix overlap chaining, pigeonhole mapping of the
 remainder, and self-matching to remove residual redundancy — and reuses it for three
 purposes instead of discarding it after compression:
@@ -71,7 +71,7 @@ purposes instead of discarding it after compression:
 public datasets spanning bacteria, viruses, fungi, protists, and one human virus, every
 archive decoded back to byte-identical input before being counted.
 
-| dataset | organism | CAPSULE | SPRING | Genozip |
+| dataset | organism | G_CAPSUL | SPRING | Genozip |
 |---|---|---:|---:|---:|
 | SRR2584863 | E. coli B REL606 | 68,677,977 | 74,045,440 | 119,618,198 |
 | ERR552797 | M. tuberculosis H37Rv | 46,964,185 | 52,101,120 | 82,799,524 |
@@ -103,7 +103,7 @@ acidocaldarius, −0.83%) across 7 datasets. Full breakdown:
 **Table 2.** Real GIAB HG002–HG005 chr20 data, 8 independent chr20-window evaluations plus
 a real tetraploid construction, scored by third-party `rtg vcfeval`.
 
-| comparison | CAPSULE | DiscoSNP++ | Kmer2SNP |
+| comparison | G_CAPSUL | DiscoSNP++ | Kmer2SNP |
 |---|---:|---:|---:|
 | het-SNV F1 | **0.890** | 0.874 | 0.464 |
 | het-indel F1 | **0.666** | 0.639 | not applicable (SNP-only by construction) |
@@ -157,8 +157,8 @@ CAPSULE_DATA_DIR=/mnt/other/fastq bash scripts/run_capsule.sh 1
 ## Build
 
 ```bash
-git clone https://github.com/thackshanaramana0-spec/capsule.git
-cd capsule
+git clone https://github.com/thackshanaramana0-spec/g_capsul.git
+cd g_capsul
 scripts/build106.sh /tmp/best106            # encoder (must link -fopenmp, see the script's own note)
 scripts/build_decode.sh /tmp/capsule_decode # decoder + all three Claim 3 operations
 ```
@@ -205,7 +205,7 @@ CAPS_CALL=1 CAPS_PLOIDY=4 CALL_VCF=calls.vcf /tmp/best106 reads.fq 3 16 16 22 16
 Exactly what each configuration puts in the archive and gives back on decode — including
 the important point that the default is sequence-only, not a FASTQ — is spelled out in
 full in [What you get, by configuration](#what-you-get-by-configuration) below. Every
-command CAPSULE supports, organized by claim: [`docs/COMMANDS_REFERENCE.md`](docs/COMMANDS_REFERENCE.md).
+command G_CAPSUL supports, organized by claim: [`docs/COMMANDS_REFERENCE.md`](docs/COMMANDS_REFERENCE.md).
 
 ### What you get, by configuration
 
@@ -299,9 +299,9 @@ Full, current status for each claim: [`docs/CLAIM1_FINAL_VERDICT.md`](docs/CLAIM
 
 ## Citation
 
-If you use CAPSULE in your research, please cite:
+If you use G_CAPSUL in your research, please cite:
 
-> Thackshanaramana B (2026). *CAPSULE: a unified pseudogenome for lossless FASTQ
+> Thackshanaramana B (2026). *G_CAPSUL: a unified pseudogenome for lossless FASTQ
 > compression, reference-free variant calling, and archive-native addressability.*
 > Manuscript in preparation.
 

@@ -8,7 +8,7 @@ same reads, same truth and same scoring as DiscoSNP++.
 
 | tool | P | R | **F1** |
 |---|---|---|---|
-| **CAPSULE** | 0.957 | **0.828** | **0.887** |
+| **G_CAPSUL** | 0.957 | **0.828** | **0.887** |
 | DiscoSNP++ | 0.971 | 0.740 | 0.840 |
 | Kmer2SNP | **0.992** | 0.302 | **0.464** |
 
@@ -17,7 +17,7 @@ single false positive) but recovers only **30%** of the truth. That matches the
 ~0.53 the outer ARCS project measured for it and its own paper's design, which
 keys on heterozygous k-mer pairs and deliberately trades recall for precision.
 
-**CAPSULE beats both competitors on this window.**
+**G_CAPSUL beats both competitors on this window.**
 
 ## What it took to run it — five blockers, all disclosed
 
@@ -56,7 +56,7 @@ on identical data:
 
 * **Kmer2SNP** — precision 0.992, recall 0.302. Very conservative.
 * **DiscoSNP++** — precision 0.971, recall 0.740. Balanced.
-* **CAPSULE** — precision 0.957, recall 0.828. Highest recall and highest F1.
+* **G_CAPSUL** — precision 0.957, recall 0.828. Highest recall and highest F1.
 
 Claim 2's het-SNV comparison is now complete against **all three** published
 reference-free callers rather than one.

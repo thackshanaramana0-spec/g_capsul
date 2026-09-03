@@ -1,4 +1,4 @@
-# CAPSULE — the archive format
+# G_CAPSUL — the archive format
 
 **C**ompact, **A**ddressable, **P**seudogenome-**S**tructured, **U**nified
 **L**ossless **E**ncoder.
@@ -14,7 +14,7 @@ archive no decoder reads is not a format.
 
 ## Layout
 
-    magic      "CAPSULE\0"        8 B
+    magic      "CAPSULE\0"        8 B   (unchanged -- on-disk format byte, not the product name)
     version    uint16             2 B
     pg_len     uint64             8 B
     main_pg_end uint64            8 B

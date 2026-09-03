@@ -1,11 +1,11 @@
-# CAPSULE Claim 2 builder — status, 2026-09-02
+# G_CAPSUL Claim 2 builder — status, 2026-09-02
 
-**Data/tools inventory + the CAPSULE-adapted benchmark scripts live in
+**Data/tools inventory + the G_CAPSUL-adapted benchmark scripts live in
 `docs/CLAIM2_DATA_AND_TOOLS.md`** — read that first if you're about to
 actually run a GIAB/synthetic benchmark rather than extend the caller.
 
 Reference-free variant calling ported from the outer ARCS project's caller
-(`/root/arcs-clean/src/caller.cpp`) and wired directly onto CAPSULE's own
+(`/root/arcs-clean/src/caller.cpp`) and wired directly onto G_CAPSUL's own
 assembly. This is the first working end-to-end version — smoke-tested, not
 yet GIAB-validated. Read this before extending it.
 
@@ -43,17 +43,17 @@ reads placed onto it via mismatch-tolerant mapping — so ARCS's pileup-based
 SNV pass is the dominant signal and its cross-contig bubble pass
 (`ARCS_XSNV`) is experimental/opt-in, off by default.
 
-**CAPSULE's assembler does not behave the same way.** Its round-1/round-2
+**G_CAPSUL's assembler does not behave the same way.** Its round-1/round-2
 chaining is EXACT suffix-prefix overlap (no mismatch tolerance in the chain
 step itself — tolerance only enters later, in pigeonhole mapping). That
 means a chain breaks at EVERY heterozygous site by construction: the two
 haplotypes fragment into separate short contigs there, not into one merged
 consensus with mismatches. Confirmed on the synthetic smoke test below —
 0 pileup-column candidates, 62 contigs from ~24,000 reads over a 60 kb
-diploid genome. **So for CAPSULE, the cross-contig SNV bubble pass is the
+diploid genome. **So for G_CAPSUL, the cross-contig SNV bubble pass is the
 PRIMARY signal, not a fallback** — shipped default-ON here (`CAPS_NO_XSNV=1`
 to disable), the reverse of ARCS's own default. This is a structural
-consequence of CAPSULE's stricter, no-mismatch-tolerance chaining, not a
+consequence of G_CAPSUL's stricter, no-mismatch-tolerance chaining, not a
 tuning choice.
 
 ## Smoke test (synthetic, not yet GIAB)
@@ -81,13 +81,13 @@ same `ARCHIVE_TOTAL` as before this change.
 ## What's NOT done yet (next steps, in order)
 
 1. **Coordinate lift + real scoring.** Port `scripts/lift_vcf.py`
-   (`hapflank_lift`) to place CAPSULE's contig-coordinate calls onto a real
+   (`hapflank_lift`) to place G_CAPSUL's contig-coordinate calls onto a real
    reference, then score with `rtg vcfeval` against GIAB truth — same
    pipeline the outer project already validated. Nothing here has been
    scored against ground truth yet; the 20/30 above is an eyeball count on
    synthetic data with no lift step.
 2. **Real GIAB run.** Reuse `~/refs/chr20.fa` / `~/giab_truth/` (already on
-   disk from the outer project's Phase 1 download) on a CAPSULE-encoded
+   disk from the outer project's Phase 1 download) on a G_CAPSUL-encoded
    chr20 region, same regions the outer project already used, for a
    directly comparable number.
 3. **Indel path is ported but untested.** The indel-bubble code compiled and

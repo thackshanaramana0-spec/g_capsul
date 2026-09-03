@@ -1,4 +1,4 @@
-# CAPSULE — commands reference, by claim
+# G_CAPSUL — commands reference, by claim
 
 Written 2026-09-03. Pure commands: what to run and what it does, nothing
 else. For *why* any of this works, see `docs/TECHNICAL_ARCHITECTURE.md`

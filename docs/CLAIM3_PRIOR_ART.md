@@ -32,12 +32,12 @@ not inferred from "has some access mechanism":
 
 The assembly-based compressors (PgRC, Minicom, NanoSpring) are the closest
 architectural relatives — they build the same kind of pseudogenome/contig set
-CAPSULE does — but per their papers and released tools, none expose it as a
+G_CAPSUL does — but per their papers and released tools, none expose it as a
 user-facing operation. That is the strongest point for novelty, not a weak
 one: the capability was structurally available in that whole family and
 nobody surfaced it. CRAM/BAM is the only prior art with genuine
 coverage+query, and it requires a reference genome and a prior alignment step
-that CAPSULE does not have.
+that G_CAPSUL does not have.
 
 ## 2. What is actually different here
 
@@ -45,7 +45,7 @@ Every FASTQ tool above is keyed on a **record identifier, byte offset, or k-mer
 string** — because a FASTQ file has no coordinates to key on. CRAM/BAM do offer
 coordinate access, but only after aligning to a reference genome.
 
-CAPSULE's three operations are keyed on **coordinates in an assembled
+G_CAPSUL's three operations are keyed on **coordinates in an assembled
 pseudogenome that the compressor built at compress time, with no reference
 genome anywhere in the pipeline**:
 

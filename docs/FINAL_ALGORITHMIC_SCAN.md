@@ -1,4 +1,4 @@
-# Final algorithmic scan — CAPSULE as one product, 2026-09-03
+# Final algorithmic scan — G_CAPSUL as one product, 2026-09-03
 
 Every prior audit this project ran (Claim 1's own bug-finding history, and
 this session's Claim 2/3 checklists) tested **one claim's features at a
@@ -118,7 +118,7 @@ all three now have it.
 
 One real, previously-undiscovered, now-fixed cross-cutting bug — found
 specifically because this scan tested claims together rather than in
-isolation, which is the whole point of treating CAPSULE as one product
+isolation, which is the whole point of treating G_CAPSUL as one product
 rather than three separate deliverables. No other cross-cutting defect was
 found in this pass. This does not replace the per-claim algorithmic audits
 already done (Claim 3's coverage-undercount and region-boundary bugs,
