@@ -27,8 +27,9 @@ BSD 3-clause, gated on `CAPS_QUAL=1`) — see commit `908b769` and section 6.3.
 The archive can now reproduce a complete 4-line FASTQ from the archive alone;
 verified byte-identical (same MD5) on at least one dataset, full sweep pending.
 
-Repo: `github.com/thackshanaramana0-spec/c_star_pg_advance`, branch
-`c_star_pg_advance`, 127 commits, working tree clean.
+Repo: `github.com/thackshanaramana0-spec/capsule` (renamed from
+`c_star_pg_advance` on GitHub 2026-09-03; local checkout directory and git
+branch name are unchanged), 127+ commits, working tree clean.
 
 ---
 
