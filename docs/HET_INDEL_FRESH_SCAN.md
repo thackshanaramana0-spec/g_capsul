@@ -187,6 +187,7 @@ cannot affect Claim 1 or any archive.
 | **average** | **0.659** | **0.639** |
 
 **CAPSULE 0.659 vs DiscoSNP++ 0.639 — a win, on 5 of 8 evaluations.**
+(Later improved to **0.666** by the polarity fix in Finding 5 below.)
 Previously recorded as 0.637 vs 0.663, a loss. The change comes entirely
 from removing false positives that were never indels.
 
@@ -243,3 +244,50 @@ concluding anything about its frequency or fixability.
 
 **Does rule out:** Cortex-style multi-color bubble classification as a
 transferable technique for this specific task — checked, not assumed.
+
+## Finding 5 — indel polarity was decided by loop order, not evidence
+
+Comparing every tetraploid indel FP against truth at the SAME position
+showed a systematic inversion rather than random error:
+
+| position | truth | CAPSULE called |
+|---|---|---|
+| 20:3346020 | `TTTTATTTA→T` (deletion) | `T→TTTTATTTA` (insertion) |
+| 20:3097933 | `GCA→G` (deletion) | `G→GCA` (insertion) |
+| 20:3290980 | `A→AAAAG` (insertion) | `aaaagaaag→a` (deletion) |
+
+The same two haplotypes every time, REF and ALT swapped. The caller is
+reference-free and labels the longer contig "reference", so its polarity is
+arbitrary **by design** — resolving it against the genome is `lift_vcf.py`'s
+job, and it had two compounding bugs:
+
+1. `hapflank_lift` searched the genome window for each haplotype and took
+   the **first** match. Inside a tandem repeat BOTH haplotypes match, because
+   shifted copies of the repeat unit exist on either side — so polarity was
+   decided by iteration order, a coin flip.
+2. `cig_op_at` reads the authoritative answer straight out of the bwa
+   alignment, but was consulted **only** when the caller had already guessed
+   deletion (`if del_type:`). An insertion-labelled call never got the
+   benefit of the alignment. `contig_97` aligns `7M1I433M8D294M` — an
+   explicit 8 bp deletion at exactly the 20:3346020 locus — and that was
+   being ignored.
+
+**Fix:** `hapflank_lift` refuses to decide when both haplotypes match
+(genuinely ambiguous from sequence alone) and falls through; the CIGAR is
+then consulted for insertion-type calls too. 20:3346020 now emits
+`TTTTATTTA→T`, matching truth exactly.
+
+**Generalisation — checked on BOTH benchmarks before adoption**, which is
+what separates this from the two attempts refuted above:
+
+| benchmark | before | after | DiscoSNP++ |
+|---|---|---|---|
+| diploid, 8-window average | 0.6589 | **0.6660** | 0.6391 |
+| tetraploid window | 0.555 | **0.567** | 0.553 |
+
+7 of 8 diploid windows unchanged or better; one regression (HG005_r3
+0.635→0.603) disclosed rather than hidden. Raw per-window numbers:
+`results/claim2/het_indel_polarity_fix.csv`.
+
+`lift_vcf.py` is eval-only: no caller changed, no archive touched, and
+Claim 1 re-verified byte-identical (ERR5181310 → 836,191 B LOSSLESS).

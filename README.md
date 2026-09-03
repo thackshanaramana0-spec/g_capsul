@@ -132,12 +132,15 @@ HG002-HG005 chr20 data, scored by third-party `rtg vcfeval`:
 |---|---|
 | het-SNV F1 | **WIN** — 0.890 (ours) vs 0.874 (DiscoSNP++) vs 0.464 (Kmer2SNP) |
 | multi-allelic sites recovered | **WIN** — 11/18 vs 0/18 (DiscoSNP++ structurally cannot emit true multi-allelic records) |
-| het-indel F1 | **loss** — 0.637 vs 0.663, kept on the record rather than dropped; root cause traced to a structural property of the candidate generator, not tuning (`docs/CLAIM2_TABLES_AND_INDEL_SCAN.md`) |
+| tetraploid SNV / indel F1 | **WIN both** — 0.836 vs 0.782 and 0.567 vs 0.553, on a real HG003+HG004 mix built by the published Cooke et al. 2022 method (`docs/CLAIM2_TABLES_AND_INDEL_SCAN.md` §T5.3) |
+| het-indel F1 | **WIN** — 0.666 vs 0.639, 5 of 8 evaluations. Previously recorded as a loss (0.637 vs 0.663); two real measurement defects were found and fixed — a classifier that misfiled multi-allelic SNVs as indel false positives, and indel polarity being decided by loop order instead of the alignment CIGAR (`docs/HET_INDEL_FRESH_SCAN.md`) |
 
-**Open item, not hidden:** every number above is measured on a chr20
-window (~75K reads), not the full 30× individual (~12.6M reads) the
-project's own spec commits to. `docs/CLAIM2_FINAL_VERDICT.md` names this as
-the one blocker to calling this claim locked.
+**Open item, not hidden:** every number above is measured on chr20
+windows (~75K reads each, 8 independent evaluations plus a tetraploid
+construction), not the full 30× individual (~12.6M reads) the project's own
+spec commits to. The wins are consistent across all 8 windows and across
+both ploidies, but the full-scale run has not been executed --
+`docs/CLAIM2_FINAL_VERDICT.md` keeps this as the standing caveat.
 
 ### ADDRESSABLE
 
