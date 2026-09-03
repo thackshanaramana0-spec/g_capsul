@@ -204,6 +204,74 @@ inline Bubble extract_bubble(const std::string& A, uint32_t pA, const std::strin
         }
     }
 
+    // ── SHORT TANDEM REPEAT (STR) RUN-LENGTH BRANCH ──────────────────────────
+    // Generalizes the homopolymer branch above from unit length 1 to unit
+    // lengths 2..6. MEASURED MOTIVATION (docs/HET_INDEL_FRESH_SCAN.md, 2026-09-03):
+    // a fresh scan of the raw FP/FN records found a real disagreement at
+    // chr20:3332481-3332512, a (TTTA)n tetranucleotide repeat that GIAB's own
+    // truth annotates `difficultregion=AllTandemRepeats_lt51bp_slop5`. The
+    // homopolymer branch above cannot reach it: its guard requires a SINGLE
+    // repeating nucleotide (`rc0 == B[ib-1] && b2i(rc0) >= 0`), so a 4 bp
+    // repeat UNIT never qualifies. The generic flank_match loop below cannot
+    // reach it either, for exactly the reason the homopolymer comment already
+    // gives: when a whole repeat unit is gained or lost, the flanks on the two
+    // sides are themselves shifted by the length difference, so a
+    // byte-identical flank match fails at every offset g.
+    //
+    // The fix is the same run-length measurement the homopolymer branch already
+    // uses and that is already validated -- count how far each side continues
+    // the periodic unit and emit the difference -- just tiled by a k-mer unit
+    // instead of a single character. diff is computed from the run lengths, so
+    // its SIGN (insertion vs deletion) is correct by construction, unlike the
+    // generic loop, which accepts whichever g happens to satisfy flank_match
+    // first and has no length/direction guarantee inside a repeat.
+    //
+    // Deliberately starts at U=2: U=1 is the homopolymer branch's territory and
+    // is left completely untouched so this cannot regress that already-tuned
+    // path. Requires >=2 unit copies before the divergence so this only fires
+    // at genuine repeats, not at coincidental k-mer equality.
+    //
+    // ── REFUTED BY MEASUREMENT, 2026-09-03. OPT-IN (CAPS_STRBUBBLE=1), OFF by
+    // default. The reasoning above is sound and the branch DOES engage --
+    // instrumented at 682 firings on HG002 r2 -- but the caller's output is
+    // BYTE-IDENTICAL with it on and off (`cmp` on calls.vcf), and the scored
+    // result is unchanged to the digit (INDEL P=0.704 R=0.576 F1=0.633 both
+    // ways). So the STR loci it reaches were already being resolved
+    // equivalently by the generic loop, or its candidates die in the same
+    // downstream filters every other candidate dies in -- consistent with the
+    // standing structural finding (docs/HOW_DISCOSNP_WINS.md sec 4) that the
+    // indel gap is not in bubble GEOMETRY but in what the substrate can offer
+    // a filter to reject. Kept behind a flag, not deleted, per this project's
+    // rule that refuted ideas stay on the record with their measurement.
+    if (std::getenv("CAPS_STRBUBBLE")) {
+        const size_t ia = pA + d, ib = qB + d;
+        for (size_t U = 2; U <= 6; ++U) {
+            if (ia < 2 * U || ib < 2 * U) continue;
+            const std::string unit = A.substr(ia - U, U);
+            if (B.compare(ib - U, U, unit) != 0) continue;          // same unit both sides
+            if (A.compare(ia - 2 * U, U, unit) != 0) continue;      // >=2 copies before divergence
+            if (B.compare(ib - 2 * U, U, unit) != 0) continue;
+            size_t ea = 0, eb = 0;
+            while (ia + ea + U <= la && A.compare(ia + ea, U, unit) == 0) ea += U;
+            while (ib + eb + U <= lb && B.compare(ib + eb, U, unit) == 0) eb += U;
+            const long diff = (long)ea - (long)eb;
+            if (diff == 0 || std::labs(diff) > maxindel) continue;
+            const size_t ra = ia + ea, rb = ib + eb;
+            if (ra + (size_t)FLANK > la || rb + (size_t)FLANK > lb) continue;
+            if (!flank_match(A, ra, B, rb, FLANK)) continue;
+            if (std::getenv("CAPS_HPDBG"))
+                fprintf(stderr, "[str] unit='%s' U=%zu ea=%zu eb=%zu diff=%ld\n",
+                        unit.c_str(), U, ea, eb, diff);
+            if (diff > 0) {                     // A has extra copies: deletion in B
+                r.type = 0; r.apos = (uint32_t)ia; r.len = (int)diff;
+            } else {                            // B has extra copies: insertion in B
+                r.type = 1; r.apos = (uint32_t)ia; r.len = (int)(-diff);
+                r.ins = B.substr(ib, (size_t)(-diff));
+            }
+            r.ok = true; return r;
+        }
+    }
+
     for (int g = 1; g <= maxindel; ++g) {
         if (qB + d + (uint32_t)g + (uint32_t)FLANK > lb) break;
         if (flank_match(A, pA + d, B, qB + d + (uint32_t)g, FLANK)) {
