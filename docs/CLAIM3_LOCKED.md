@@ -16,7 +16,7 @@ Per `/root/arcs-clean/CLAUDE.md`'s three-claim structure:
 > BWA+mosdepth, `arcs query` (unique). Expected: export ~50-200× speedup vs
 > SPAdes, coverage ~2-5× speedup vs BWA+mosdepth.
 
-The claim is that a CAPSULE archive is not just a compressed file — it is
+The claim is that a G_CAPSUL archive is not just a compressed file — it is
 **addressable**: three operations that a conventional pipeline computes from
 scratch (assemble a genome, align reads to compute depth, index reads for
 coordinate lookup) are instead served by decoding the archive, because the
@@ -48,7 +48,7 @@ The governing design comment, written directly above the mode dispatch
 
 > `export / coverage / query are served DIRECTLY from the archive. The work a
 > conventional pipeline does at query time -- assembling contigs, or indexing
-> and aligning reads to compute depth -- CAPSULE already did at compress time,
+> and aligning reads to compute depth -- G_CAPSUL already did at compress time,
 > and stored. So these are stream decodes, not computations:`
 > - `export   : literal + mem_triples  -> the pseudogenome         (no assembly)`
 > - `coverage : pos_abs + read_lengths -> per-position depth       (no alignment)`
@@ -66,7 +66,7 @@ two FASTA records (`capsule_pg_main`, `capsule_pg_second`) and returns. It
 does **not** decode `pos_abs`, `read_lengths`, or any per-read stream — those
 are irrelevant to the assembly itself. No de Bruijn graph is built, no
 overlap-layout-consensus is run, no k-mer counting happens: the pseudogenome
-already **is** the greedy suffix-prefix-overlap assembly CAPSULE builds at
+already **is** the greedy suffix-prefix-overlap assembly G_CAPSUL builds at
 compress time (see the outer `CLAUDE.md`'s method description: "greedy
 overlap chaining builds a pseudogenome from well-tiling reads").
 
@@ -209,10 +209,10 @@ where an earlier draft of this survey overstated the overlap.
 
 **Conclusion, stated precisely:** the only prior art with genuine
 coverage+query is CRAM/BAM, and it is architecturally a different thing — it
-requires a reference genome and a prior alignment step. CAPSULE's operations
+requires a reference genome and a prior alignment step. G_CAPSUL's operations
 require neither. The assembly-based compressors (PgRC, Minicom, NanoSpring)
 are the closest architectural relatives — they build the same *kind* of
-internal pseudogenome/contig structure CAPSULE does for compression — but
+internal pseudogenome/contig structure G_CAPSUL does for compression — but
 none of them expose it as a user-facing operation, which is evidence *for*
 novelty (the capability was structurally available in that whole tool family
 and nobody surfaced it), not evidence against it.
@@ -259,11 +259,11 @@ selectivity**: the query returned 11,802 reads (2.1 MB) instead of all
 1,553,259 reads (235 MB) — a 132× reduction in reads returned, 112× in
 output bytes. Time savings from `query` should be described as modest
 (the pg rebuild dominates both paths); selectivity is the real, large
-number. The GPU-LZ77 prior art (§4) genuinely beats CAPSULE on raw
+number. The GPU-LZ77 prior art (§4) genuinely beats G_CAPSUL on raw
 region-decode latency (0.4 ms, block-local, position-invariant) — stated
-here rather than overselling either number CAPSULE has.
+here rather than overselling either number G_CAPSUL has.
 
-**These three operations exist in CAPSULE (`c_star_pg_advance`) only.** The
+**These three operations exist in G_CAPSUL (`c_star_pg_advance`) only.** The
 outer `/root/arcs-clean/build/arcs` binary has no `export`/`coverage`/`query`
 subcommands. If the paper describes them as ARCS features, they must be
 ported from `stages/capsule_decode.cpp` before publication — this is not done
@@ -279,12 +279,12 @@ correctness one — the numbers are real and were independently sanity-checked
 (§6), but a third party cannot re-run the exact comparison from a single
 command today.
 
-**`coverage`'s conventional-side baseline is conservative in CAPSULE's
+**`coverage`'s conventional-side baseline is conservative in G_CAPSUL's
 favor**, and this is disclosed rather than hidden: the bwa+mosdepth
-comparison used a pre-built BWA index, while CAPSULE's `coverage` needs no
+comparison used a pre-built BWA index, while G_CAPSUL's `coverage` needs no
 reference at all. A from-scratch BWA index build is not included in the
 bwa+mosdepth timing, so the true speedup for a cold-start conventional
-pipeline is understated in CAPSULE's favor by this measurement, not
+pipeline is understated in G_CAPSUL's favor by this measurement, not
 overstated.
 
 ---
@@ -320,7 +320,7 @@ HG005_r3,coverage,0.064,bwa+samtools+mosdepth,1.46,23x,
   the same real pooled files used for Claim 2 (`/data/fastq/HG002_pooled.fq`,
   `/data/fastq/HG005_pooled.fq`), `r<N>` denoting the chr20 sub-window used.
   These pre-existed from Claim 2 work and were reused here because they were
-  already available as encoded CAPSULE archives — not regenerated
+  already available as encoded G_CAPSUL archives — not regenerated
   specifically for Claim 3.
 
 ### 6.2 The SPAdes run — exact command and full verification (this session)
@@ -348,7 +348,7 @@ assembly, not a stub or crash: `/root/spades_ecoli/contigs.fasta`, 239
 contigs, largest 243,716 bp (`cov 21.375264`), total size consistent with an
 ~4.6 Mb E. coli genome.
 
-**CAPSULE `export` on the same archive: 0.465 s** (unchanged from the
+**G_CAPSUL `export` on the same archive: 0.465 s** (unchanged from the
 MEGAHIT-baseline measurement, since `export` doesn't depend on which
 conventional tool it's compared to).
 
@@ -374,7 +374,7 @@ bwa mem -t 12 <ref.fa> <reads.fq> | samtools sort -o out.bam
 samtools index out.bam
 mosdepth --by 1 <prefix> out.bam
 
-# CAPSULE side, all three operations
+# G_CAPSUL side, all three operations
 capsule_decode export   <archive.capsule> out.fa
 capsule_decode coverage <archive.capsule> out.tsv
 capsule_decode query    <archive.capsule> out.fa <START-END>

@@ -24,12 +24,12 @@ property:
   so a het site is a bubble by construction.
 - EBWT2SNP gets it from **eBWT positional clustering**: shared sequence
   collapses by BWT sorting, with no assembly at all.
-- We should get it from the thing **CAPSULE already computes and already
+- We should get it from the thing **G_CAPSUL already computes and already
   stores** — and it turns out we do compute it.
 
 ## The realisation this plan is built on
 
-CAPSULE's compressor already performs, as part of ordinary compression, the
+G_CAPSUL's compressor already performs, as part of ordinary compression, the
 exact operation a caller needs:
 
 1. **Pigeonhole mapping** places a read onto the pseudogenome **tolerating

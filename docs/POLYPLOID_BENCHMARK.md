@@ -18,8 +18,8 @@ one of them has real-data evidence.
 
 | class | data available | result | claimable? |
 |---|---|---|---|
-| **multi-allelic** | **REAL** (GIAB GT=1/2 sites) | **CAPSULE 11/18 vs DiscoSNP++ 0/18** | **YES — this is the claim** |
-| polyploid | **synthetic only** | CAPSULE 0.981 vs DiscoSNP++ 0.994 | **NO — we lose, and it is not real data** |
+| **multi-allelic** | **REAL** (GIAB GT=1/2 sites) | **G_CAPSUL 11/18 vs DiscoSNP++ 0/18** | **YES — this is the claim** |
+| polyploid | **synthetic only** | G_CAPSUL 0.981 vs DiscoSNP++ 0.994 | **NO — we lose, and it is not real data** |
 
 **Why polyploid has no real-data evidence.** Humans are diploid, so GIAB
 provides none. Pooling individuals does not create it — measured: pooling all
@@ -58,7 +58,7 @@ per site*. Pooling four unrelated-to-related individuals still yields exactly
 one multi-allelic site.
 
 **Consequence.** The "real-data pooled polyploid" run reported earlier
-(CAPSULE 0.709 vs DiscoSNP++ 0.710) was **not testing polyploid calling at
+(G_CAPSUL 0.709 vs DiscoSNP++ 0.710) was **not testing polyploid calling at
 all** — with 1 multi-allelic site in 603, both tools were being scored on
 ordinary biallelic het-SNV calling, and the tie says nothing about the
 polyploid capability. That result is withdrawn as a polyploid measurement.
@@ -110,18 +110,18 @@ alt-vs-alt records whose REF does not match the reference genome. Two rules
 follow:
 
 * **Symmetric hygiene**: drop records whose REF disagrees with the reference,
-  for BOTH tools (CAPSULE has none to drop). This is legitimate normalisation.
+  for BOTH tools (G_CAPSUL has none to drop). This is legitimate normalisation.
 * **Do NOT merge one tool's records into multi-allelic form**: that is a
   transformation its own pipeline never performs, applied to only one side, and
   it inflates its score from 0.800 to 1.000. An earlier version of these
   results did exactly that and had to be retracted.
 
-Under symmetric hygiene on synthetic triploid data: **CAPSULE 0.886 vs
+Under symmetric hygiene on synthetic triploid data: **G_CAPSUL 0.886 vs
 DiscoSNP++ 0.800**.
 
 ## 4. The capability difference, stated separately from accuracy
 
-CAPSULE emits **multi-allelic VCF records natively** (`CAPS_PLOIDY=k` admits up
+G_CAPSUL emits **multi-allelic VCF records natively** (`CAPS_PLOIDY=k` admits up
 to k co-occurring alleles). DiscoSNP++ does not, and its own paper does not
 claim polyploid calling — it presents the tool for diploid and haploid data and
 reports biallelic variants only. This is a capability difference, not merely an
@@ -142,9 +142,9 @@ the correct genome base could never match them. After the fix: 0 disagreements.
 **Defect 2 — the scoring convention decided the winner.** Measured three ways
 on the same corrected data:
 
-| convention | CAPSULE | DiscoSNP++ | who "wins" |
+| convention | G_CAPSUL | DiscoSNP++ | who "wins" |
 |---|---|---|---|
-| raw, no normalisation | 0.886 | 0.800 | CAPSULE |
+| raw, no normalisation | 0.886 | 0.800 | G_CAPSUL |
 | split multi-allelics in truth + both calls | 0.658 | 0.664 | tie |
 | **join to multi-allelic in truth + both calls** | **0.981** | **0.994** | **DiscoSNP++** |
 
@@ -155,17 +155,17 @@ which is exactly what the per-site inspection shows (we call both `A>C` and
 `A>G`, one scores TP, the other FP).
 
 **The joined convention is the correct one**, and under it both tools are
-near-perfect with DiscoSNP++ narrowly ahead: **CAPSULE 0.981 vs 0.994**. Our
+near-perfect with DiscoSNP++ narrowly ahead: **G_CAPSUL 0.981 vs 0.994**. Our
 gap is 2 missed sites of 80; precision is equal (0.987 vs 0.988).
 
 ### Verdict
 
-**CAPSULE does not win polyploid.** Every earlier margin in its favour came
+**G_CAPSUL does not win polyploid.** Every earlier margin in its favour came
 from a broken truth set or a favourable representation. Stated honestly:
 
 * **Accuracy: near-parity, DiscoSNP++ marginally ahead** (0.981 vs 0.994) on
   synthetic triploid data.
-* **Capability: ours is native.** CAPSULE emits multi-allelic VCF records
+* **Capability: ours is native.** G_CAPSUL emits multi-allelic VCF records
   directly; DiscoSNP++ emits separate biallelic rows that must be joined before
   they can be scored as multi-allelic — `bcftools norm -m +any` failed on its
   output entirely, and the join had to be written by hand. Its own paper does
@@ -189,10 +189,10 @@ joined to multi-allelic form, DiscoSNP++'s POS off-by-one corrected).
 
 | | TP | FP | FN | P | R | **F1** |
 |---|---|---|---|---|---|---|
-| **CAPSULE** | 3316 | 192 | 930 | 0.945 | **0.781** | **0.855** |
+| **G_CAPSUL** | 3316 | 192 | 930 | 0.945 | **0.781** | **0.855** |
 | DiscoSNP++ | 3247 | 112 | 999 | **0.967** | 0.765 | 0.854 |
 
-CAPSULE wins on recall and on F1 (marginally), DiscoSNP++ on precision. This is
+G_CAPSUL wins on recall and on F1 (marginally), DiscoSNP++ on precision. This is
 **12× more truth sites than a single 400 kb window**, so it is the most
 statistically substantial head-to-head in the project.
 
@@ -200,19 +200,19 @@ statistically substantial head-to-head in the project.
 
 | | sites called of 7 | with BOTH alleles correct |
 |---|---|---|
-| **CAPSULE** | **5** | **5** |
+| **G_CAPSUL** | **5** | **5** |
 | DiscoSNP++ | **0** | **0** |
 
-Examples: truth `A>G,T` → CAPSULE `G,T`; truth `G>C,T` → CAPSULE `C,T`.
+Examples: truth `A>G,T` → G_CAPSUL `G,T`; truth `G>C,T` → G_CAPSUL `C,T`.
 DiscoSNP++ returns nothing at any of them.
 
-Record counts confirm the structural difference: CAPSULE emitted **8
+Record counts confirm the structural difference: G_CAPSUL emitted **8
 multi-allelic records**, DiscoSNP++ emitted **0**. It cannot represent two
 alternate alleles at one position, so every GT=1/2 site is out of its reach.
 
 ### Verdict for this class
 
-**On real data CAPSULE wins multi-allelic calling outright (5/7 vs 0/7) while
+**On real data G_CAPSUL wins multi-allelic calling outright (5/7 vs 0/7) while
 matching DiscoSNP++ on overall SNV F1 (0.855 vs 0.854).** Unlike the synthetic
 triploid comparison — where a broken generator and the choice of representation
 decided the result — this is real reads, real truth, identical normalisation,
@@ -225,16 +225,16 @@ threshold artefact.
 
 | | P | R | F1 | multi-allelic sites correct | multi-allelic records emitted |
 |---|---|---|---|---|---|
-| **CAPSULE** | 0.941 | **0.808** | 0.870 | **6 / 11** | **29** |
+| **G_CAPSUL** | 0.941 | **0.808** | 0.870 | **6 / 11** | **29** |
 | DiscoSNP++ | **0.956** | 0.802 | **0.873** | **0 / 11** | **0** |
 
 **The capability result replicates exactly**: DiscoSNP++ recovers none of the
 multi-allelic sites in either region and emits zero multi-allelic records in
-25 Mb of real sequence. Combined over both regions: **CAPSULE 11/18, DiscoSNP++
+25 Mb of real sequence. Combined over both regions: **G_CAPSUL 11/18, DiscoSNP++
 0/18.**
 
 Overall SNV F1 is a tie at scale (0.855 vs 0.854 on 5 Mb; 0.870 vs 0.873 on
-20 Mb) — CAPSULE consistently higher recall, DiscoSNP++ consistently higher
+20 Mb) — G_CAPSUL consistently higher recall, DiscoSNP++ consistently higher
 precision.
 
 **Final position for this class: the win is the capability, replicated on two

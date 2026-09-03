@@ -53,7 +53,7 @@ unzip awscliv2.zip && sudo ./aws/install
 ## 2. Claim 1 — 10-17 locked SRA datasets
 
 **Source of truth for the exact accessions: `/root/arcs-clean/DATASET_LOCKED.md`**
-(10 primary + 7 extended = 17) and, for the CAPSULE-sandbox-specific
+(10 primary + 7 extended = 17) and, for the G_CAPSUL-sandbox-specific
 15-dataset SPRING/Genozip comparison, `/root/arcs-clean/c_star_pg_advance/NEW_DATASET_LOCKED.md`
 (one swap: Drosophila out, Utricularia gibba in — documented there with the
 exact reasoning, not silently substituted). **Never change these lists

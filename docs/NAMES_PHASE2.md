@@ -1,4 +1,4 @@
-# Phase 2 — names / read-ID column, wired into the CAPSULE archive
+# Phase 2 — names / read-ID column, wired into the G_CAPSUL archive
 
 ## What shipped
 

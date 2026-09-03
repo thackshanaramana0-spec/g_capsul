@@ -1,7 +1,7 @@
 > **SUPERSEDED for het-indel (2026-09-03).** The het-indel figures in this
 > document (0.583 / 0.631 vs DiscoSNP++ 0.663, recorded as a loss) predate
 > two measurement fixes and are kept only as the historical record. Current:
-> **CAPSULE 0.666 vs DiscoSNP++ 0.639, a win on 5 of 8 evaluations** — see
+> **G_CAPSUL 0.666 vs DiscoSNP++ 0.639, a win on 5 of 8 evaluations** — see
 > `docs/HET_INDEL_FRESH_SCAN.md` Findings 4-5 and
 > `docs/CLAIM2_TABLES_AND_INDEL_SCAN.md`. het-SNV figures here are unchanged.
 
@@ -15,7 +15,7 @@ per window rather than quoted (and its POS off-by-one corrected — see
 
 ## FINAL — 8 evaluations: 5 chr20 windows + 3 unseen individuals
 
-| dataset | CAPSULE SNV | DiscoSNP++ SNV | Δ | CAPSULE INDEL | DiscoSNP++ INDEL | Δ |
+| dataset | G_CAPSUL SNV | DiscoSNP++ SNV | Δ | G_CAPSUL INDEL | DiscoSNP++ INDEL | Δ |
 |---|---|---|---|---|---|---|
 | HG002 r2 *(tuning)* | 0.887 | 0.840 | **+0.047** | 0.655 | 0.679 | −0.024 |
 | HG002 r3 | 0.879 | 0.886 | −0.007 | 0.591 | 0.581 | **+0.010** |
@@ -27,7 +27,7 @@ per window rather than quoted (and its POS off-by-one corrected — see
 | HG005 r3 *(unseen)* | 0.860 | 0.870 | −0.010 | 0.635 | 0.667 | −0.032 |
 | **average** | **0.8899** | **0.8741** | **+0.016** | **0.6309** | **0.6626** | −0.032 |
 
-| | CAPSULE | DiscoSNP++ |
+| | G_CAPSUL | DiscoSNP++ |
 |---|---|---|
 | SNV precision / recall | 0.951 / **0.837** | **0.975** / 0.794 |
 | INDEL precision / recall | 0.749 / **0.552** | **0.910** / 0.522 |
@@ -66,7 +66,7 @@ Measured on the 422 truth het-SNV sites in the window, before writing code:
 | Were contigs haplotype-pure? | **No** — 70.1% had a stack containing both alleles once assignment was mismatch-tolerant |
 | What *was* broken? | **read→contig assignment** |
 
-CAPSULE assigns each read to the chain it **exactly** overlaps, so ref-allele
+G_CAPSUL assigns each read to the chain it **exactly** overlaps, so ref-allele
 and alt-allele reads land on different chains and never meet in a pileup.
 Only **124 of 75,115** reads ever reached the mismatch-tolerant pigeonhole
 mapper — chaining claimed the rest. The ceiling was never the data.
@@ -136,7 +136,7 @@ for tuning) plus 3 **unseen individuals**, including HG005 (Han Chinese, the
 most genetically distant from the rest). DiscoSNP++ rerun on every one of
 them, same reads, same scoring.
 
-| dataset | CAPSULE SNV F1 | DiscoSNP++ SNV F1 | Δ |
+| dataset | G_CAPSUL SNV F1 | DiscoSNP++ SNV F1 | Δ |
 |---|---|---|---|
 | HG002 r2 *(tuning)* | 0.878 | 0.840 | **+0.038** |
 | HG002 r3 | 0.862 | 0.886 | −0.024 |
@@ -149,7 +149,7 @@ them, same reads, same scoring.
 | **average** | **0.876** | **0.874** | **+0.002** |
 
 **Statistically a dead heat: 4 wins, 4 losses, average difference +0.002.**
-CAPSULE is now **at parity with the state of the art on het-SNV calling**,
+G_CAPSUL is now **at parity with the state of the art on het-SNV calling**,
 from a starting point of 0.419 — and the tuning window is *not* where the
 biggest win is (r4, held out, is), which is the signature of a real effect
 rather than an overfit.
@@ -161,7 +161,7 @@ to look next.
 
 ### Indels, after the read-support work (same 8 evaluations)
 
-| dataset | CAPSULE INDEL F1 | DiscoSNP++ INDEL F1 | Δ |
+| dataset | G_CAPSUL INDEL F1 | DiscoSNP++ INDEL F1 | Δ |
 |---|---|---|---|
 | HG002 r2 | 0.620 | 0.679 | −0.059 |
 | HG002 r3 | 0.596 | 0.581 | **+0.015** |
@@ -222,7 +222,7 @@ from the het-restricted truth, not low-support noise.
 which 40 are MULTI-ALLELIC. DiscoSNP++ run on the identical reads and scored by
 the identical pipeline (`rtg vcfeval --squash-ploidy`, POS-1 corrected).
 
-| seed | CAPSULE P | CAPSULE R | **CAPSULE F1** | DiscoSNP++ P | DiscoSNP++ R | **DiscoSNP++ F1** |
+| seed | G_CAPSUL P | G_CAPSUL R | **G_CAPSUL F1** | DiscoSNP++ P | DiscoSNP++ R | **DiscoSNP++ F1** |
 |---|---|---|---|---|---|---|
 | 42 | 0.812 | 0.975 | **0.886** | 0.500 | 1.000 | 0.667 |
 | 7 | 0.843 | 0.938 | **0.888** | 0.500 | 1.000 | 0.667 |
@@ -231,7 +231,7 @@ the identical pipeline (`rtg vcfeval --squash-ploidy`, POS-1 corrected).
 **RETRACTED — see the correction immediately below. The apparent win was a
 scoring artifact, not a real difference.**
 
-~~CAPSULE wins all three seeds by +0.22 to +0.28.~~ The mechanism is identical
+~~G_CAPSUL wins all three seeds by +0.22 to +0.28.~~ The mechanism is identical
 every time: DiscoSNP++ recovers every site (R = 1.000) but exactly HALF its
 calls are false (P = 0.500), because at a multi-allelic site it reports the
 variant without resolving which of the three alleles are present. The
@@ -243,7 +243,7 @@ is now measured, against the same competitor, on three independent seeds.
 
 ### Claim 2 scoreboard
 
-| variant class | CAPSULE | DiscoSNP++ | verdict |
+| variant class | G_CAPSUL | DiscoSNP++ | verdict |
 |---|---|---|---|
 | het-SNV | **0.890** | 0.874 | **WIN** (5/8 evaluations) |
 | het-indel | 0.631 | **0.663** | loss (3/8) |
@@ -274,11 +274,11 @@ form (`bcftools norm -m +any`) — gives:
 | DiscoSNP++ raw (what was first reported) | 0.500 | 1.000 | 0.667 |
 | DiscoSNP++ after dropping invalid-REF records | 0.667 | 1.000 | 0.800 |
 | **DiscoSNP++ properly normalized** | **1.000** | **1.000** | **1.000** |
-| CAPSULE (seed 42) | 0.812 | 0.975 | 0.886 |
-| CAPSULE (seed 101) | 0.939 | 0.963 | 0.951 |
+| G_CAPSUL (seed 42) | 0.812 | 0.975 | 0.886 |
+| G_CAPSUL (seed 101) | 0.939 | 0.963 | 0.951 |
 
 Verified on two independent seeds: normalized DiscoSNP++ scores a **perfect
-1.000** on this synthetic triploid data, against CAPSULE's 0.886–0.951.
+1.000** on this synthetic triploid data, against G_CAPSUL's 0.886–0.951.
 
 ### The correction above OVER-corrected. Symmetric treatment is what counts.
 
@@ -290,13 +290,13 @@ ships.
 
 Applying the SAME treatment to both tools:
 
-| treatment | DiscoSNP++ | CAPSULE |
+| treatment | DiscoSNP++ | G_CAPSUL |
 |---|---|---|
 | as each tool ships | 0.667 | **0.886** |
-| + invalid-REF records dropped (both tools; CAPSULE had 0 to drop) | 0.800 | **0.886** |
+| + invalid-REF records dropped (both tools; G_CAPSUL had 0 to drop) | 0.800 | **0.886** |
 | + rows merged into multi-allelic — applied ONLY to DiscoSNP++ | 1.000 | 0.886 |
 
-**Under symmetric treatment CAPSULE wins polyploid, 0.886 vs 0.800** (+0.086),
+**Under symmetric treatment G_CAPSUL wins polyploid, 0.886 vs 0.800** (+0.086),
 not the +0.22 first claimed and not the loss the over-correction implied.
 
 Two further facts that frame this correctly:
@@ -307,7 +307,7 @@ Two further facts that frame this correctly:
   biallelic variants only. It publishes NO polyploid numbers. We are running it
   outside its stated scope.
 * The remaining difference is a **capability** difference, not just accuracy:
-  CAPSULE emits multi-allelic VCF records natively; DiscoSNP++ emits separate
+  G_CAPSUL emits multi-allelic VCF records natively; DiscoSNP++ emits separate
   biallelic rows plus alt-vs-alt rows that are not valid variant records. That
   is worth stating as a capability, and it is why the raw gap is large.
 
@@ -319,13 +319,13 @@ strong. Both times the raw comparison flattered us.
 
 ### Corrected Claim 2 scoreboard
 
-| variant class | CAPSULE | DiscoSNP++ | verdict |
+| variant class | G_CAPSUL | DiscoSNP++ | verdict |
 |---|---|---|---|
 | het-SNV | 0.890 | 0.874 | narrow lead, **NOT statistically significant** (paired t=1.42, p>0.10; sign test 5/8, p=0.73) |
 | het-indel | 0.631 | 0.663 | loss, at the field-wide homopolymer ceiling |
 | polyploid SNV | 0.886–0.951 | **1.000** | **loss** |
 
-**Honest position: CAPSULE does not currently beat DiscoSNP++ on any Claim 2
+**Honest position: G_CAPSUL does not currently beat DiscoSNP++ on any Claim 2
 variant class at the level of statistical significance.** The het-SNV result is
 a real, reproducible lead in point estimate and generalizes across unseen
 individuals, but with n=8 it is within noise and must be reported as such.

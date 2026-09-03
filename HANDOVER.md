@@ -35,7 +35,7 @@ one:**
 
 ### 2.1 `/root/arcs-clean` — the OUTER project, real ARCS
 
-The actual, real ARCS/CAPSULE product per its own `CLAUDE.md`. Built binary
+The actual, real ARCS/G_CAPSUL product per its own `CLAUDE.md`. Built binary
 at `/root/arcs-clean/build/arcs`. This is what the eventual paper claims
 apply to, structured as three claims:
 
@@ -55,7 +55,7 @@ since Aug 26) — SRR065390 (C. elegans) and SRR870667 (T. cacao) never
 finished. All 8 completed ones were `lossless=LOSSLESS`. This has NOT been
 re-run since; it is a SEPARATE, UNMERGED code path from the sandbox below.
 
-### 2.2 `/root/arcs-clean/c_star_pg_advance` — the SANDBOX, CAPSULE
+### 2.2 `/root/arcs-clean/c_star_pg_advance` — the SANDBOX, G_CAPSUL
 
 **This is where ALL the work described in this document happened.** A
 SEPARATE git repository (own `.git`, own remote
@@ -70,7 +70,7 @@ more recently, directly against SPRING and Genozip.
 authoritative reference for this project's current state, section by
 section — read it, not just this handover, for anything not covered here.
 
-**The two real ARCS/CAPSULE binaries do NOT currently share code.** The
+**The two real ARCS/G_CAPSUL binaries do NOT currently share code.** The
 sandbox's names/quality/bugfix work described in this handover has NOT been
 ported into the outer project's `src/` (real `arcs` binary). This is a real,
 open reconciliation gap — see §8.
@@ -232,7 +232,7 @@ name, by historical accident, in two different repos.
 
 | tool | location | invocation used |
 |---|---|---|
-| PgRC2 | `/root/arcs-clean/method_c/build/PgRC` (GPL-3, cloned, never vendored) | `PgRC -o -t <N> -i in.fq out.pgrc` (`-o` = preserve read order, matching CAPSULE's scope) |
+| PgRC2 | `/root/arcs-clean/method_c/build/PgRC` (GPL-3, cloned, never vendored) | `PgRC -o -t <N> -i in.fq out.pgrc` (`-o` = preserve read order, matching G_CAPSUL's scope) |
 | SPRING | `/root/SPRING/build/spring` | Phase 1: `-c -i in.fq -o out --no-ids --no-quality -t N -w <dir>`. Phase 2b: same minus `--no-quality`. Phase 3: no flags. Patched (`src/main.cpp`) to respect `SPRING_KEEP_TEMP=1` for inspecting its own per-stream temp files directly — this is how SPRING's real `id_1.*` stream sizes were verified against `--no-ids` differencing (they agree to 0.45%) |
 | Genozip | system `genozip`/`genocat`, v15.0.87 | `genozip --force -o out.genozip in.fq`; sizes read via `genocat --STATS out.genozip` (CAPITAL — gives exact per-context bytes; lowercase `--stats` rounds to 2-3 significant figures and cannot resolve gaps under ~5%) |
 | fqzcomp (real, standalone) | built from `/tmp/htscodecs` (CRAM's htscodecs library) at `/tmp/fqzcomp_qual` | `fqzcomp_qual -r -s <0-3> in.q > out.comp` (raw quality-only mode; `-r` strips ASCII-33 internally) |
@@ -243,7 +243,7 @@ name, by historical accident, in two different repos.
 
 A benchmark script (`/tmp/allphases.sh`, output `/tmp/allph.log` /
 `/tmp/allph/r.csv`) is running, producing Phase 1 / Phase 2b / Phase 3 sizes
-for CAPSULE, SPRING, and Genozip on all 14 usable datasets, WITH a
+for G_CAPSUL, SPRING, and Genozip on all 14 usable datasets, WITH a
 round-trip verification gate at every phase level (a phase's number is only
 recorded if that phase's own decode reproduced its input — sequence-only for
 P1, +names for P2b, full-FASTQ-MD5 for P3). 8 of 14 datasets complete as of

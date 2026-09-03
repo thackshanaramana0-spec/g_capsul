@@ -67,7 +67,7 @@ unitigs/contigs ... instantiated N times, one per thread."*
 Key knobs visible in `Bubble.hpp`: `max_polymorphism`, `max_depth` /
 `max_breadth` (unitig/contig extension limits), `max_sym_branches`. The
 bubble is the whole variant model — a local branch in the graph where two
-paths diverge and reconverge. **This is structurally the same signal CAPSULE's
+paths diverge and reconverge. **This is structurally the same signal G_CAPSUL's
 cross-contig pass looks for**, which is exactly why our own caller's
 `extract_snv_bubble` / `extract_bubble` are the right shape; the difference
 is that DiscoSNP++ finds bubbles in a *graph* it built for this purpose,

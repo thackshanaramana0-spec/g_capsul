@@ -1,6 +1,6 @@
 # Claim 2 — data, tools, and files inventory (verified 2026-09-02)
 
-Everything needed to score CAPSULE's caller against real GIAB truth is
+Everything needed to score G_CAPSUL's caller against real GIAB truth is
 **already on this server** — nothing was missing, nothing downloaded today.
 This file traces exactly what exists, where, and which new file in this repo
 uses it. Not run yet (per instruction) — this is the inventory + wiring, not
@@ -42,18 +42,18 @@ installed. Nothing to install.**
 
 Claim 2 previously existed only in the outer `/root/arcs-clean` project. This
 repo now has its own complete, self-contained copy of the pipeline, wired to
-CAPSULE's own caller instead of ARCS's:
+G_CAPSUL's own caller instead of ARCS's:
 
 | file | role | source |
 |---|---|---|
 | `include/caps_caller.h` | the caller itself (pileup/SNV/indel/polyploid, frozen params) | ported from `/root/arcs-clean/src/caller.cpp` |
-| `stages/106_inprocess.cpp` (`CAPS_CALL=1` gate) | contig-span capture + `CallData` population + caller invocation | new, written for CAPSULE's own assembly (see `docs/CLAIM2_BUILDER.md` for why this differs structurally from ARCS's `vodbg_pg`) |
+| `stages/106_inprocess.cpp` (`CAPS_CALL=1` gate) | contig-span capture + `CallData` population + caller invocation | new, written for G_CAPSUL's own assembly (see `docs/CLAIM2_BUILDER.md` for why this differs structurally from ARCS's `vodbg_pg`) |
 | `scripts/lift_vcf.py` | contig→genome coordinate lift (`hapflank_lift`), tool-agnostic | copied unchanged from outer project (no ARCS-specific coupling) |
 | `scripts/eval_caller.py` | quick window-based P/R/F1 scorer (secondary to rtg) | copied unchanged |
 | `scripts/extract_vcfeval_metrics.py` | parses `rtg vcfeval`'s `summary.txt` | copied unchanged |
 | `scripts/sim_indel_bench.py`, `scripts/sim_indel.py` | synthetic diploid indel-truth generators | copied unchanged |
 | `scripts/sim_polyploid.py` | synthetic k-ploid truth generator | copied unchanged |
-| `scripts/run_indel_bench_capsule.sh` | synthetic indel pipeline: **CAPSULE call → BWA → lift → rtg** | adapted from outer `run_indel_bench.sh` — only the caller-invocation line changed (`CAPS_CALL=1 CALL_VCF=... CAPS_DUMP_CONTIGS=... "$CAPS" reads.fq <args>` instead of `"$ARCS" call reads.fq calls.vcf`) |
+| `scripts/run_indel_bench_capsule.sh` | synthetic indel pipeline: **G_CAPSUL call → BWA → lift → rtg** | adapted from outer `run_indel_bench.sh` — only the caller-invocation line changed (`CAPS_CALL=1 CALL_VCF=... CAPS_DUMP_CONTIGS=... "$CAPS" reads.fq <args>` instead of `"$ARCS" call reads.fq calls.vcf`) |
 | `scripts/run_giab_indel_capsule.sh` | **real-GIAB** HG002 chr20:2.0–2.4M SNV+indel pipeline, DiscoSNP++-comparable | adapted the same way from outer `run_giab_indel.sh` |
 | `scripts/run_polyploid_bench_capsule.sh` | polyploid (`CAPS_PLOIDY=k`) pipeline | adapted the same way from outer `run_polyploid_bench.sh` |
 
@@ -86,5 +86,5 @@ download — not part of this run.
   (after `python3 scripts/sim_polyploid.py <workdir> 3 40000 60 42`).
 
 All three are held for a future "run it" instruction — this pass only
-confirms the data/tools exist and wires the CAPSULE-specific scripts into
+confirms the data/tools exist and wires the G_CAPSUL-specific scripts into
 this repo, per the user's explicit "no need to run" instruction.

@@ -9,16 +9,16 @@ individually with their sequence context.
 | | count |
 |---|---|
 | found by BOTH | 17 |
-| found by **CAPSULE only** | **21** |
+| found by **G_CAPSUL only** | **21** |
 | found by **DiscoSNP++ only** | **9** |
 | found by neither | 19 |
 
 | | TP | FP | FN | P | R | F1 |
 |---|---|---|---|---|---|---|
-| CAPSULE | **38** | 12 | 28 | 0.760 | **0.576** | **0.655** |
+| G_CAPSUL | **38** | 12 | 28 | 0.760 | **0.576** | **0.655** |
 | DiscoSNP++ | 26 | 14 | 40 | 0.650 | 0.394 | 0.491 |
 
-**On this window CAPSULE detects 46% more true indels than DiscoSNP++ (38 vs
+**On this window G_CAPSUL detects 46% more true indels than DiscoSNP++ (38 vs
 26) and has FEWER false positives (12 vs 14).** The aggregate 8-window loss
 (0.631 vs 0.663) is therefore NOT uniform — it is driven by other windows, and
 DiscoSNP++'s advantage is narrower than the average suggests.
@@ -54,7 +54,7 @@ explicit ambiguity allowance (`max_ambigous_indel`, default 20).
 
 ## 3. What we catch that they do not
 
-| event class | CAPSULE-only |
+| event class | G_CAPSUL-only |
 |---|---|
 | 1 bp | 7 (3 DEL, 4 INS) |
 | 2 bp | 3 INS |
@@ -183,7 +183,7 @@ contigs that no longer contain the variant. That is why:
 **This is a substrate ceiling, not a caller defect.** Recovering these events
 requires the assembler to keep haplotypes with different homopolymer run
 lengths apart — i.e. an overlap criterion that treats a run-length difference
-as a mismatch rather than absorbing it. That is a change to CAPSULE's chaining,
+as a mismatch rather than absorbing it. That is a change to G_CAPSUL's chaining,
 the same component that produces the Claim 1 compression win, and it would
 have to be shown not to cost archive size.
 
@@ -195,7 +195,7 @@ bubble is present in its graph from the start.
 successive hypotheses (filters, extraction, closing anchors, anchor pairing)
 were each implemented and each measured to be irrelevant, because the
 information is destroyed upstream of all of them. The honest claim remains
-complementarity: on this window CAPSULE finds 46% more true indels overall
+complementarity: on this window G_CAPSUL finds 46% more true indels overall
 (38 vs 26) with fewer false positives, while DiscoSNP++ owns 1 bp homopolymer
 events that our assembly cannot represent.
 

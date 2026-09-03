@@ -4,7 +4,7 @@
 > measured before 4 silent data-loss bugs were found and fixed (commits
 > `23be207`, `121fea9`, `f3ab0c2`) — the archives for **ERR552797,
 > SRR40271341, SRR40402583, SRR32429602** did not actually decode to their
-> input, so their CAPSULE sizes here are not valid comparisons. The other 10
+> input, so their G_CAPSUL sizes here are not valid comparisons. The other 10
 > datasets were unaffected (all fixed-length, and the bugs are only reachable
 > with variable-length or all-N reads). A full re-run with the fixed binaries,
 > covering Phase 1 / Phase 2b / Phase 3 separately plus combined, each level
@@ -12,7 +12,7 @@
 > `docs/PHASE3_RESULT.md` (or the latest ALLPHASES result) once it lands, and
 > treat this file as historical until then.
 
-**2026-09-02, original run.** The first head-to-head of the CAPSULE archive
+**2026-09-02, original run.** The first head-to-head of the G_CAPSUL archive
 against real SPRING and Genozip on the locked dataset set. Everything below is
 a real file on disk, not a stream total or a log sum.
 
@@ -30,7 +30,7 @@ be compared on this axis. Its sequence-only comparison is in
 
 | tool | what its number covers | how |
 |---|---|---|
-| CAPSULE | sequence + read order + names + line-3 mode | `CAPS_NAMES=1` through `scripts/encode_adaptive.sh` (the locked config), real archive size on disk |
+| G_CAPSUL | sequence + read order + names + line-3 mode | `CAPS_NAMES=1` through `scripts/encode_adaptive.sh` (the locked config), real archive size on disk |
 | SPRING | sequence + read order + names | `--no-quality` only, so IDs are retained. Real archive size on disk. |
 | Genozip | sequence + read order + names | no such switch exists, so summed from its own `genocat --STATS`: SEQ + every `Parent=QNAME` context + `length` + `LINE3` |
 
@@ -41,7 +41,7 @@ one-byte file mode — see the line-3 section of `REIMPL_NOTES.md`).
 
 ## Result
 
-| dataset | organism | CAPSULE | SPRING | Genozip | vs SPRING | vs Genozip |
+| dataset | organism | G_CAPSUL | SPRING | Genozip | vs SPRING | vs Genozip |
 |---|---|---|---|---|---|---|
 | SRR39257532 | A. fumigatus | 54,463,702 | 94,085,120 | 165,844,879 | **−42.1%** | −67.2% |
 | SRR40402583 | C. jejuni | 5,265,395 | 5,888,000 | 27,160,660 | −10.6% | −80.6% |

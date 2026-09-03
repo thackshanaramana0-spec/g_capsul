@@ -1,4 +1,4 @@
-# CAPSULE — project reference
+# G_CAPSUL — project reference
 
 **C**ompact, **A**ddressable, **P**seudogenome-**S**tructured, **U**nified **L**ossless **E**ncoder.
 
@@ -27,7 +27,7 @@ BSD 3-clause, gated on `CAPS_QUAL=1`) — see commit `908b769` and section 6.3.
 The archive can now reproduce a complete 4-line FASTQ from the archive alone;
 verified byte-identical (same MD5) on at least one dataset, full sweep pending.
 
-Repo: `github.com/thackshanaramana0-spec/capsule` (renamed from
+Repo: `github.com/thackshanaramana0-spec/g_capsul` (renamed from
 `c_star_pg_advance` on GitHub 2026-09-03; local checkout directory and git
 branch name are unchanged), 127+ commits, working tree clean.
 
@@ -178,7 +178,7 @@ current state; this section is kept for the historical record per this file's
 own rule that retractions are marked in place, not deleted.
 
 `stages/capsule_decode.cpp` reads the
-CAPSULE container and inverts the general-purpose coders. Verified identical
+G_CAPSUL container and inverts the general-purpose coders. Verified identical
 against the encoder's own in-memory streams on H. salinarum: `pos_abs`
 (1,842,004 B), `read_lengths` (921,002 B), `pos_strand`, and the three N
 streams -- 6 identical, 0 differ.
@@ -333,7 +333,7 @@ density rather than always.
 
 ## 10. Commit map
 
-    c91ba02  CAPSULE format: container + archive decoder (partial)
+    c91ba02  G_CAPSUL format: container + archive decoder (partial)
     d1812f5  Second-region self-match: quantified, reverted as LOSSY
     987843b  Variable-length: two hypotheses refuted and reverted
     3e06957  Flip the last loss: sweep from L=Lmax so duplicates chain

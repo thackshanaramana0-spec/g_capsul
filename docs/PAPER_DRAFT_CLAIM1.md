@@ -1,4 +1,4 @@
-# ARCS / CAPSULE — paper draft, Claim 1 (Methods + Architecture)
+# ARCS / G_CAPSUL — paper draft, Claim 1 (Methods + Architecture)
 
 Written 2026-09-02. This is a **methods-and-architecture draft**, not a full
 paper — Results (beyond the numbers Claim 1 already has) and Limitations for
@@ -11,10 +11,10 @@ project's own measured numbers (`/tmp/allph/r.csv`, `CLAUDE.md`).
 
 **Naming note:** the outer project is branded ARCS in
 `/root/arcs-clean/CLAUDE.md`; the sandbox implementation here is called
-CAPSULE. For the paper, CAPSULE's sequence/names/quality engine IS what
+G_CAPSUL. For the paper, G_CAPSUL's sequence/names/quality engine IS what
 "ARCS compress" should eventually wrap — see HANDOVER.md's reconciliation
 item. Use "ARCS" as the tool name in the paper and "the pseudogenome
-assembly stage" / "CAPSULE" only when this draft needs to be specific about
+assembly stage" / "G_CAPSUL" only when this draft needs to be specific about
 which codebase a claim was measured on.
 
 ---
@@ -326,7 +326,7 @@ enough to dominate the aggregate.
 
 ### 5.4 Speed and RAM (qualify honestly)
 
-ARCS/CAPSULE is ~1.6–1.7× slower and ~2.5–2.8× heavier in peak RAM than
+ARCS/G_CAPSUL is ~1.6–1.7× slower and ~2.5–2.8× heavier in peak RAM than
 PgRC2 on the datasets measured so far (E. coli). No head-to-head wall-clock
 numbers against SPRING/Genozip have been collected yet in this run — get
 them before submission; the CSV columns exist (`/tmp/allph/r.csv` currently

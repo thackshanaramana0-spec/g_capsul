@@ -1,11 +1,11 @@
-# CAPSULE — 15-dataset locked set for the SPRING/Genozip comparison
+# G_CAPSUL — 15-dataset locked set for the SPRING/Genozip comparison
 
 **Supersedes `DATASET_LOCKED.md`'s 17-accession list for this specific
 comparison.** `DATASET_LOCKED.md` is unchanged and remains the source of truth
 for the original 10 + extended 7. This file records one deliberate swap made
 2026-09-02, why, and the resulting exact 15.
 
-Scope: `c_star_pg_advance` only (the CAPSULE sequence+order encoder). Not the
+Scope: `c_star_pg_advance` only (the G_CAPSUL sequence+order encoder). Not the
 outer `/root/arcs-clean` ARCS binary, not names/quality.
 
 ---

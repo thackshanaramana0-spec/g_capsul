@@ -1,4 +1,4 @@
-# CAPSULE — failures, refuted ideas, and real bugs found
+# G_CAPSUL — failures, refuted ideas, and real bugs found
 
 Written 2026-09-02. Every entry below was IMPLEMENTED AND MEASURED, not
 argued away — that is the standing discipline for this repo (`CLAUDE.md`

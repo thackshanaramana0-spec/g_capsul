@@ -48,7 +48,7 @@ statistically definitive.
 
 Cross-referencing FP and FN positions directly (not done in any prior
 analysis found in this repo) found **one exact positional match**: at
-`chr20:3332481`, truth says `TTTTA→T` (a 4bp **deletion**), and CAPSULE
+`chr20:3332481`, truth says `TTTTA→T` (a 4bp **deletion**), and G_CAPSUL
 called `T→Tttta` (a 4bp **insertion**) at the identical position.
 
 This is mechanistically different from every failure mode the prior docs
@@ -75,7 +75,7 @@ a concrete follow-up, not concluded.
 
 Searched specifically for de Bruijn graph bubble-classification techniques
 this project hasn't tried, given the established finding that
-read-support filtering can't discriminate CAPSULE's candidates (they're
+read-support filtering can't discriminate G_CAPSUL's candidates (they're
 read-derived by construction, per `HOW_DISCOSNP_WINS.md` §4).
 
 **Cortex** (Iqbal et al., "De novo assembly and genotyping of variants
@@ -86,7 +86,7 @@ until checked in more depth: **Cortex's classification power comes from
 having multiple "colors" (multiple samples) to compare bubble
 topology across.** A bubble that appears in every sample's color pattern
 one way is classified differently than one appearing in only one sample.
-**This doesn't transfer to CAPSULE's task as stated** — a single diploid
+**This doesn't transfer to G_CAPSUL's task as stated** — a single diploid
 sample, no second sample or reference to compare against
 (`HET_INDEL_SOTA.md` §1's own framing of the task, which this search
 re-confirms rather than contradicts). Reported honestly as a dead end for
@@ -97,7 +97,7 @@ tandem repeats found no tool claiming to have solved the specific ambiguity
 this project's own docs already named as the residual gap — recent papers
 (e.g. pangenome-graph-assisted SV calling) describe the same class of
 difficulty as still open, using cross-sample or cross-assembly comparison
-(again, information CAPSULE's single-sample task doesn't have) rather than
+(again, information G_CAPSUL's single-sample task doesn't have) rather than
 a single-sample technique this project could adopt directly.
 
 ## Finding 3 — a real gap in the caller, generalized, tested, and REFUTED
@@ -143,7 +143,7 @@ LOSSLESS. (Structurally it could not have been affected — `caps_caller.h`
 is only compiled into the `CAPS_CALL` path and touches no compression
 logic — but this was checked rather than asserted.)
 
-## Finding 4 — a scoring bug that only ever penalised CAPSULE. Fixing it FLIPS het-indel to a WIN.
+## Finding 4 — a scoring bug that only ever penalised G_CAPSUL. Fixing it FLIPS het-indel to a WIN.
 
 Inspecting the raw FP records (Finding 1's method) showed that 4 of 16 indel
 "false positives" on HG002 r2 were not indels at all — they were
@@ -159,7 +159,7 @@ multi-allelic SNV was classified as an INDEL. `bcftools norm -m -any` then
 split it into `T→A` and `T→C`, two SNV-shaped rows sitting in the indel call
 set and scoring as indel false positives.
 
-**This bug could only ever penalise CAPSULE**, because CAPSULE is the only
+**This bug could only ever penalise G_CAPSUL**, because G_CAPSUL is the only
 tool in the comparison that emits native multi-allelic records at all —
 that is its own documented T5.2 capability. DiscoSNP++ emits separate
 biallelic rows, which the buggy classifier handled correctly by accident.
@@ -174,7 +174,7 @@ Re-scored on all 8 evaluations. **Neither caller was modified** — only the
 scoring classification was corrected, so this is not a caller change and
 cannot affect Claim 1 or any archive.
 
-| window | CAPSULE | DiscoSNP++ |
+| window | G_CAPSUL | DiscoSNP++ |
 |---|---|---|
 | HG002_na | **0.667** | 0.593 |
 | HG002_r2 | **0.679** | 0.491 |
@@ -186,7 +186,7 @@ cannot affect Claim 1 or any archive.
 | HG005_r3 | 0.635 | **0.667** |
 | **average** | **0.659** | **0.639** |
 
-**CAPSULE 0.659 vs DiscoSNP++ 0.639 — a win, on 5 of 8 evaluations.**
+**G_CAPSUL 0.659 vs DiscoSNP++ 0.639 — a win, on 5 of 8 evaluations.**
 (Later improved to **0.666** by the polarity fix in Finding 5 below.)
 Previously recorded as 0.637 vs 0.663, a loss. The change comes entirely
 from removing false positives that were never indels.
@@ -204,10 +204,10 @@ self-serving. Three checks against that:
    change (normalising truth before het-filtering, which additionally
    admits `GT=1/2` multi-allelic truth sites) was measured **separately**
    precisely because it redefines the benchmark in a way that structurally
-   favours CAPSULE, and would partly double-count the T5.2 capability
+   favours G_CAPSUL, and would partly double-count the T5.2 capability
    inside the T5 metric:
 
-   | convention | CAPSULE | DiscoSNP++ | margin | windows won |
+   | convention | G_CAPSUL | DiscoSNP++ | margin | windows won |
    |---|---|---|---|---|
    | original truth, corrected classification (fix 1) | 0.659 | 0.639 | **+0.020** | 5/8 |
    | + truth normalised before het-filter (fix 1+2) | 0.595 | 0.574 | **+0.021** | 5/8 |
@@ -250,7 +250,7 @@ transferable technique for this specific task — checked, not assumed.
 Comparing every tetraploid indel FP against truth at the SAME position
 showed a systematic inversion rather than random error:
 
-| position | truth | CAPSULE called |
+| position | truth | G_CAPSUL called |
 |---|---|---|
 | 20:3346020 | `TTTTATTTA→T` (deletion) | `T→TTTTATTTA` (insertion) |
 | 20:3097933 | `GCA→G` (deletion) | `G→GCA` (insertion) |
