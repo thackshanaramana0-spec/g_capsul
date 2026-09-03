@@ -1,11 +1,59 @@
-# c_star_pg_advance
+# c_star_pg_advance — CAPSULE
 
-An independent, from-scratch reimplementation of PgRC2's pseudogenome-based read
-compressor, developed as a sandbox alongside ARCS. Scope is the **sequence and
-read-order** layers only: assembly, mapping, self-matching, and the streams a
-decoder needs to rebuild every read in its original position. Name and quality
-coders are present in the stage history (61-75, 84-85, 92) but are not part of
-the current scope.
+An independent, from-scratch pseudogenome-based FASTQ archive, developed as
+a sandbox alongside ARCS. **As of 2026-09-03 this covers all three claims,
+updated from this README's earlier, now-stale scope statement** (see
+`docs/TECHNICAL_ARCHITECTURE.md` §0 for the full architecture):
+
+- **COMPACT** — sequence, read order, names, and quality, all independently
+  toggleable (§ "What you get, by configuration" below).
+- **FAITHFUL** — reference-free heterozygous SNV/indel calling as an
+  in-process side effect of compression (`include/caps_caller.h`).
+- **ADDRESSABLE** — `export`/`coverage`/`query` served directly from the
+  archive, no reference genome, no full decompression
+  (`stages/capsule_decode.cpp`).
+
+**Start here for a 3-line quick check of all three:**
+```bash
+bash scripts/run_capsule.sh 1   # COMPACT
+bash scripts/run_capsule.sh 2   # FAITHFUL
+bash scripts/run_capsule.sh 3   # ADDRESSABLE
+```
+Full command reference: `docs/COMMANDS_REFERENCE.md`. Fresh-server
+bootstrap (every dataset and tool, exact verified commands):
+`docs/SERVER_SETUP_AND_DOWNLOADS.md`.
+
+## What you get, by configuration
+
+**Every feature below is additive and independently OFF by default.**
+Turning one off does not affect the others' correctness — it only removes
+that column from the output. This matters because "compress a FASTQ" is
+not one fixed operation here; it's a sequence-only archive unless you ask
+for more.
+
+| you set | what's IN the archive | what decoding gives you | what's NOT there if you don't set it |
+|---|---|---|---|
+| *(nothing — the default)* | sequence + read order only | `capsule_decode <archive> <outdir> <outdir>/reads.seq` → one sequence per line, in original file order | no read names, no quality scores, no `+` line — this is NOT a FASTQ, it's the sequence column only |
+| `CAPS_NAMES=1` | + names/read-ID column | decode also writes `<outreads>.names` | quality still absent unless also set |
+| `CAPS_QUAL=1` | + quality scores | decode also writes `<outreads>.qual` | names still absent unless also set |
+| `CAPS_NAMES=1 CAPS_QUAL=1` | full FASTQ content | decode writes sequence + `.names` + `.qual`; a full 4-line FASTQ is reassembled from these three plus the recovered line-3 mode, verified byte-identical (same MD5) to the original input | nothing — this is the complete round trip |
+| `CAPS_CALL=1` | *(no archive change — writes a VCF as a side effect)* | `$CALL_VCF` gets heterozygous SNV/indel calls in contig coordinates | does not affect what the archive itself contains; combinable with any of the above with no interaction (verified this session, see `docs/FINAL_ALGORITHMIC_SCAN.md`) |
+
+**Claim 3's three operations are independent reads of the SAME archive —
+running one does not run or require the others:**
+
+| command | what you get | what you do NOT get |
+|---|---|---|
+| `capsule_decode export <arc> out.fa` | the assembled pseudogenome as FASTA — an assembly, not individual reads | no per-read output, no depth information, no coordinate lookup |
+| `capsule_decode coverage <arc> out.tsv` | a `#region start end depth` TSV — per-base depth only | no sequence content anywhere in the output |
+| `capsule_decode query <arc> out.fa START-END` | FASTA records for reads overlapping that coordinate range only | reads outside the range; also does NOT give you `.names`/`.qual` for those reads — query returns sequence only |
+| `capsule_decode <arc> <outdir> <outdir>/reads.fq` (no mode keyword) | the full round trip — every original read, in order, full sequence | this is the only one of the four that reconstructs actual per-original-read output; the other three are all reads FROM the archive's own internal state (pg content or placement index), not from replaying every read |
+
+**In short: pick exactly what you need.** Want to check compression ratio
+only → default, no flags. Want the full file back → both `CAPS_*` flags on
+at encode time. Want just the assembly → `export`, nothing else runs. Want
+depth only → `coverage`, which is deliberately cheaper because it skips
+rebuilding the assembly entirely (`TECHNICAL_ARCHITECTURE.md` §10.1).
 
 ## Where things are
 
