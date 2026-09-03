@@ -1,0 +1,16 @@
+# T5.3 — TETRAPLOID benchmark, 2026-09-03
+# Method: Cooke, Wedge & Lunter, "Benchmarking small-variant genotyping in
+# polyploids", Genome Research 2022 (PMC8805713). Real GIAB HG003 + HG004
+# reads concatenated (30x each -> ~60x 4-copy sample), truth = union of the two
+# individuals' real GIAB v4.2.1 calls, confident regions = intersection of both
+# individuals' confident BEDs. NOTHING SIMULATED: every read and every truth
+# allele is real data from a real person.
+# Window: chr20:3,000,000-3,400,000 (373,982 confident bp). Reads: 154,580.
+# Truth in window: 605 SNV, 141 indel sites (114,779 tetraploid sites chr20-wide).
+# Scoring: rtg vcfeval --squash-ploidy, identical pipeline for both tools,
+# DiscoSNP++ POS off-by-one corrected as documented.
+variant_class,tool,TP,FP,FN,precision,recall,F1
+SNV,CAPSULE,429,24,144,0.947,0.749,0.836
+SNV,DiscoSNP++,373,8,200,0.979,0.651,0.782
+INDEL,CAPSULE,44,17,56,0.721,0.440,0.547
+INDEL,DiscoSNP++,42,5,58,0.894,0.420,0.571

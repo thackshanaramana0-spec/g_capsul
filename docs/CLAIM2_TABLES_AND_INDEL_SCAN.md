@@ -21,6 +21,53 @@ than the honest loss is.
 | **T4** | coverage sweep — CAPSULE F1 at 10×/15×/20×/30× (HG002 only) | sensitivity curve, not a win/loss comparison |
 | **T5** | het-indel F1 — CAPSULE vs DiscoSNP++, HG002-HG005 chr20 | **WIN as of 2026-09-03: 0.659 vs 0.639**, 5 of 8 evaluations. Previously recorded as a loss (0.637 vs 0.663); a scoring bug that misfiled multi-allelic SNVs as indel false positives — and could only ever penalise CAPSULE — was found and fixed. Neither caller changed. Full evidence, and the check that the win is invariant to scoring convention, in `docs/HET_INDEL_FRESH_SCAN.md` Finding 4. |
 | **T5.2** *(new)* | multi-allelic sites recovered — CAPSULE vs DiscoSNP++, real diploid GT=1/2 sites | **WIN** 11/18 vs 0/18, replicated on two independent chr20 regions |
+| **T5.3** *(new)* | tetraploid SNV + indel F1 — CAPSULE vs DiscoSNP++, real HG003+HG004 mix (Cooke et al. 2022 method) | **SNV WIN** 0.836 vs 0.782; indel 0.547 vs 0.571 (see §T5.3 below) |
+
+### T5.3 — TETRAPLOID (added 2026-09-03)
+
+**Previously this project declined to make any polyploid claim**, on the
+grounds that no real polyploid truth set existed and our own synthetic
+generator (which had a 28% truth bug) could not be trusted. **That position
+was wrong, and it was wrong because the literature had not been checked
+properly.** A fresh search found the established, peer-reviewed method:
+
+> Cooke, Wedge & Lunter, "Benchmarking small-variant genotyping in
+> polyploids", *Genome Research* 32(2):403, Feb 2022 (PMC8805713).
+
+They build a polyploid benchmark from **real** diploid GIAB samples:
+concatenate the real reads of two individuals to make a 4-copy sample, and
+take the union of their real GIAB truth calls as the polyploid truth. The
+only artificial step is treating two real people as one organism — every
+read and every truth allele is real. This project already had the exact
+inputs their method needs (HG003, HG004, and their v4.2.1 truth VCFs).
+
+Replicated here exactly: HG003 + HG004 reads at 30× each → ~60× tetraploid
+(154,580 reads in the standard chr20:3.0–3.4 Mb window); truth = union of
+their real calls (114,779 tetraploid sites chr20-wide, 733 in-window, 1,413
+of them genuinely multi-allelic); confident regions = intersection of both
+individuals' confident BEDs (373,982 bp in-window). Scored with the same
+`rtg vcfeval --squash-ploidy` pipeline used everywhere else in Claim 2,
+with DiscoSNP++'s documented POS off-by-one corrected.
+
+| variant class | CAPSULE | DiscoSNP++ | result |
+|---|---|---|---|
+| **SNV F1** | **0.836** (P 0.947, R 0.749) | 0.782 (P 0.979, R 0.651) | **WIN, +0.054** |
+| indel F1 | 0.547 (P 0.721, R 0.440) | **0.571** (P 0.894, R 0.420) | loss, −0.024 |
+
+**CAPSULE wins tetraploid SNV calling and is close on indels**, on fully
+real data, against the only applicable reference-free competitor. As in the
+diploid case, the win comes from recall (0.749 vs 0.651) while DiscoSNP++
+holds higher precision.
+
+Caveats stated plainly: this is **one window on one synthetic-ploidy
+construction**, not a survey of real polyploid organisms. Cooke et al. also
+validate against a genuinely autotriploid banana (*Musa acuminata* Dwarf
+Cavendish, Busche et al. 2020) — testing a real polyploid *organism*
+remains open work, and this table does not claim to have done it. Raw
+numbers: `results/claim2/t5_3_tetraploid.csv`; truth builder:
+`scripts/build_tetraploid_truth.py`.
+
+---
 
 T5.2 is a **capability** result, not a threshold metric: DiscoSNP++
 structurally cannot emit a multi-allelic VCF record (it emits separate
