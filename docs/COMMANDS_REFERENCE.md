@@ -6,6 +6,41 @@ else. For *why* any of this works, see `docs/TECHNICAL_ARCHITECTURE.md`
 `docs/CLAIM3_LOCKED.md` (Claim 3). Every command below is a real,
 already-used invocation, not a hypothetical interface.
 
+## The 3-line version — start here
+
+```bash
+bash scripts/run_capsule.sh 1     # Claim 1 (COMPACT):     verify losslessness on the locked E. coli dataset
+bash scripts/run_capsule.sh 2     # Claim 2 (FAITHFUL):    fast synthetic regression test, no downloads needed
+bash scripts/run_capsule.sh 3     # Claim 3 (ADDRESSABLE): fast synthetic regression test, no downloads needed
+```
+
+Each claim is **independent** — there's no requirement to run them in
+order, and no reason a reviewer checking Claim 3 should have to run 1 or 2
+first. Each command builds whatever binaries it needs on first use and
+prints which dataset it used.
+
+**No dataset path is hardcoded anywhere in this chain.** Every script reads
+from `scripts/capsule_config.sh` — edit that one file if your datasets move,
+or override for a single run without touching any file:
+```bash
+CAPSULE_DATA_DIR=/mnt/other/fastq bash scripts/run_capsule.sh 1
+```
+
+**Sub-phases**, once the default has run cleanly, per claim:
+```bash
+bash scripts/run_capsule.sh 1 compress   # keep the archive, not just verify
+bash scripts/run_capsule.sh 1 sweep      # the real 14-dataset comparison (not yet a single script -- prints where to find the manual steps)
+bash scripts/run_capsule.sh 2 giab       # real GIAB het-SNV+indel benchmark (needs chr20.fa + truth VCFs, see SERVER_SETUP_AND_DOWNLOADS.md)
+bash scripts/run_capsule.sh 2 window HG002 r2   # single-individual, single-window benchmark
+bash scripts/run_capsule.sh 3 full       # the real export/coverage/query benchmark vs SPAdes/bwa+mosdepth
+```
+
+Everything below this point is the direct, lower-level command for each
+operation, for anyone who wants to skip the dispatcher and call the
+underlying binaries/scripts themselves.
+
+---
+
 Build the two binaries once, shared by all three claims:
 
 ```bash
