@@ -62,10 +62,8 @@ case "$CLAIM" in
             log "Archive: $CAPSULE_OUT_DIR/out.capsule ($(stat -c%s "$CAPSULE_OUT_DIR/out.capsule") bytes)"
             ;;
         sweep)
-            log "This is the real 14-dataset SPRING/Genozip comparison -- slow, real data required."
-            log "Not yet wrapped as a single script (docs/INDUSTRIAL_CHECKLIST_CLAIM1.md notes this gap)."
-            log "Run manually per docs/SOTA_COMPARISON.md's regeneration section, or use 'compress'/'verify' for a fast single-dataset check."
-            exit 2
+            log "Real 14-dataset T1+T2 vs SPRING/Genozip -- slow (hours), real data required."
+            bash "$HERE/scripts/run_claim1_bench.sh" "$CAPSULE_DATA_DIR" "$CAPSULE_OUT_DIR/claim1_bench"
             ;;
         *) log "Unknown Claim 1 phase: $PHASE (try: compress, verify, sweep)"; exit 2 ;;
     esac
