@@ -23,6 +23,8 @@
 #     individual: HG002 | HG003 | HG004 | HG005
 #     window:     r2 | r3 | na | r4 | r5   (or explicit LO:HI)
 set -e
+T_START=$(date +%s)
+log() { echo "[window] $(date '+%H:%M:%S') $*"; }
 
 CAPS="$1"; SC="$2"; REF="$3"; IND="${4:-HG002}"; WIN="${5:-r2}"
 OUT="${6:-$HOME/caps_win/${IND}_${WIN}}"
@@ -145,3 +147,4 @@ score INDEL t_ind.vcf.gz c_ind.vcf.gz
 echo "truth het-SNV: $(zcat t_snv.vcf.gz|grep -vc '^#')  truth het-indel: $(zcat t_ind.vcf.gz|grep -vc '^#')"
 echo "capsule SNV calls: $(zcat c_snv.vcf.gz|grep -vc '^#')  indel calls: $(zcat c_ind.vcf.gz|grep -vc '^#')"
 echo "==========================================================================="
+log "Total elapsed: $(( $(date +%s) - T_START ))s"

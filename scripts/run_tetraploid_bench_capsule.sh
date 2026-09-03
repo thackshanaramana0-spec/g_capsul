@@ -27,7 +27,8 @@ OUT="${8:-$HOME/tetra_win/${INDA}_${INDB}}"
 CHROM="${REGIONSPEC%%:*}"; RANGE="${REGIONSPEC#*:}"; LO="${RANGE%-*}"; HI="${RANGE#*-}"
 TARGET_COV=30
 
-log()  { echo "[tetraploid] $*"; }
+log()  { echo "[tetraploid] $(date '+%H:%M:%S') $*"; }
+T_START=$(date +%s)
 mkdir -p "$OUT"; cd "$OUT"
 log "mixing $INDA + $INDB reads at ${TARGET_COV}x each -> ${PLOIDY}-copy sample, region $CHROM:$LO-$HI"
 
@@ -127,3 +128,4 @@ score "CAPSULE_INDEL" t_ind.vcf.gz c_ind.vcf.gz
 score "DiscoSNP++_INDEL" t_ind.vcf.gz d_ind.vcf.gz
 echo "=========================================================="
 log "Results in: $OUT"
+log "Total elapsed: $(( $(date +%s) - T_START ))s"
