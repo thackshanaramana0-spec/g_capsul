@@ -1287,6 +1287,33 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                         if (ok2) same = true;
                     }
                 }
+                // SNV-TOLERANT CLOSING ANCHOR (CAPS_CLOSE_TOL=1).
+                // MEASURED MOTIVATION: instrumenting every drop reason on the
+                // tetraploid benchmark shows this test is not merely dominant,
+                // it is nearly the whole story -- 2,512 of 2,865 candidate
+                // drops (88%) are DROP-CLOSE, against 323 DROP-COV, 21
+                // DROP-ANCH and 9 DROP-JUNC. A byte-identical BK=25-mer is
+                // required on BOTH contigs, so ONE heterozygous SNV anywhere
+                // in those 25 bases destroys an otherwise-valid bubble, and at
+                // ~1 het/1.3kb in real human data that is common.
+                //
+                // Why tolerance here is principled rather than just looser:
+                // the very NEXT test requires the closing anchor to be
+                // observed in the READS (kcount >= MC). DiscoSNP++'s design is
+                // exactly this -- propose permissively from the graph, then
+                // let kissreads2 reject against reads -- and the standing
+                // finding of this project (docs/HOW_DISCOSNP_WINS.md sec 4) is
+                // that OUR read-validation has nothing to reject because our
+                // proposals are already read-derived and strict. Loosening the
+                // proposal is what gives the read test something to do.
+                // Tolerance reuses the frozen HDMAX (=2) rather than
+                // introducing a new tunable constant.
+                if (!same && std::getenv("CAPS_CLOSE_TOL")) {
+                    int mm = 0;
+                    for (int t = 0; t < BK; ++t)
+                        if (R[(size_t)ra + t] != Aalt[(size_t)rb + t] && ++mm > HDMAX) break;
+                    if (mm <= HDMAX) same = true;
+                }
                 if (!same) {
                     if (std::getenv("CAPS_TRACE"))
                         fprintf(stderr, "[trace] DROP-CLOSE cid=%u apos=%u\n", rc_, bub.apos);
