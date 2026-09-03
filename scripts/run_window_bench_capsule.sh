@@ -92,14 +92,37 @@ awk -v c=$CHROM -v lo=$LO -v hi=$HI '$1==c && $3>lo && $2<hi{
   s=($2>lo?$2:lo); e=($3<hi?$3:hi); if(e>s) print c"\t"s"\t"e}' "$BED" > regions.bed
 echo "confident bp in window: $(awk '{n+=$3-$2}END{print n+0}' regions.bed)"
 
+# SNV/INDEL classification. NOTE the ordering below: these run AFTER
+# `bcftools norm -m -any` has split multi-allelic records, so $5 is always a
+# SINGLE allele here and a plain length test is correct.
+#
+# BUG FIXED 2026-09-03 (docs/HET_INDEL_FRESH_SCAN.md): these filters used to
+# run BEFORE normalisation, on the raw ALT field. A genuine multi-allelic SNV
+# (`T -> C,A`, which CAPSULE emits natively and is its own T5.2 capability)
+# has an ALT *string* of length 3, so `length($5)!=1` classified it as an
+# INDEL; `bcftools norm -m -any` then split it into two SNV-shaped rows that
+# sat in the INDEL call set and scored as indel false positives. Measured on
+# HG002 r2: 4 of 16 indel FPs were multi-allelic SNVs misfiled this way.
+# The bug could only ever penalise CAPSULE, because CAPSULE is the only tool
+# in this comparison that emits true multi-allelic records at all --
+# DiscoSNP++ emits separate biallelic rows (docs/CLAIM2_TABLES_AND_INDEL_SCAN.md
+# T5.2), which the old filter classified correctly by accident.
+# Normalising first also collapses records that only become identical after
+# left-alignment -- a second observed FP source (two rows differing solely in
+# reference-inherited case, both normalising onto 3041361).
 snv()   { awk -F'\t' '/^#/{print;next} length($4)==1 && length($5)==1'; }
 indel() { awk -F'\t' '/^#/{print;next} length($4)!=1 || length($5)!=1'; }
 het()   { awk -F'\t' '/^#/{print;next} {split($10,g,":"); gt=g[1];
           if(gt=="0/1"||gt=="1/0"||gt=="0|1"||gt=="1|0") print}'; }
-prep(){ eval "$3" < "$1" > "$2.v.vcf"
-  (grep '^#' "$2.v.vcf"; grep -v '^#' "$2.v.vcf"|sort -k2,2n) > "$2.s.vcf"
-  bcftools norm -f "$REF" -m -any "$2.s.vcf" 2>/dev/null | bcftools sort 2>/dev/null | bgzip > "$2.vcf.gz" \
-    || bgzip -c "$2.s.vcf" > "$2.vcf.gz"
+# normalise (split multi-allelics + left-align) FIRST, then classify, then
+# de-duplicate rows that normalisation made identical. Applied identically to
+# truth and to calls, so the comparison stays symmetric.
+prep(){ (grep '^#' "$1"; grep -v '^#' "$1"|sort -k2,2n) > "$2.pre.vcf"
+  bcftools norm -f "$REF" -m -any "$2.pre.vcf" 2>/dev/null | bcftools sort 2>/dev/null > "$2.n.vcf" \
+    || cp "$2.pre.vcf" "$2.n.vcf"
+  eval "$3" < "$2.n.vcf" > "$2.v.vcf"
+  awk -F'\t' '/^#/{print;next} !seen[$1"\t"$2"\t"toupper($4)"\t"toupper($5)]++' "$2.v.vcf" > "$2.s.vcf"
+  bgzip -c "$2.s.vcf" > "$2.vcf.gz"
   tabix -f -p vcf "$2.vcf.gz"; }
 prep truth.vcf  t_snv 'het | snv'
 prep truth.vcf  t_ind 'het | indel'

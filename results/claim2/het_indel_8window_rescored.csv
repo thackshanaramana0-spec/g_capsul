@@ -1,0 +1,16 @@
+# Het-indel, 8 evaluations, re-scored 2026-09-03 after fixing a multi-allelic
+# call-classification bug in run_window_bench_capsule.sh. Neither caller was
+# changed; only the scoring classification was corrected.
+# convention A = ORIGINAL truth definition, corrected call classification (fix 1 only)
+# convention B = truth also normalised before het-filtering (fix 1 + 2), which
+#                additionally admits GT=1/2 multi-allelic truth sites
+window,capsule_A,disco_A,capsule_B,disco_B
+HG002_na,0.667,0.593,0.617,0.539
+HG002_r2,0.679,0.491,0.625,0.452
+HG002_r3,0.631,0.581,0.529,0.496
+HG002_r4,0.581,0.781,0.514,0.694
+HG002_r5,0.725,0.789,0.659,0.683
+HG003_r3,0.718,0.613,0.653,0.548
+HG004_r3,0.635,0.598,0.589,0.552
+HG005_r3,0.635,0.667,0.571,0.629
+average,0.659,0.639,0.595,0.574
