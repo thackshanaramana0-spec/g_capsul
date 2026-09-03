@@ -39,15 +39,27 @@ awk -v c=$CHROM -v lo=$RLO -v hi=$RHI '$1==c && $3>lo && $2<hi{
 echo "confident bp in region: $(awk '{n+=$3-$2}END{print n}' regions.bed)"
 
 # 6. rtg SDF + split SNV/indel + score each restricted to the confident region
+#
+# BUG FIXED 2026-09-03 (same defect as run_window_bench_capsule.sh, see
+# docs/HET_INDEL_FRESH_SCAN.md Finding 4): this used to classify BEFORE
+# normalising, on the raw ALT field. A multi-allelic SNV (ALT="C,A", string
+# length 3) was misfiled as an INDEL by `length($5)!=1`, then bcftools norm
+# split it into SNV-shaped rows sitting in the indel call set as false
+# positives -- a bug that could only ever penalise CAPSULE, since it is the
+# only tool here that emits true multi-allelic records. Fixed by normalising
+# FIRST (splitting multi-allelics + left-aligning), THEN classifying, THEN
+# de-duplicating rows normalisation made identical -- applied identically to
+# truth and calls.
 rm -rf sdf; rtg format -o sdf "$REF" > /dev/null 2>&1
 snv()   { awk -F'\t' '/^#/{print;next} length($4)==1 && length($5)==1'; }
 indel() { awk -F'\t' '/^#/{print;next} length($4)!=1 || length($5)!=1'; }
 het()   { awk -F'\t' '/^#/{print;next} {split($10,g,":"); gt=g[1]; if(gt=="0/1"||gt=="1/0"||gt=="0|1"||gt=="1|0") print}'; }
-prep(){ eval "$3" < "$1" > "$2.v.vcf"
-  (grep '^#' "$2.v.vcf"; grep -v '^#' "$2.v.vcf"|sort -k2,2n) > "$2.s.vcf"
-  bcftools norm -f "$REF" -m -any "$2.s.vcf" 2>/dev/null | bcftools sort 2>/dev/null | bgzip > "$2.vcf.gz" \
-    || { bgzip -c "$2.s.vcf" > "$2.vcf.gz"; }
-  tabix -f -p vcf "$2.vcf.gz"; }
+dedup() { awk -F'\t' '/^#/{print;next} !seen[$1"\t"$2"\t"toupper($4)"\t"toupper($5)]++'; }
+prep(){ (grep '^#' "$1"; grep -v '^#' "$1"|sort -k2,2n) > "$2.pre.vcf"
+  bcftools norm -f "$REF" -m -any "$2.pre.vcf" 2>/dev/null | bcftools sort 2>/dev/null > "$2.n.vcf" \
+    || cp "$2.pre.vcf" "$2.n.vcf"
+  eval "$3" < "$2.n.vcf" | dedup > "$2.s.vcf"
+  bgzip -cf "$2.s.vcf" > "$2.vcf.gz"; tabix -f -p vcf "$2.vcf.gz"; }
 prep truth.vcf  t_snv   'het | snv'
 prep truth.vcf  t_ind   'het | indel'
 prep lifted.vcf c_snv   snv

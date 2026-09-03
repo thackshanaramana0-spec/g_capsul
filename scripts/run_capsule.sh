@@ -27,7 +27,9 @@
 #                     manual steps rather than pretending to automate them
 #   2  test      * -- synthetic regression test, no downloads needed (fast, default)
 #      giab       -- real GIAB het-SNV+indel benchmark (needs chr20.fa + truth VCFs)
-#      window     -- single-window benchmark for one individual
+#      window     -- single-window benchmark for one individual (T3+T5)
+#      tetraploid -- T5.3: real HG003+HG004 mix, Cooke et al. 2022 method
+#      multiallelic -- T5.2: real single-individual GT=1/2 sites (HG002 default)
 #   3  test      * -- synthetic regression test, no downloads needed (fast, default)
 #      full       -- the real export/coverage/query benchmark (builds SPAdes if absent)
 set -euo pipefail
@@ -92,7 +94,19 @@ case "$CLAIM" in
             BEST="$CAPSULE_BIN_DIR/best106"; [ -x "$BEST" ] || bash "$HERE/scripts/build106.sh" "$BEST" >/dev/null
             bash "$HERE/scripts/run_window_bench_capsule.sh" "$BEST" "$HERE/scripts" "$REF" "$IND" "$WIN"
             ;;
-        *) log "Unknown Claim 2 phase: $PHASE (try: test, giab, window)"; exit 2 ;;
+        tetraploid)
+            REF="$CAPSULE_REFS_DIR/chr20.fa"
+            [ -s "$REF" ] || { log "FAIL: $REF not found -- see docs/SERVER_SETUP_AND_DOWNLOADS.md sec 3"; exit 1; }
+            BEST="$CAPSULE_BIN_DIR/best106"; [ -x "$BEST" ] || bash "$HERE/scripts/build106.sh" "$BEST" >/dev/null
+            bash "$HERE/scripts/run_tetraploid_bench_capsule.sh" "$BEST" "$HERE/scripts" "$REF" "${3:-HG003}" "${4:-HG004}" "${5:-4}"
+            ;;
+        multiallelic)
+            REF="$CAPSULE_REFS_DIR/chr20.fa"
+            [ -s "$REF" ] || { log "FAIL: $REF not found -- see docs/SERVER_SETUP_AND_DOWNLOADS.md sec 3"; exit 1; }
+            BEST="$CAPSULE_BIN_DIR/best106"; [ -x "$BEST" ] || bash "$HERE/scripts/build106.sh" "$BEST" >/dev/null
+            bash "$HERE/scripts/run_multiallelic_bench_capsule.sh" "$BEST" "$HERE/scripts" "$REF" "${3:-HG002}" "${4:-20:1000000-6000000}"
+            ;;
+        *) log "Unknown Claim 2 phase: $PHASE (try: test, giab, window, tetraploid, multiallelic)"; exit 2 ;;
     esac
     ;;
 
@@ -114,7 +128,7 @@ case "$CLAIM" in
 *)
     echo "Usage: $0 <1|2|3> [phase]"
     echo "  1: verify | compress | sweep  (default: verify)"
-    echo "  2: test | giab | window       (default: test)"
+    echo "  2: test | giab | window | tetraploid | multiallelic  (default: test)"
     echo "  3: test | full                (default: test)"
     exit 2
     ;;
