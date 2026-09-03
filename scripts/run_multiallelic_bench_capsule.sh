@@ -22,7 +22,8 @@ OUT="${6:-$HOME/multiallelic_bench/${IND}_$(echo "$REGIONSPEC" | tr ':' '_')}"
 CHROM="${REGIONSPEC%%:*}"; RANGE="${REGIONSPEC#*:}"; LO="${RANGE%-*}"; HI="${RANGE#*-}"
 TARGET_COV=30
 
-log() { echo "[multiallelic] $*"; }
+log() { echo "[multiallelic] $(date '+%H:%M:%S') $*"; }
+T_START=$(date +%s)
 mkdir -p "$OUT"; cd "$OUT"
 log "$IND, region $CHROM:$LO-$HI, target ${TARGET_COV}x, single individual (no pooling)"
 
@@ -113,3 +114,4 @@ echo "CAPSULE    sites with a call at that position: $CAPS_HIT / $N_TRUTH_MULTI"
 echo "DiscoSNP++ sites with a call at that position: $DISCO_HIT / $N_TRUTH_MULTI"
 echo "======================================================="
 log "Results in: $OUT"
+log "Total elapsed: $(( $(date +%s) - T_START ))s"

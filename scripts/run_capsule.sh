@@ -2,7 +2,12 @@
 # CAPSULE — one entry point, three claims. Written for a reviewer who wants
 # to type one thing per claim, not read the docs first.
 #
-#   bash scripts/run_capsule.sh <1|2|3> [phase]
+#   bash scripts/run_capsule.sh <1|2|3|all> [phase]
+#
+# `all` runs all three claims' default (fast, synthetic) sanity phase back
+# to back and prints per-claim AND total wall time -- use this to answer
+# "how long does the whole sanity suite take," which running the three
+# separately never actually measures.
 #
 # Claims are INDEPENDENT, not sequential -- there is no requirement to run
 # 1 before 3. Each claim builds whatever it needs from scratch (its own
@@ -36,11 +41,27 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$HERE/scripts/capsule_config.sh"
 
-CLAIM="${1:?Usage: $0 <1|2|3> [phase]}"
+CLAIM="${1:?Usage: $0 <1|2|3|all> [phase]}"
 PHASE="${2:-}"
 mkdir -p "$CAPSULE_BIN_DIR" "$CAPSULE_OUT_DIR"
 
 log() { echo "[capsule] $*"; }
+now() { date +%s.%N; }
+elapsed() { awk -v a="$1" -v b="$(now)" 'BEGIN{printf "%.1f", b-a}'; }
+
+if [ "$CLAIM" = "all" ]; then
+    # Combined sanity suite: all three default (fast, synthetic) tests back
+    # to back, with per-claim AND total timing. Exists because the three
+    # tests were only ever run separately -- total combined time for a full
+    # sanity pass had never actually been measured before this existed.
+    T0=$(now)
+    log "===== SANITY SUITE: all three claims, default (fast) phase ====="
+    T1=$(now); bash "$0" 1; log "Claim 1 sanity: $(elapsed "$T1")s"
+    T2=$(now); bash "$0" 2; log "Claim 2 sanity: $(elapsed "$T2")s"
+    T3=$(now); bash "$0" 3; log "Claim 3 sanity: $(elapsed "$T3")s"
+    log "===== TOTAL sanity suite time: $(elapsed "$T0")s ====="
+    exit 0
+fi
 
 case "$CLAIM" in
 
@@ -124,7 +145,8 @@ case "$CLAIM" in
     ;;
 
 *)
-    echo "Usage: $0 <1|2|3> [phase]"
+    echo "Usage: $0 <1|2|3|all> [phase]"
+    echo "  all: run all three claims' default (fast, sanity) phase, with total timing"
     echo "  1: verify | compress | sweep  (default: verify)"
     echo "  2: test | giab | window | tetraploid | multiallelic  (default: test)"
     echo "  3: test | full                (default: test)"

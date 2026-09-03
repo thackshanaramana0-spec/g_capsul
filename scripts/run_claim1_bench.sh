@@ -115,14 +115,21 @@ pdone "encoder/decoder built, spring/genozip present"
 RESULTS_CSV="$OUT_DIR/t1_t2_results.csv"
 echo "dataset,tool,archive_bytes,compress_s,decompress_s,peak_ram_kb,lossless" > "$RESULTS_CSV"
 
+# Progress/timer instrumentation: N-of-TOTAL dataset counter, per-dataset
+# elapsed time, and running total since script start -- so a run left going
+# for hours has visible "dataset 3 of 14 done, moving to next" progress
+# rather than silence until the whole thing finishes.
+N_TOTAL=$(echo "$DATASETS" | wc -w)
+T_SCRIPT_START=$(date +%s)
 DS_IDX=0
 for DS in $DATASETS; do
     DS_IDX=$((DS_IDX+1))
+    T_DS_START=$(date +%s)
     SRC="$DATA_DIR/${DS}_1.fq"
     [ -s "$SRC" ] || { pskip "$DS: $SRC not found"; continue; }
     IN="$WD/$DS.fq"; cp "$SRC" "$IN"
     RAW=$(stat -c %s "$IN")
-    phase "${DS_IDX}.0" "$DS ($RAW B)"
+    phase "${DS_IDX}.0" "$DS ($RAW B)  [dataset $DS_IDX of $N_TOTAL]"
 
     # ---- CAPSULE: full-file scope (names + quality), fixed candidate ------
     phase "${DS_IDX}.1" "[$DS] CAPSULE compress"
@@ -176,7 +183,9 @@ for DS in $DATASETS; do
     pdone "Genozip — archive=${ARCH}B ctime=${CWALL}s dtime=${DWALL}s $LL"
 
     rm -f "$IN"
-    phase "${DS_IDX}.5" "[$DS] complete"
+    DS_ELAPSED=$(( $(date +%s) - T_DS_START ))
+    TOTAL_ELAPSED=$(( $(date +%s) - T_SCRIPT_START ))
+    phase "${DS_IDX}.5" "[$DS] complete -- dataset $DS_IDX of $N_TOTAL done (${DS_ELAPSED}s), total elapsed ${TOTAL_ELAPSED}s"
 done
 
 echo ""

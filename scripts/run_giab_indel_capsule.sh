@@ -5,6 +5,8 @@
 # Only the caller invocation differs from the ARCS original.
 #   usage: run_giab_indel_capsule.sh <capsule_exe> <scripts_dir> <reads.fq> <ref.fa>
 set -e
+T_START=$(date +%s)
+log() { echo "[giab] $(date '+%H:%M:%S') $*"; }
 export PATH=~/miniconda3/bin:$PATH
 CAPS="$1"; SC="$2"; READS="$3"; REF="$4"
 CHROM=20; RLO=2000000; RHI=2400000; REGION="$CHROM:$RLO-$RHI"
@@ -74,3 +76,4 @@ score SNV   t_snv.vcf.gz c_snv.vcf.gz
 score INDEL t_ind.vcf.gz c_ind.vcf.gz
 echo "=========================================================================================="
 echo "truth het-indel in region: $(zcat t_ind.vcf.gz|grep -vc '^#')   capsule indel calls: $(zcat c_ind.vcf.gz|grep -vc '^#')"
+log "Total elapsed: $(( $(date +%s) - T_START ))s"
