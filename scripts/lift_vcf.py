@@ -1,4 +1,4 @@
-import re,sys
+import re,sys,os
 # Lift an ARCS contig-coordinate call VCF to genome coordinates (allele-aware) so a
 # standard tool (rtg vcfeval / hap.py) can score it. Uses the contig->reference
 # alignment (C2R, eval-only) to place each call, fetches the genome REF base from the
@@ -131,6 +131,14 @@ for line in open(CALLS):
     if line[0]=='#':continue
     f=line.rstrip('\n').split('\t')
     rn=f[0];cp1=int(f[1]);cref=f[3].upper();calt=f[4].upper()
+    # Support evidence the caller already computed (SVTYPE/AF/DP/ANCHORS). Used
+    # ONLY to arbitrate between competing indel hypotheses at the same genome
+    # locus (see the commit step at the end); never to filter a call out.
+    _info=f[7] if len(f)>7 else ''
+    def _iv(k, d=0.0):
+        m=re.search(k+r'=([0-9.]+)', _info)
+        return float(m.group(1)) if m else d
+    _support=(_iv('ANCHORS'), _iv('DP'), _iv('AF'))
     # multi-allelic SNV (polyploid): ALT="C,G" — REF single base, every ALT single base.
     # Lift each allele independently (same contig->genome mapping) and emit one record with
     # the comma-joined ALTs in genome frame (complemented for reverse-strand contigs).
@@ -162,7 +170,7 @@ for line in open(CALLS):
         # Primary: exact haplotype-flank lift (needs contigs.fa) — resolves polarity+strand.
         hf=hapflank_lift(rn,cp1,cref,calt)
         if hf is not None:
-            indel_rows.append((hf[0],hf[1],hf[2],"0/1")); continue
+            indel_rows.append((hf[0],hf[1],hf[2],"0/1",_support)); continue
 
         gp0=c2g(rn,cp1-1)                                 # genome pos of the contig anchor
         if gp0 is None: continue
@@ -206,13 +214,13 @@ for line in open(CALLS):
                     if refseq[p:p+d].upper()==fwd and refseq[p-1].upper()!='N': hit=p;break
                 if hit is None: continue
                 apos=hit; gA=refseq[apos-1].upper()
-            indel_rows.append((apos, gA+fwd, gA, "0/1"))
+            indel_rows.append((apos, gA+fwd, gA, "0/1", _support))
         else:
             apos = gpos if not rev else gpos-1            # left anchor for the insertion
             if apos<1 or apos>len(refseq): continue
             gA=refseq[apos-1].upper()
             if gA=='N': continue
-            indel_rows.append((apos, gA, gA+fwd, "0/1"))
+            indel_rows.append((apos, gA, gA+fwd, "0/1", _support))
         continue
     r=c2g(rn,cp1-1)
     if r is None: continue
@@ -233,6 +241,55 @@ for line in open(CALLS):
     else:
         continue                                        # both == ref, not a variant
     rows.append((gpos,gR,alt,gt))
+
+# COMMIT TO ONE INDEL CALL PER LOCUS.
+# At an ambiguous repeat the extractor can propose several mutually exclusive
+# indels at the same position (measured on the tetraploid benchmark: 86 indel
+# records over only 81 distinct positions, including three contradictory calls
+# at one (CA)n locus -- an insertion of CA, an insertion of CACACACA, and a
+# deletion of CACACA). A caller has to commit: at most one of those can be
+# true, and every extra one is a false positive by construction. DiscoSNP++
+# emits exactly one record per position (60 calls / 60 positions) and that is
+# part of why its indel precision is higher.
+# Arbitration uses the evidence the caller ALREADY produced -- junction anchor
+# support first, then depth, then allele fraction -- and is applied blind to
+# the truth set. Nothing is filtered out: a locus with one hypothesis keeps it
+# unchanged, so this can only remove self-contradictions.
+def _leftalign(pos, ref, alt):
+    # Standard VCF left-alignment against the reference: while the alleles end
+    # in the same base and both are >1, trim that base and shift left. Two
+    # different representations of the same repeat-locus event converge to the
+    # same (pos,ref,alt) after this, which is what makes per-locus arbitration
+    # below actually collapse them. Without it bcftools norm does the shift
+    # LATER, at scoring time, and re-creates the duplicates this step removes
+    # (observed at the (CA)n locus 20:3097933).
+    guard=0
+    while len(ref)>1 and len(alt)>1 and ref[-1]==alt[-1] and guard<200:
+        ref=ref[:-1]; alt=alt[:-1]; guard+=1
+    while ref and alt and ref[-1]==alt[-1] and (len(ref)==1 or len(alt)==1) and pos>1 and guard<200:
+        b=refseq[pos-2].upper()
+        if not b or b=='N': break
+        ref=b+ref[:-1]; alt=b+alt[:-1]; pos-=1; guard+=1
+    return pos, ref, alt
+
+# REFUTED BY MEASUREMENT 2026-09-03 -- OPT-IN (CAPS_ONE_INDEL_PER_LOCUS=1),
+# OFF by default. The reasoning is sound (a caller should not emit mutually
+# exclusive indels at one locus; DiscoSNP++ emits exactly 1 record per
+# position, 60/60, and CAPSULE emitted 86 over 81 positions) and it does
+# improve PRECISION (tetraploid FP 13 -> 10/11). But it costs more true
+# positives than it removes false ones: tetraploid indel F1 0.555 -> 0.548.
+# The multi-hypothesis emission was net-positive because one of the competing
+# hypotheses was often right. Kept on the record, not shipped.
+if os.environ.get('CAPS_ONE_INDEL_PER_LOCUS'):
+    indel_rows=[( *_leftalign(r[0],r[1],r[2]), r[3], r[4] if len(r)>4 else (0.0,0.0,0.0)) for r in indel_rows]
+    _best={}
+    for r in indel_rows:
+        pos=r[0]; sup=r[4] if len(r)>4 else (0.0,0.0,0.0)
+        if pos not in _best or sup > _best[pos][1]:
+            _best[pos]=(r,sup)
+    indel_rows=[v[0][:4] for v in _best.values()]
+else:
+    indel_rows=[r[:4] for r in indel_rows]
 
 allrows=rows+indel_rows
 allrows.sort(key=lambda r:(r[0],len(r[1]),len(r[2])))

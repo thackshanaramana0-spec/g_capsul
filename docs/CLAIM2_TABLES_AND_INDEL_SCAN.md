@@ -52,7 +52,21 @@ with DiscoSNP++'s documented POS off-by-one corrected.
 | variant class | CAPSULE | DiscoSNP++ | result |
 |---|---|---|---|
 | **SNV F1** | **0.836** (P 0.947, R 0.749) | 0.782 (P 0.979, R 0.651) | **WIN, +0.054** |
-| indel F1 | 0.547 (P 0.721, R 0.440) | **0.571** (P 0.894, R 0.420) | loss, −0.024 |
+| indel F1 | **0.555** (P 0.787, R 0.429) | 0.553 (P 0.936, R 0.393) | **tie/edge, +0.002** |
+
+**Truth-set correction, disclosed because it changed the indel result.** The
+first version of this benchmark keyed the union on genome position and skipped
+any site where the two individuals' REF strings disagreed. Auditing that
+before trusting the numbers showed it dropped **631 sites, 100% of them
+indels** — all STR loci where the two samples merely used different-length
+representations of the same event (`GAT→G` vs `GATATAT→G`). That biased the
+indel truth toward easy indels. Corrected by normalising each individual
+before the union (`scripts/build_tetraploid_truth_v2.py`), dropping nothing:
+154 in-window indel truth sites instead of 130. Effect: CAPSULE 0.547 → 0.555,
+DiscoSNP++ 0.571 → 0.553. **The correction was made for correctness — the
+dropped sites were real truth — and it happens to move the result in
+CAPSULE's favour, so it is stated explicitly here rather than folded in
+silently.**
 
 **CAPSULE wins tetraploid SNV calling and is close on indels**, on fully
 real data, against the only applicable reference-free competitor. As in the
