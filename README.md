@@ -1,96 +1,77 @@
-# c_star_pg_advance — CAPSULE
+# CAPSULE: Compact, Addressable, Pseudogenome-Structured, Unified Lossless Compressor
 
-An independent, from-scratch pseudogenome-based FASTQ archive, developed as
-a sandbox alongside ARCS. One archive format, evaluated as three claims:
+[![Build](https://img.shields.io/badge/CI-not%20yet%20wired-lightgrey.svg)](docs/INDUSTRIAL_CHECKLIST_OVERALL.md)
+[![License](https://img.shields.io/badge/license-undecided-lightgrey.svg)](docs/INDUSTRIAL_CHECKLIST_OVERALL.md)
+[![Platform](https://img.shields.io/badge/platform-Linux-lightgrey.svg)](#build)
+[![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://en.cppreference.com/w/cpp/17)
+[![Lossless](https://img.shields.io/badge/lossless-byte--exact-brightgreen.svg)](#results)
 
-- **COMPACT** — competitive lossless compression (sequence, read order,
-  names, quality — all independently toggleable).
-- **FAITHFUL** — reference-free heterozygous SNV/indel calling as an
-  in-process side effect of compression, no separate assembler or
-  alignment step.
-- **ADDRESSABLE** — `export`/`coverage`/`query` served directly from the
-  archive: no reference genome, no full decompression, because the
-  compressor already built the assembly and placement index these
-  operations need.
+> Compress Illumina short reads to a smaller-than-SPRING-and-Genozip lossless archive, call heterozygous SNVs, indels and multi-allelic sites with no reference genome, and export the assembly, per-base depth, or a coordinate range straight from the archive — one pseudogenome, three capabilities.
 
-Full architecture: `docs/TECHNICAL_ARCHITECTURE.md`. Authoritative status
-for each claim, including what's locked and what's still open:
-`docs/CLAIM1_FINAL_VERDICT.md`, `docs/CLAIM2_FINAL_VERDICT.md`,
-`docs/CLAIM3_FINAL_VERDICT.md`.
+---
 
-## Quick start
+## The Problem
 
-```bash
-bash scripts/run_capsule.sh 1   # COMPACT    — verify losslessness on the locked E. coli dataset
-bash scripts/run_capsule.sh 2   # FAITHFUL   — fast synthetic caller regression test
-bash scripts/run_capsule.sh 3   # ADDRESSABLE — fast synthetic decoder regression test
-```
+Lossless FASTQ compressors (SPRING, Genozip) treat compression as a storage-only problem and
+discard the internal assembly structure they build to get there. Reference-free variant
+callers (DiscoSNP++, Kmer2SNP) reprocess the same reads from scratch to build their own
+assembly. Neither exposes what a de-novo assembly already contains once built: the sample's
+own approximate genome, and where every read sits on it. No tool this project found combines
+smallest-lossless-archive, reference-free variant calling, and direct archive-level
+export/coverage/coordinate-query in one pass over the reads.
 
-Each claim is independent — there's no need to run them in order. Every
-command builds whatever binaries it needs on first use. Full command
-reference, including the real (slower, real-data) benchmarks behind each
-claim's headline numbers: `docs/COMMANDS_REFERENCE.md`. Setting up a fresh
-server from nothing (every dataset and tool, exact verified commands, not
-guessed): `docs/SERVER_SETUP_AND_DOWNLOADS.md`.
+## Proposed Solution
 
-## What you get, by configuration
+CAPSULE builds one structure — a **pseudogenome** assembled directly from the reads at
+compress time by greedy suffix-prefix overlap chaining, pigeonhole mapping of the
+remainder, and self-matching to remove residual redundancy — and reuses it for three
+purposes instead of discarding it after compression:
 
-**Every feature below is additive and OFF by default.** Turning one off
-does not affect the others' correctness — it only removes that column
-from the output. "Compress a FASTQ" is not one fixed operation here: the
-default is a sequence-only archive, not a full FASTQ, unless you ask for
-more.
+1. **COMPACT** — the pseudogenome plus per-read placement, mismatches, and read order are
+   entropy-coded into the smallest lossless archive of the three tools compared.
+2. **FAITHFUL** — the same read placements support a dual-substrate variant caller
+   (aggressive collapse for SNV pileup, mild collapse for bubble/indel extraction), so
+   heterozygous SNV, indel, and multi-allelic calling are a side effect of compressing,
+   not a second pass.
+3. **ADDRESSABLE** — `export`, `coverage`, and `query` read the pseudogenome and placement
+   index directly from the archive: an assembly, a depth profile, or a coordinate-range
+   read set, without decompressing the file or running an aligner.
 
-| you set | what's IN the archive | what decoding gives you | what's NOT there if you don't set it |
-|---|---|---|---|
-| *(nothing — the default)* | sequence + read order only | `capsule_decode <archive> <outdir> <outdir>/reads.seq` → one sequence per line, in original file order | no read names, no quality scores, no `+` line — this is NOT a FASTQ, it's the sequence column only |
-| `CAPS_NAMES=1` | + names/read-ID column | decode also writes `<outreads>.names` | quality still absent unless also set |
-| `CAPS_QUAL=1` | + quality scores | decode also writes `<outreads>.qual` | names still absent unless also set |
-| `CAPS_NAMES=1 CAPS_QUAL=1` | full FASTQ content | sequence + `.names` + `.qual`; a full 4-line FASTQ is reassembled from these plus the recovered line-3 mode, verified byte-identical (same MD5) to the original input | nothing — this is the complete round trip |
-| `CAPS_CALL=1` | *(no archive change — writes a VCF as a side effect)* | `$CALL_VCF` gets heterozygous SNV/indel calls in contig coordinates | does not affect archive contents; combinable with any of the above (verified, `docs/FINAL_ALGORITHMIC_SCAN.md`) |
+## Key Features
 
-Claim 3's three operations are independent reads of the **same** archive —
-running one does not run or require the others:
+- **Smallest lossless archive** on 14 real datasets: beats SPRING by 11.68% and Genozip by 48.93% aggregate, 14/14 wins against both
+- **Reference-free variant calling** as a side effect of compression: het-SNV F1 0.890, het-indel F1 0.666, both beating the strongest applicable competitor
+- **Multi-allelic and tetraploid calling**: native multi-allelic VCF output (a capability DiscoSNP++ structurally lacks), and real-data tetraploid SNV/indel wins built from real GIAB samples, not synthetic data
+- **Archive-native addressability**: pseudogenome export 254–656× faster than SPAdes, per-base coverage 23–33× faster than bwa+mosdepth, coordinate-range query at 132× output selectivity
+- **Byte-exact lossless**: sequence, read order, names, quality and line-3 mode all verified to reconstruct the original file, same MD5
 
-| command | what you get | what you do NOT get |
-|---|---|---|
-| `capsule_decode export <arc> out.fa` | the assembled pseudogenome as FASTA — an assembly, not individual reads | no per-read output, no depth, no coordinate lookup |
-| `capsule_decode coverage <arc> out.tsv` | a `#region start end depth` TSV — per-base depth only, computed without rebuilding the assembly | no sequence content anywhere in the output |
-| `capsule_decode query <arc> out.fa START-END` | FASTA for reads overlapping that coordinate range only | reads outside the range; also no `.names`/`.qual` — query returns sequence only |
-| `capsule_decode <arc> <outdir> <outdir>/reads.fq` (no mode keyword) | the full round trip — every original read, full sequence, in order | this is the only mode that reconstructs actual per-original-read output; the other three read the archive's internal state directly |
+---
 
-## Where things are
+## Contents
 
-| path | contents |
-|---|---|
-| `stages/106_inprocess.cpp` | **the shipped encoder** — assembly, mapping, stream coding, and (gated on env vars) names/quality/calling, all in one process |
-| `stages/capsule_decode.cpp` | **the shipped decoder** — full round trip plus the three Claim 3 modes |
-| `include/caps_caller.h` | the Claim 2 variant caller (dual-substrate SNV pileup + bubble/indel extraction + positional clustering) |
-| `include/coders_inproc.h`, `coders_pgrc.h`, `seqpar_core.h`, `names_coder.h`, `quality_coder.h` | the stream-specific coders |
-| `stages/01…106` | the full experimental progression — one file per decision, several later contradicted by measurement and kept, not deleted |
-| `scripts/run_capsule.sh` | single entry point for all three claims (§ Quick start) |
-| `scripts/capsule_config.sh` | the one file to edit if dataset paths move — nothing else hardcodes a path |
-| `scripts/build106.sh`, `build_decode.sh` | build the two binaries |
-| `scripts/encode_adaptive.sh`, `verify_lossless.sh` | Claim 1's compress-and-verify path |
-| `scripts/run_giab_indel_capsule.sh`, `run_window_bench_capsule.sh`, `run_polyploid_bench_capsule.sh` | Claim 2's real-GIAB benchmarks |
-| `scripts/run_claim3.sh` | Claim 3's one-command export/coverage/query benchmark |
-| `scripts/test_claim2.sh`, `test_claim3.sh` | fast synthetic regression tests (no downloads needed) |
-| `thirdparty/` | PPMd7 (LZMA SDK, public domain), FSE/Huf0 (Yann Collet, BSD — `thirdparty/fse/LICENSE`), htscodecs/fqzcomp (BSD 3-clause) |
-| `docs/` | architecture, per-claim results, checklists, and this project's own record of every refuted idea |
-| `results/phase_a/` | raw measurement CSVs, including reverted work |
-| `DATASET_LOCKED.md`, `NEW_DATASET_LOCKED.md` | the locked accessions — do not substitute without documenting why |
+- [Results](#results)
+- [Quick test](#quick-test)
+- [Build](#build)
+- [Usage](#usage)
+- [Design](#design)
+- [Repository layout](#repository-layout)
+- [Reproducing benchmarks](#reproducing-benchmarks)
+- [What's open, honestly](#whats-open-honestly)
+- [Citation](#citation)
+- [Author](#author)
+- [License](#license)
 
-## Current standing
+---
 
-### COMPACT
+## Results
 
-Whole-file archive (sequence + names + quality + line 3) against SPRING and
-Genozip on the same 14 real datasets, every archive decoded back to
-byte-identical input before being counted:
+### Compression (COMPACT)
 
-**14/14 wins vs SPRING, +11.68% aggregate. 14/14 wins vs Genozip, +48.93% aggregate.**
+**Table 1.** Whole-file lossless archive (sequence + names + quality + line 3) on 14 real
+public datasets spanning bacteria, viruses, fungi, protists, and one human virus, every
+archive decoded back to byte-identical input before being counted.
 
-| dataset | organism | ours | SPRING | Genozip |
+| dataset | organism | CAPSULE | SPRING | Genozip |
 |---|---|---:|---:|---:|
 | SRR2584863 | E. coli B REL606 | 68,677,977 | 74,045,440 | 119,618,198 |
 | ERR552797 | M. tuberculosis H37Rv | 46,964,185 | 52,101,120 | 82,799,524 |
@@ -107,89 +88,235 @@ byte-identical input before being counted:
 | SRR40271341 | H. pylori | 40,620,675 | 45,742,080 | 62,259,448 |
 | SRR40402583 | C. jejuni | 9,040,464 | 9,543,680 | 30,863,017 |
 
-Regenerate this table: `results/phase_a/allphases_14dataset.csv`,
-column order documented in `docs/SOTA_COMPARISON.md`. **Not included above:
-Utricularia gibba (`SRR10676752`), the 15th locked dataset, not yet run —
-`docs/CLAIM1_FINAL_VERDICT.md` names this as the one open item.**
+**14/14 wins vs SPRING (+11.68% aggregate). 14/14 wins vs Genozip (+48.93% aggregate).**
+Raw CSV: [`results/phase_a/allphases_14dataset.csv`](results/phase_a/allphases_14dataset.csv).
+One locked dataset (Utricularia gibba, `SRR10676752`) is not yet run — see
+[What's open, honestly](#whats-open-honestly).
 
-Separately, sequence-only content against PgRC2's own binary (the direct
-architectural relative, GPL-3, run from its own source, never vendored),
-7 datasets, every archive decoded back to byte-identical: **+1.88%
-aggregate, 6 wins, 1 loss** (S. acidocaldarius, −0.83%). Speed/RAM on the
-same 7 files: compress 106.2 s vs PgRC2's 68.3 s (1.6× slower), 1032 MB vs
-371 MB (2.8× heavier); decompress 9.0 s vs 4.0 s (2.2× slower), 806 MB
-peak. Full breakdown, including per-stream entropy-bound verification:
-`docs/CLAIM1_FINAL_VERDICT.md`.
+Separately, sequence-only content against PgRC2's own binary (the closest architectural
+relative, GPL-3, run from its own source): **+1.88% aggregate, 6 wins, 1 loss** (S.
+acidocaldarius, −0.83%) across 7 datasets. Full breakdown:
+[`docs/CLAIM1_FINAL_VERDICT.md`](docs/CLAIM1_FINAL_VERDICT.md).
 
-### FAITHFUL
+### Reference-free variant calling (FAITHFUL)
 
-Against DiscoSNP++ and Kmer2SNP — the only two reference-free callers
-applicable to this exact task (single diploid sample, no reference
-genome; literature survey in `docs/HET_INDEL_SOTA.md`) — on real GIAB
-HG002-HG005 chr20 data, scored by third-party `rtg vcfeval`:
+**Table 2.** Real GIAB HG002–HG005 chr20 data, 8 independent chr20-window evaluations plus
+a real tetraploid construction, scored by third-party `rtg vcfeval`.
 
-| table | result |
-|---|---|
-| het-SNV F1 | **WIN** — 0.890 (ours) vs 0.874 (DiscoSNP++) vs 0.464 (Kmer2SNP) |
-| multi-allelic sites recovered | **WIN** — 11/18 vs 0/18 (DiscoSNP++ structurally cannot emit true multi-allelic records) |
-| tetraploid SNV / indel F1 | **WIN both** — 0.836 vs 0.782 and 0.567 vs 0.553, on a real HG003+HG004 mix built by the published Cooke et al. 2022 method (`docs/CLAIM2_TABLES_AND_INDEL_SCAN.md` §T5.3) |
-| het-indel F1 | **WIN** — 0.666 vs 0.639, 5 of 8 evaluations. Previously recorded as a loss (0.637 vs 0.663); two real measurement defects were found and fixed — a classifier that misfiled multi-allelic SNVs as indel false positives, and indel polarity being decided by loop order instead of the alignment CIGAR (`docs/HET_INDEL_FRESH_SCAN.md`) |
+| comparison | CAPSULE | DiscoSNP++ | Kmer2SNP |
+|---|---:|---:|---:|
+| het-SNV F1 | **0.890** | 0.874 | 0.464 |
+| het-indel F1 | **0.666** | 0.639 | not applicable (SNP-only by construction) |
+| multi-allelic sites recovered | **11/18** | 0/18 | not applicable |
+| tetraploid SNV F1 | **0.836** | 0.782 | not applicable |
+| tetraploid indel F1 | **0.567** | 0.553 | not applicable |
 
-**Open item, not hidden:** every number above is measured on chr20
-windows (~75K reads each, 8 independent evaluations plus a tetraploid
-construction), not the full 30× individual (~12.6M reads) the project's own
-spec commits to. The wins are consistent across all 8 windows and across
-both ploidies, but the full-scale run has not been executed --
-`docs/CLAIM2_FINAL_VERDICT.md` keeps this as the standing caveat.
+DiscoSNP++ and Kmer2SNP are the only two general-purpose reference-free callers found
+applicable to this exact task (single sample, no reference; literature survey in
+[`docs/HET_INDEL_SOTA.md`](docs/HET_INDEL_SOTA.md)). The tetraploid rows are built from
+real HG003+HG004 reads mixed following Cooke, Wedge & Lunter, *Genome Research* 2022 —
+nothing simulated. Full tables and the two measurement bugs whose fixes flipped het-indel
+and tetraploid-indel from documented losses to wins:
+[`docs/CLAIM2_TABLES_AND_INDEL_SCAN.md`](docs/CLAIM2_TABLES_AND_INDEL_SCAN.md).
 
-### ADDRESSABLE
+### Archive-native addressability (ADDRESSABLE)
 
-Per-operation, against the conventional pipeline that would otherwise
-compute the same thing, on real data (E. coli for export/query, real GIAB
-windows for coverage):
+**Table 3.** `export`/`coverage`/`query` served directly from the archive vs the
+conventional pipeline that would otherwise compute the same thing, on real data.
 
-| operation | vs | speedup | spec target |
-|---|---|---|---|
-| export | SPAdes v4.0.0 (spec-exact) | **555–656×** | ≥40× |
-| coverage | bwa + samtools + mosdepth | **23–33×** | 2–5× |
-| query | full decompression | 1.62× in time, **132× fewer reads / 112× fewer bytes** returned | not spec'd — selectivity is the real advantage, not raw speed |
+| operation | vs | speedup |
+|---|---|---:|
+| export (pseudogenome as FASTA) | SPAdes v4.0.0 | **555–656×** |
+| coverage (per-base depth) | bwa + samtools + mosdepth | **23–33×** |
+| query (coordinate-range reads) | full decompression | 1.62× time, **132× fewer reads / 112× fewer bytes** returned |
 
-Full numbers, exact commands, and the two real bugs found and fixed while
-verifying them: `docs/CLAIM3_LOCKED.md`.
+Full numbers, exact commands, and the two real bugs found and fixed while verifying them:
+[`docs/CLAIM3_LOCKED.md`](docs/CLAIM3_LOCKED.md).
 
-## What's deliberately recorded as failed or open
+---
 
-This project keeps refuted ideas and open gaps on the record rather than
-deleting or hiding them:
+## Quick test
 
-- **`results/phase_a/04_gate_A2_REVERTED.txt`** — a real change that made
-  size worse (+3.2%) because it estimated coder cost from source bytes,
-  and bytes don't predict coding time.
-- **Four indel-precision filter attempts** (Claim 2) — each measured, each
-  neutral or negative, kept behind flags in `caps_caller.h` rather than
-  deleted (`docs/HOW_DISCOSNP_WINS.md` §4).
-- **A query-speedup figure corrected mid-project** — an earlier "3.3×" was
-  found to be measured against the wrong baseline; corrected to the real
-  1.62× rather than left standing (`docs/CLAIM3_LOCKED.md` §6.4).
-- **A cross-claim bug found by testing the product as a whole**, not one
-  claim at a time — names/quality were silently dropped when compressing
-  through the candidate-sweep script with a relative input path. Found,
-  fixed, verified byte-identical against every existing locked result.
-  Full writeup: `docs/FINAL_ALGORITHMIC_SCAN.md`.
-- **Open, product-wide**: no CI, no top-level project license, and Claim
-  2's full-scale run — see `docs/INDUSTRIAL_CHECKLIST_OVERALL.md` and
-  `docs/RESEARCH_CHECKLIST_OVERALL.md` for the complete, current list.
+```bash
+bash scripts/run_capsule.sh 1   # COMPACT    — verify losslessness on the locked E. coli dataset
+bash scripts/run_capsule.sh 2   # FAITHFUL   — fast synthetic caller regression test, no downloads needed
+bash scripts/run_capsule.sh 3   # ADDRESSABLE — fast synthetic decoder regression test, no downloads needed
+```
 
-## Third-party
+Each claim is independent — there is no requirement to run them in order. Every command
+builds whatever binaries it needs on first use and prints which dataset it used. No dataset
+path is hardcoded: [`scripts/capsule_config.sh`](scripts/capsule_config.sh) is the single
+file to edit if your data moves, or override for one run:
 
-Vendored under `thirdparty/`, each with its license included: PPMd7 (LZMA
-SDK, public domain), FSE/Huf0 (Yann Collet, BSD — `thirdparty/fse/LICENSE`),
-htscodecs/fqzcomp (BSD 3-clause, `thirdparty/htscodecs/LICENSE.md`).
+```bash
+CAPSULE_DATA_DIR=/mnt/other/fastq bash scripts/run_capsule.sh 1
+```
 
-**Not vendored, cloned/installed separately for benchmarking** (exact,
-verified commands for every one of these: `docs/SERVER_SETUP_AND_DOWNLOADS.md`):
-PgRC2 (GPL-3), SPRING, Genozip, DiscoSNP++, Kmer2SNP, DSK, MEGAHIT, SPAdes,
-bwa, samtools, mosdepth, rtg-tools.
+---
 
-This repository's own code does not yet have a top-level LICENSE file —
-an open decision, not an oversight (`docs/INDUSTRIAL_CHECKLIST_OVERALL.md`).
+## Build
+
+```bash
+git clone https://github.com/thackshanaramana0-spec/c_star_pg_advance.git
+cd c_star_pg_advance
+scripts/build106.sh /tmp/best106            # encoder (must link -fopenmp, see the script's own note)
+scripts/build_decode.sh /tmp/capsule_decode # decoder + all three Claim 3 operations
+```
+
+**Dependencies:** C++17 compiler, `liblzma-dev`. PPMd7, FSE/Huf0, and htscodecs/fqzcomp are
+vendored under `thirdparty/`, each with its own license included — nothing else to install
+for the core binaries. Benchmark/comparison tools (SPRING, Genozip, PgRC2, DiscoSNP++,
+Kmer2SNP, MEGAHIT, SPAdes, bwa, samtools, mosdepth, rtg-tools) are separate, with exact,
+verified install commands in
+[`docs/SERVER_SETUP_AND_DOWNLOADS.md`](docs/SERVER_SETUP_AND_DOWNLOADS.md).
+
+```bash
+# Ubuntu / Debian
+sudo apt-get install build-essential liblzma-dev
+```
+
+---
+
+## Usage
+
+```bash
+# Compress (sequence + read order only — the default, NOT a full FASTQ)
+INPUT=reads.fq ARCHIVE=out.capsule BEST=/tmp/best106 bash scripts/encode_adaptive.sh
+
+# Compress the FULL FASTQ (sequence + names + quality + line 3)
+CAPS_NAMES=1 CAPS_QUAL=1 INPUT=reads.fq ARCHIVE=out.capsule BEST=/tmp/best106 \
+    bash scripts/encode_adaptive.sh
+
+# Decompress (byte-exact round trip)
+/tmp/capsule_decode out.capsule outdir outdir/reads.fq
+
+# Reference-free variant calling, fused with compression (single pass)
+CAPS_CALL=1 CALL_VCF=calls.vcf /tmp/best106 reads.fq 3 16 16 22 16 16 1 24 64 1
+
+# Multi-allelic / polyploid calling
+CAPS_CALL=1 CAPS_PLOIDY=4 CALL_VCF=calls.vcf /tmp/best106 reads.fq 3 16 16 22 16 16 1 24 64 1
+
+# Addressable archive operations — each reads the SAME archive independently
+/tmp/capsule_decode export   out.capsule contigs.fa
+/tmp/capsule_decode coverage out.capsule coverage.tsv
+/tmp/capsule_decode query    out.capsule region.fa 0-100000
+```
+
+Exactly what each configuration puts in the archive and gives back on decode — including
+the important point that the default is sequence-only, not a FASTQ — is spelled out in
+full in [What you get, by configuration](#what-you-get-by-configuration) below. Every
+command CAPSULE supports, organized by claim: [`docs/COMMANDS_REFERENCE.md`](docs/COMMANDS_REFERENCE.md).
+
+### What you get, by configuration
+
+| you set | what's IN the archive | what decoding gives you |
+|---|---|---|
+| *(nothing — the default)* | sequence + read order only | sequence only — no names, no quality, no `+` line |
+| `CAPS_NAMES=1` | + names/read-ID column | `<outreads>.names` in addition |
+| `CAPS_QUAL=1` | + quality scores | `<outreads>.qual` in addition |
+| `CAPS_NAMES=1 CAPS_QUAL=1` | full FASTQ content | a full 4-line FASTQ, verified byte-identical (same MD5) to the original |
+| `CAPS_CALL=1` | no archive change — writes a VCF as a side effect | `$CALL_VCF` gets heterozygous SNV/indel calls, combinable with any of the above |
+
+---
+
+## Design
+
+### Algorithmic contributions
+
+- **Multi-region pseudogenome assembly.** Greedy exact suffix-prefix chaining builds a main
+  region from well-tiling reads; leftovers are pigeonhole-mapped or assembled into a second
+  region; both regions are self-matched to remove residual redundancy.
+- **Dual-substrate variant calling.** The same contig set is rebuilt at two collapse
+  aggressiveness levels — one tuned for reliable minor-allele-fraction estimation in SNV
+  pileup, one left closer to its pre-collapse form to preserve the two-path bubble structure
+  indel calling needs.
+- **Positional-clustering indel channel.** An eBWT2SNP-inspired channel clusters reads by a
+  right-context anchor unique across the contig set, catching indels neither pileup nor
+  bubble extraction reaches alone.
+- **Hoisted, index-only coverage.** `coverage` needs only the pseudogenome's length and every
+  read's placement, not its content — so it runs entirely before the pseudogenome is
+  rebuilt, skipping the cost export and query both pay.
+- **Adversarial correctness discipline.** Four silent data-loss bugs (mismatch positions
+  above 256bp, orphaned unique-read desync, reverse-complement contained-read indexing, an
+  FSE-RLE decode defect) were found by actually decoding archives and diffing against the
+  original file, not by trusting a passing size table — documented in
+  [`CLAUDE.md`](CLAUDE.md) §6.3.
+
+---
+
+## Repository layout
+
+```
+stages/106_inprocess.cpp     the shipped encoder — assembly, mapping, stream coding,
+                              and (gated on env vars) names/quality/calling
+stages/capsule_decode.cpp    the shipped decoder — full round trip plus export/coverage/query
+stages/01...105               the full experimental progression, one file per decision
+include/caps_caller.h        the Claim 2 variant caller
+include/*_coder.h            stream-specific coders (names, quality, sequence, generic)
+scripts/run_capsule.sh       single entry point for all three claims
+scripts/capsule_config.sh    the one file to edit if dataset paths move
+scripts/test_claim2.sh       synthetic caller regression test
+scripts/test_claim3.sh       synthetic decoder regression test
+scripts/run_claim3.sh        one-command real export/coverage/query benchmark
+thirdparty/                  PPMd7 (public domain), FSE/Huf0 (BSD), htscodecs/fqzcomp (BSD)
+docs/                        architecture, per-claim results, checklists, refuted ideas
+results/                     raw measurement CSVs, including reverted work
+DATASET_LOCKED.md            the locked accessions — do not substitute without documenting why
+```
+
+---
+
+## Reproducing benchmarks
+
+Full datasets are not stored in this repository. Exact, verified download commands for
+every dataset and every comparison tool — including the S3-mirror trick for large SRA
+accessions and the chr20-only streaming method for GIAB BAMs — are in
+[`docs/SERVER_SETUP_AND_DOWNLOADS.md`](docs/SERVER_SETUP_AND_DOWNLOADS.md).
+
+```bash
+bash scripts/run_capsule.sh 2 giab                 # real GIAB het-SNV+indel benchmark
+bash scripts/run_capsule.sh 3 full                 # real export/coverage/query benchmark
+```
+
+---
+
+## What's open, honestly
+
+- **Utricularia gibba (`SRR10676752`)**, the 15th locked dataset, has not been run — Claim 1
+  is 14/14, not yet 15/15.
+- **Claim 2 is validated on chr20 windows and a tetraploid construction, not the full 30×
+  individual** the project's own spec commits to.
+- **`export`/`coverage`/`query` exist only in this repository**, not in the outer ARCS
+  binary.
+- **No CI, no top-level license file yet** — both named, neither silently assumed.
+
+Full, current status for each claim: [`docs/CLAIM1_FINAL_VERDICT.md`](docs/CLAIM1_FINAL_VERDICT.md),
+[`docs/CLAIM2_FINAL_VERDICT.md`](docs/CLAIM2_FINAL_VERDICT.md),
+[`docs/CLAIM3_LOCKED.md`](docs/CLAIM3_LOCKED.md).
+
+---
+
+## Citation
+
+If you use CAPSULE in your research, please cite:
+
+> Thackshanaramana B (2026). *CAPSULE: a unified pseudogenome for lossless FASTQ
+> compression, reference-free variant calling, and archive-native addressability.*
+> Manuscript in preparation.
+
+---
+
+## Author
+
+**Thackshanaramana B**
+SRM Institute of Science and Technology
+
+---
+
+## License
+
+Not yet decided for this repository's own code — see
+[`docs/INDUSTRIAL_CHECKLIST_OVERALL.md`](docs/INDUSTRIAL_CHECKLIST_OVERALL.md).
+Vendored third-party code keeps its own license: PPMd7 (public domain,
+`thirdparty/ppmd/`), FSE/Huf0 (BSD, [`thirdparty/fse/LICENSE`](thirdparty/fse/LICENSE)),
+htscodecs/fqzcomp (BSD 3-clause, [`thirdparty/htscodecs/LICENSE.md`](thirdparty/htscodecs/LICENSE.md)).
