@@ -1,6 +1,6 @@
 # CAPSULE: Compact, Addressable, Pseudogenome-Structured, Unified Lossless Compressor
 
-[![CI](https://github.com/thackshanaramana0-spec/c_star_pg_advance/actions/workflows/ci.yml/badge.svg)](https://github.com/thackshanaramana0-spec/c_star_pg_advance/actions/workflows/ci.yml)
+[![CI](https://github.com/thackshanaramana0-spec/capsule/actions/workflows/ci.yml/badge.svg)](https://github.com/thackshanaramana0-spec/capsule/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-undecided-lightgrey.svg)](docs/INDUSTRIAL_CHECKLIST_OVERALL.md)
 [![Platform](https://img.shields.io/badge/platform-Linux-lightgrey.svg)](#build)
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://en.cppreference.com/w/cpp/17)
@@ -157,8 +157,8 @@ CAPSULE_DATA_DIR=/mnt/other/fastq bash scripts/run_capsule.sh 1
 ## Build
 
 ```bash
-git clone https://github.com/thackshanaramana0-spec/c_star_pg_advance.git
-cd c_star_pg_advance
+git clone https://github.com/thackshanaramana0-spec/capsule.git
+cd capsule
 scripts/build106.sh /tmp/best106            # encoder (must link -fopenmp, see the script's own note)
 scripts/build_decode.sh /tmp/capsule_decode # decoder + all three Claim 3 operations
 ```
@@ -260,6 +260,7 @@ scripts/test_claim3.sh       synthetic decoder regression test
 scripts/run_claim3.sh        one-command real export/coverage/query benchmark
 thirdparty/                  PPMd7 (public domain), FSE/Huf0 (BSD), htscodecs/fqzcomp (BSD)
 docs/                        architecture, per-claim results, checklists, refuted ideas
+                              — start at docs/INDEX.md, 68 files, navigable by topic
 results/                     raw measurement CSVs, including reverted work
 DATASET_LOCKED.md            the locked accessions — do not substitute without documenting why
 ```
