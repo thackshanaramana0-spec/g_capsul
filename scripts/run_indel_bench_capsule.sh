@@ -26,16 +26,39 @@ bwa mem -t 4 ref.fa contigs.fa 2> bwa_mem.log > c2r.sam
 python3 "$SC/lift_vcf.py" calls.vcf c2r.sam ref.fa $CHROM lifted.vcf contigs.fa
 
 # 4. Split truth + calls into SNV-only and INDEL-only, score each with rtg vcfeval
+#
+# TWO BUGS FIXED 2026-09-03, found in a full script-suite audit
+# (docs/HET_INDEL_FRESH_SCAN.md Finding 4; same audit that found the
+# identical classify-before-normalize defect in run_giab_indel_capsule.sh
+# and run_window_bench_capsule.sh):
+#
+# BUG 1 (this script only): `score()` read TP from rtg's summary.txt column
+# $2 ("True-pos-baseline") while every other script in this repo correctly
+# reads column $3 ("True-pos-call") -- confirmed against a real
+# summary.txt header: "Threshold True-pos-baseline True-pos-call
+# False-pos False-neg Precision Sensitivity F-measure". These two TP counts
+# are USUALLY equal but are logically distinct columns; using the wrong one
+# is a real defect even where it happens not to have changed a number yet.
+#
+# BUG 2 (shared with the other two scripts): classification ran BEFORE
+# normalisation, on the raw ALT field. A multi-allelic call (ALT="C,A",
+# string length 3) is misfiled as an INDEL by `length($5)!=1`; bcftools
+# norm then splits it into SNV-shaped rows sitting in the indel call set as
+# false positives. Fixed the same way: normalise first, classify, dedupe.
 snv()   { awk -F'\t' '/^#/{print;next} length($4)==1 && length($5)==1'; }
 indel() { awk -F'\t' '/^#/{print;next} length($4)!=1 || length($5)!=1'; }
+dedup() { awk -F'\t' '/^#/{print;next} !seen[$1"\t"$2"\t"toupper($4)"\t"toupper($5)]++'; }
 
 rtg format -o sdf ref.fa > /dev/null 2>&1 || true
 NORM=${NORM:-1}
 prep() {
-  $3 < "$1" > "$2.raw.vcf"
   if [ "$NORM" = 1 ] && command -v bcftools >/dev/null 2>&1; then
-    bcftools norm -f ref.fa -c s "$2.raw.vcf" 2>/dev/null | bcftools sort 2>/dev/null > "$2.vcf" || cp "$2.raw.vcf" "$2.vcf"
-  else cp "$2.raw.vcf" "$2.vcf"; fi
+    (grep '^#' "$1"; grep -v '^#' "$1" | sort -k2,2n) > "$2.pre.vcf"
+    bcftools norm -f ref.fa -c s "$2.pre.vcf" 2>/dev/null | bcftools sort 2>/dev/null > "$2.n.vcf" || cp "$2.pre.vcf" "$2.n.vcf"
+  else
+    cp "$1" "$2.n.vcf"
+  fi
+  $3 < "$2.n.vcf" | dedup > "$2.vcf"
   bgzip -f "$2.vcf"; tabix -f -p vcf "$2.vcf.gz"; }
 
 score() {
@@ -43,7 +66,7 @@ score() {
   rtg vcfeval -b "$2" -c "$3" -t sdf --squash-ploidy --bed-regions regions.bed \
       -o "eval_$1" > /dev/null 2>&1 || true
   if [ -f "eval_$1/summary.txt" ]; then
-    awk 'NR>2{tp=$2;fp=$4;fn=$5;p=$6;r=$7;f=$8} END{printf "%-6s TP=%s FP=%s FN=%s  P=%.3f R=%.3f F1=%.3f\n","'$1'",tp,fp,fn,p,r,f}' "eval_$1/summary.txt"
+    awk 'NR>2{tp=$3;fp=$4;fn=$5;p=$6;r=$7;f=$8} END{printf "%-6s TP=%s FP=%s FN=%s  P=%.3f R=%.3f F1=%.3f\n","'$1'",tp,fp,fn,p,r,f}' "eval_$1/summary.txt"
   else echo "$1: vcfeval produced no summary (see eval_$1)"; fi
 }
 
