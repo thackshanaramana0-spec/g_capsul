@@ -21,7 +21,7 @@ than the honest loss is.
 | **T4** | coverage sweep — CAPSULE F1 at 10×/15×/20×/30× (HG002 only) | sensitivity curve, not a win/loss comparison |
 | **T5** | het-indel F1 — CAPSULE vs DiscoSNP++, HG002-HG005 chr20 | **WIN as of 2026-09-03: 0.659 vs 0.639**, 5 of 8 evaluations. Previously recorded as a loss (0.637 vs 0.663); a scoring bug that misfiled multi-allelic SNVs as indel false positives — and could only ever penalise CAPSULE — was found and fixed. Neither caller changed. Full evidence, and the check that the win is invariant to scoring convention, in `docs/HET_INDEL_FRESH_SCAN.md` Finding 4. |
 | **T5.2** *(new)* | multi-allelic sites recovered — CAPSULE vs DiscoSNP++, real diploid GT=1/2 sites | **WIN** 11/18 vs 0/18, replicated on two independent chr20 regions |
-| **T5.3** *(new)* | tetraploid SNV + indel F1 — CAPSULE vs DiscoSNP++, real HG003+HG004 mix (Cooke et al. 2022 method) | **SNV WIN** 0.836 vs 0.782; indel 0.547 vs 0.571 (see §T5.3 below) |
+| **T5.3** *(new)* | tetraploid SNV + indel F1 — CAPSULE vs DiscoSNP++, real HG003+HG004 mix (Cooke et al. 2022 method) | **SNV WIN** 0.836 vs 0.782; indel 0.555 vs 0.553 (edge, see §T5.3 below) |
 
 ### T5.3 — TETRAPLOID (added 2026-09-03)
 
@@ -79,7 +79,7 @@ validate against a genuinely autotriploid banana (*Musa acuminata* Dwarf
 Cavendish, Busche et al. 2020) — testing a real polyploid *organism*
 remains open work, and this table does not claim to have done it. Raw
 numbers: `results/claim2/t5_3_tetraploid.csv`; truth builder:
-`scripts/build_tetraploid_truth.py`.
+`scripts/build_tetraploid_truth_v2.py` (v2, unbiased; `build_tetraploid_truth.py` is the superseded v1, kept for the record).
 
 ---
 
