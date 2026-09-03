@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # T1 (archive size) + T2 (compress/decompress time + peak RAM), whole-file
-# (sequence + names + quality + line 3), CAPSULE vs SPRING vs Genozip, on the
-# 14 locked datasets. Adapted from the outer ARCS project's proven
+# (sequence + names + quality + line 3), CAPSULE vs SPRING vs Genozip, on all
+# 15 locked datasets (NEW_DATASET_LOCKED.md). Adapted from the outer ARCS
+# project's proven
 # benchmark/run_block1.sh, using THIS repo's own binaries
 # (best106/capsule_decode) in place of the outer `arcs` binary.
 #
@@ -31,7 +32,7 @@
 # the decoder's own outputs. So an EXACT (non-normalized) full-file byte
 # reassembly is not actually achievable via decoder output alone today for
 # any dataset using line3_mode=1 or 2 -- confirmed by inspection: SRR2584863,
-# ERR552797, and ERR5181310 (3 of the 14 locked datasets) all use the
+# ERR552797, and ERR5181310 (3 of the 15 locked datasets) all use the
 # '+'+header-repeat convention, not bare '+'. This means the wording in
 # README.md/docs/TECHNICAL_ARCHITECTURE.md ("verified byte-identical, same
 # MD5, to the original input") is broader than what the current decoder can
@@ -52,9 +53,18 @@ BEST="$CAPSULE_BIN_DIR/best106"
 DEC="$CAPSULE_BIN_DIR/capsule_decode"
 NPROC=$(nproc 2>/dev/null || echo 4)
 
+# Per NEW_DATASET_LOCKED.md's second swap (2026-09-03): SRR40402583
+# (C. jejuni, Bacteria) replaced by SRR065390 (C. elegans, Animalia) --
+# Bacteria was over-represented at 6/15 while Animalia had zero. SRR10676752
+# (Utricularia gibba, Plantae) added to complete the full 15 -- it runs
+# through this SAME loop as every other dataset, no special-casing: it is
+# on disk at the standard path, and this repo's encoder has no auto-chunk
+# mechanism to suppress for any large input (verified: `grep -rn AUTOCHUNK
+# stages/106_inprocess.cpp include/*.h` returns nothing), so a big file is
+# just a big file here, not a different code path.
 DATASETS="ERR5181310 SRR554369 ERR552797 SRR2584863 SRR29296997 ERR12954017 \
-SRR40402583 SRR40271341 ERR17740259 SRR37283774 DRR976266 SRR36741279 \
-SRR32429602 SRR39257532"
+SRR065390 SRR40271341 ERR17740259 SRR37283774 DRR976266 SRR36741279 \
+SRR32429602 SRR39257532 SRR10676752"
 
 _PHASE=""
 phase()  { _PHASE="$1"; echo ""; echo "[Phase $_PHASE] $2"; }
