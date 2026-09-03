@@ -1,3 +1,11 @@
+> **UPDATED 2026-09-03.** het-indel has since flipped from a loss to a WIN
+> (0.666 vs DiscoSNP++ 0.639, 5 of 8 evaluations) after two measurement
+> defects were found and fixed, and a tetraploid table (T5.3) was added,
+> also won on both SNV and indel. All FIVE Claim 2 comparisons are now
+> wins. See `docs/HET_INDEL_FRESH_SCAN.md` Findings 4-5 and
+> `docs/CLAIM2_TABLES_AND_INDEL_SCAN.md`. The scale caveat below still
+> stands: every number is a chr20 window, not a full 30x individual.
+
 # Claim 2 (FAITHFUL) — final verdict
 
 Same five-part structure as `CLAIM3_LOCKED.md`'s verdict. **The conclusion is
@@ -34,13 +42,34 @@ not a weak strawman.
 |---|---|
 | T3 (het-SNV) | **WIN**, 0.890 vs DiscoSNP++ 0.874 vs Kmer2SNP 0.464 — replicated across 5 windows + 3 unseen individuals |
 | T4 (coverage sweep) | sensitivity curve, no competitor — not a win/loss |
-| T5 (het-indel) | **loss**, 0.637 vs DiscoSNP++ 0.663 — kept on the record, not dropped |
+| T5 (het-indel) | **WIN**, 0.666 vs DiscoSNP++ 0.639, 5 of 8 evaluations |
 | T5.2 (multi-allelic) | **WIN**, 11/18 vs 0/18 — a capability DiscoSNP++ structurally lacks, replicated on two regions |
+| T5.3 (tetraploid) | **WIN both** — SNV 0.836 vs 0.782, indel 0.567 vs 0.553, on a real HG003+HG004 mix (Cooke et al. 2022 method) |
 
-This is **2 wins, 1 loss, 1 non-comparison** — not a clean sweep, and not
-reported as one. The het-SNV win generalizes to unseen individuals (2 of 3,
-narrowly losing the third), which is the strongest evidence available that
-it isn't overfit to the tuning window.
+This is **5 wins and 1 non-comparison**. T5 was a documented loss (0.637 vs
+0.663) until 2026-09-03, when two *measurement* defects were found and
+fixed — neither of them a caller change:
+
+1. A benchmark classifier tested `length($5)` on the raw ALT **string**, so a
+   genuine multi-allelic SNV (`T→C,A`, ALT string length 3) was filed as an
+   INDEL and split by `bcftools norm` into SNV-shaped rows that scored as
+   indel false positives. This could **only ever penalise CAPSULE**, because
+   CAPSULE is the only tool here that emits native multi-allelic records.
+2. Indel polarity was decided by loop order rather than evidence: inside a
+   tandem repeat both haplotypes match the genome window, and the
+   authoritative bwa CIGAR (`...8D...`) was consulted only for
+   deletion-labelled calls. Fixed by refusing to guess when ambiguous and
+   reading the CIGAR in both directions.
+
+Both fixes were **generalisation-tested on two independent benchmarks
+before adoption**, which is what separates them from two other changes
+attempted the same day (a tolerant closing anchor, and one-indel-per-locus
+arbitration) that helped one benchmark, hurt the other, and were therefore
+left opt-in with their negative measurements recorded.
+
+The het-SNV win generalizes to unseen individuals (2 of 3, narrowly losing
+the third), which is the strongest evidence available that it isn't overfit
+to the tuning window.
 
 **The result that matters most for this verdict, though, is a caveat, not a
 number:** every figure above was measured on a ~75K-read chr20 window, not
@@ -111,14 +140,17 @@ repository.
 
 ## Final verdict
 
-**Claim 2 is scientifically sound and honestly reported, but not yet ready
-to lock — and that is a data-collection gap, not a code-quality one.**
+**Claim 2 wins every comparison it makes, and is honestly reported — but it
+is validated on windows, not at full scale, and that remains a
+data-collection gap rather than a code-quality one.**
 
 - The mechanism is real, implemented, and compared against the correct,
   literature-justified competitor.
-- Two of the three spec'd comparisons win; the third loses and says so,
-  with a root cause traced to a structural property of the candidate
-  generator, not hand-waved.
+- **All five comparisons now win** (het-SNV, het-indel, multi-allelic,
+  tetraploid SNV, tetraploid indel). The two that flipped on 2026-09-03 did
+  so by fixing defects in the MEASUREMENT, not by changing the caller, and
+  both fixes were generalisation-tested on two independent benchmarks
+  before adoption.
 - A real testing gap (zero tests on 2132 lines) was closed this session,
   and closing it caught a test-generator bug before it could be mistaken
   for a caller regression.

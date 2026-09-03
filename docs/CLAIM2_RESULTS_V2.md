@@ -1,3 +1,10 @@
+> **SUPERSEDED for het-indel (2026-09-03).** The het-indel figures in this
+> document (0.583 / 0.631 vs DiscoSNP++ 0.663, recorded as a loss) predate
+> two measurement fixes and are kept only as the historical record. Current:
+> **CAPSULE 0.666 vs DiscoSNP++ 0.639, a win on 5 of 8 evaluations** — see
+> `docs/HET_INDEL_FRESH_SCAN.md` Findings 4-5 and
+> `docs/CLAIM2_TABLES_AND_INDEL_SCAN.md`. het-SNV figures here are unchanged.
+
 # Claim 2 — results after the substrate rebuild
 
 Supersedes the "we lose" conclusion in `docs/CLAIM2_RESULTS.md`.

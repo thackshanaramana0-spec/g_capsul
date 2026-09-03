@@ -98,9 +98,11 @@ landed on the same day: 0.583 (`CLAIM2_RESULTS_V2.md` early section, after
 three precision changes) → 0.631 (`CLAIM2_RESULTS_V2.md` final section,
 `INDEL_PRECISION_ROOT_CAUSE.md`, `INDEL_LOSS_SKELETAL.md`) → 0.637 (most
 recent, recorded in project memory `claim2_capsule_results.md`). This is
-normal same-day iteration, not three different unreconciled claims — **0.637
-is the current number**, and the gap to DiscoSNP++ (0.663) has narrowed from
-0.080 to 0.026 over that iteration. Whichever exact figure appears in the
+normal same-day iteration, not three different unreconciled claims. **All of
+those figures are now superseded: the current number is 0.666 vs DiscoSNP++
+0.639**, after two measurement defects were found and fixed (multi-allelic
+SNVs misfiled as indel FPs; indel polarity decided by loop order instead of
+the alignment CIGAR — see `docs/HET_INDEL_FRESH_SCAN.md` Findings 4 and 5). Whichever exact figure appears in the
 paper, cite the commit it came from, not a doc that predates the last fix.
 
 ## 3. Where CAPSULE loses on het-indel — the deep scan, consolidated
