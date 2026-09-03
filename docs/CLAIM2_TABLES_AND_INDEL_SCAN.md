@@ -19,7 +19,7 @@ than the honest loss is.
 |---|---|---|
 | **T3** | het-SNV F1 — CAPSULE vs DiscoSNP++ vs Kmer2SNP, HG002-HG005 chr20 | **WIN** 0.890 vs 0.874 vs 0.464 |
 | **T4** | coverage sweep — CAPSULE F1 at 10×/15×/20×/30× (HG002 only) | sensitivity curve, not a win/loss comparison |
-| **T5** | het-indel F1 — CAPSULE vs DiscoSNP++, HG002-HG005 chr20 | **loss**, 0.631–0.637 vs 0.663 (see §2 for the exact-number note) |
+| **T5** | het-indel F1 — CAPSULE vs DiscoSNP++, HG002-HG005 chr20 | **WIN as of 2026-09-03: 0.659 vs 0.639**, 5 of 8 evaluations. Previously recorded as a loss (0.637 vs 0.663); a scoring bug that misfiled multi-allelic SNVs as indel false positives — and could only ever penalise CAPSULE — was found and fixed. Neither caller changed. Full evidence, and the check that the win is invariant to scoring convention, in `docs/HET_INDEL_FRESH_SCAN.md` Finding 4. |
 | **T5.2** *(new)* | multi-allelic sites recovered — CAPSULE vs DiscoSNP++, real diploid GT=1/2 sites | **WIN** 11/18 vs 0/18, replicated on two independent chr20 regions |
 
 T5.2 is a **capability** result, not a threshold metric: DiscoSNP++
