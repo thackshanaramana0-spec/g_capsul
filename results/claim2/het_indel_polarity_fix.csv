@@ -1,0 +1,18 @@
+# CIGAR-based indel polarity fix, 2026-09-03. lift_vcf.py only -- neither caller
+# changed, no archive touched, Claim 1 verified byte-identical (ERR5181310
+# 836191 B LOSSLESS).
+# Generalisation checked on BOTH benchmarks before adoption, unlike two earlier
+# attempts (CAPS_CLOSE_TOL, CAPS_ONE_INDEL_PER_LOCUS) which helped one and hurt
+# the other and were therefore left opt-in.
+benchmark,capsule_before,capsule_after,disco,delta
+diploid_8window_avg,0.6589,0.6660,0.6391,+0.0071
+tetraploid_window,0.555,0.567,0.553,+0.012
+# per-window diploid detail (before -> after)
+HG002_na,0.667,0.707,0.593,+0.040
+HG002_r2,0.679,0.679,0.491,0.000
+HG002_r3,0.631,0.631,0.581,0.000
+HG002_r4,0.581,0.590,0.781,+0.009
+HG002_r5,0.725,0.725,0.789,0.000
+HG003_r3,0.718,0.758,0.613,+0.040
+HG004_r3,0.635,0.635,0.598,0.000
+HG005_r3,0.635,0.603,0.667,-0.032
