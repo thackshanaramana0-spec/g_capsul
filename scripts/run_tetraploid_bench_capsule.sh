@@ -41,15 +41,17 @@ BAM[HG004]="$G/AshkenazimTrio/HG004_NA24143_mother/NIST_HiSeq_HG004_Homogeneity-
 BAM[HG005]="$G/ChineseTrio/HG005_NA24631_son/HG005_NA24631_son_HiSeq_300x/NHGRI_Illumina300X_Chinesetrio_novoalign_bams/HG005.hs37d5.300x.bam"
 FRAC=$(awk -v t="$TARGET_COV" 'BEGIN{printf "%.4f", t/300}')
 REGION="$CHROM:$LO-$HI"
+log "[1/7] streaming $INDA + $INDB windows from GIAB S3/HTTP..."
 for IND in "$INDA" "$INDB"; do
     [ -s "r_${IND}.fq" ] || samtools view -h -s "$FRAC" "${BAM[$IND]}" "$REGION" 2>/dev/null \
         | samtools fastq -n - 2>/dev/null > "r_${IND}.fq"
-    log "$IND window reads: $(( $(wc -l < "r_${IND}.fq") / 4 ))"
+    log "  $IND window reads: $(( $(wc -l < "r_${IND}.fq") / 4 ))"
 done
 cat "r_${INDA}.fq" "r_${INDB}.fq" > reads.fq
-log "mixed reads: $(( $(wc -l < reads.fq) / 4 ))"
+log "[1/7] done -- mixed reads: $(( $(wc -l < reads.fq) / 4 ))"
 
 # ── 2. Real per-individual GIAB truth, chr20 only ────────────────────────────
+log "[2/7] fetching + normalising real GIAB truth for $INDA and $INDB..."
 for IND in "$INDA" "$INDB"; do
     TRUTH="$HOME/giab_truth/${IND}_GRCh37_1_22_v4.2.1_benchmark.vcf.gz"
     [ -s "$TRUTH" ] || { echo "FAIL: $TRUTH not found -- see docs/SERVER_SETUP_AND_DOWNLOADS.md sec 3" >&2; exit 1; }
@@ -58,8 +60,10 @@ for IND in "$INDA" "$INDB"; do
     bcftools norm -f "$REF" -m -any "truth_${IND}_chr.vcf.gz" -Oz -o "truth_${IND}_norm.vcf.gz" 2>/dev/null
     tabix -f -p vcf "truth_${IND}_norm.vcf.gz"
 done
+log "[2/7] done"
 
 # ── 3. Confident regions = intersection of both individuals' BEDs ───────────
+log "[3/7] intersecting confident BEDs..."
 BEDA="$HOME/giab_truth/${INDA}_GRCh37_1_22_v4.2.1_benchmark_noinconsistent.bed"
 BEDB="$HOME/giab_truth/${INDB}_GRCh37_1_22_v4.2.1_benchmark_noinconsistent.bed"
 [ -s "$BEDA" ] || BEDA="$HOME/giab_truth/${INDA}_GRCh37_1_22_v4.2.1_benchmark.bed"
@@ -67,23 +71,28 @@ BEDB="$HOME/giab_truth/${INDB}_GRCh37_1_22_v4.2.1_benchmark_noinconsistent.bed"
 bedtools intersect -a "$BEDA" -b "$BEDB" | awk -v c="$CHROM" '$1==c' > tetra_confident_full.bed
 awk -v c="$CHROM" -v lo="$LO" -v hi="$HI" '$1==c && $3>lo && $2<hi{
   s=($2>lo?$2:lo); e=($3<hi?$3:hi); if(e>s) print c"\t"s"\t"e}' tetra_confident_full.bed > regions.bed
-log "confident bp in window: $(awk '{n+=$3-$2}END{print n+0}' regions.bed)"
+log "[3/7] done -- $(awk '{n+=$3-$2}END{print n+0}' regions.bed) confident bp in window"
 
 # ── 4. Build the tetraploid union truth (v2: normalise first, drop nothing) ──
+log "[4/7] building unbiased tetraploid union truth (v2, drops nothing)..."
 python3 "$SC/build_tetraploid_truth_v2.py" "truth_${INDA}_norm.vcf.gz" "truth_${INDB}_norm.vcf.gz" tetra_truth_v2.vcf
 awk -v lo="$LO" -v hi="$HI" '/^#/{print;next} $2>lo && $2<hi' tetra_truth_v2.vcf > tetra_truth_v2_win.vcf
-log "truth sites in window: $(grep -vc '^#' tetra_truth_v2_win.vcf)"
+log "[4/7] done -- $(grep -vc '^#' tetra_truth_v2_win.vcf) truth sites in window"
 
 # ── 5. CAPSULE reference-free call at the mixed sample's ploidy ─────────────
+log "[5/7] running CAPSULE caller at ploidy=$PLOIDY on the mixed sample..."
 export CAPS_CALL=1 CAPS_PLOIDY="$PLOIDY" CALL_VCF="$OUT/calls.vcf" CAPS_DUMP_CONTIGS="$OUT/contigs.tsv"
 "$CAPS" reads.fq 3 16 16 22 16 16 1 24 64 1 >/dev/null 2>capsule_call.log
 grep -E "CAPS-CALL" capsule_call.log || true
 cp contigs.tsv contigs.fa
+log "[5/7]   caller done -- $(grep -c '^>' contigs.fa) contigs, aligning + lifting..."
 [ -s "$REF.bwt" ] || bwa index "$REF" 2>/dev/null
 bwa mem -t"$(nproc)" "$REF" contigs.fa 2>/dev/null > c2r.sam
 python3 "$SC/lift_vcf.py" calls.vcf c2r.sam "$REF" "$CHROM" lifted.vcf contigs.fa
+log "[5/7] done"
 
 # ── 6. DiscoSNP++ on the identical mixed reads ───────────────────────────────
+log "[6/7] running DiscoSNP++ on the identical mixed reads..."
 if command -v run_discoSnp++.sh >/dev/null; then
     echo "reads.fq" > fof.txt
     run_discoSnp++.sh -r fof.txt -k 31 -c 3 -D 100 -P 3 -b 0 -G "$REF" -T >disco.log 2>&1 || true
@@ -98,12 +107,14 @@ if [ -n "$D" ]; then
      grep -v "^#" "$D" | awk -F'\t' -v OFS='\t' -v c="$CHROM" '$1==c{
         split($10,g,":"); gt=g[1]; gsub(/\|/,"/",gt);
         print $1,$2-1,".",$4,$5,30,"PASS",".","GT",gt}' | sort -k2,2n) > d_raw.vcf
+    log "[6/7] done"
 else
-    log "SKIP: DiscoSNP++ not found on PATH -- CAPSULE-only run"
+    log "[6/7] SKIP: DiscoSNP++ not found on PATH -- CAPSULE-only run"
     printf "##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n" > d_raw.vcf
 fi
 
 # ── 7. Score both tools, same corrected convention as run_window_bench_capsule.sh
+log "[7/7] normalising, classifying, and scoring both tools with rtg vcfeval..."
 SDF="$OUT/sdf"; [ -d "$SDF" ] || rtg format -o "$SDF" "$REF" >/dev/null 2>&1
 snv()   { awk -F'\t' '/^#/{print;next} length($4)==1 && length($5)==1'; }
 indel() { awk -F'\t' '/^#/{print;next} length($4)!=1 || length($5)!=1'; }
@@ -120,6 +131,7 @@ prep d_raw.vcf                d_ind 'indel'
 
 score(){ rm -rf "e_$1"; rtg vcfeval -b "$2" -c "$3" -t "$SDF" --squash-ploidy --bed-regions regions.bed -o "e_$1" >/dev/null 2>&1 || true
   [ -f "e_$1/summary.txt" ] && awk -v n="$1" 'NR>2{printf "%-14s TP=%-5s FP=%-5s FN=%-5s P=%.3f R=%.3f F1=%.3f\n",n,$3,$4,$5,$6,$7,$8}' "e_$1/summary.txt" || echo "$1: no summary"; }
+log "[7/7] done -- scoring"
 
 echo "===== T5.3 TETRAPLOID ($INDA+$INDB, ploidy=$PLOIDY) ====="
 score "CAPSULE_SNV"   t_snv.vcf.gz c_snv.vcf.gz

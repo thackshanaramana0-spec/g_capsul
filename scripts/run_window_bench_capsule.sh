@@ -59,16 +59,20 @@ mkdir -p "$OUT"; cd "$OUT"
 echo "=== $IND $WIN ($REGION), target ${TARGET_COV}x ==="
 
 # ── 1. Stream the window and downsample 300x -> TARGET_COV ─────────────────
+log "[1/6] streaming $IND $REGION from GIAB S3/HTTP, downsampling 300x -> ${TARGET_COV}x..."
 FRAC=$(awk -v t="$TARGET_COV" 'BEGIN{printf "%.4f", t/300}')
 if [ ! -s reads.fq ]; then
   samtools view -h -s "$FRAC" "$BAM" "$REGION" 2>/dev/null \
     | samtools fastq -n - 2>/dev/null > reads.fq
+else
+  log "  reads.fq already present, reusing (cached from a prior run)"
 fi
 NR_=$(( $(wc -l < reads.fq) / 4 ))
-echo "reads: $NR_"
+log "[1/6] done -- $NR_ reads"
 [ "$NR_" -gt 1000 ] || { echo "too few reads streamed — network or region problem" >&2; exit 1; }
 
 # ── 2. CAPSULE reference-free call (frozen params; single fixed candidate) ──
+log "[2/6] running CAPSULE caller (CAPS_CALL=1) on $NR_ reads..."
 export CAPS_CALL=1 CALL_VCF="$OUT/calls.vcf" CAPS_DUMP_CONTIGS="$OUT/contigs.tsv"
 "$CAPS" reads.fq 3 16 16 22 16 16 1 24 64 1 > /dev/null 2> capsule.log || true
 grep -E "CAPS-CALL" capsule.log || true
@@ -78,21 +82,27 @@ grep -E "CAPS-CALL" capsule.log || true
 # running the TSV awk over FASTA silently produces a garbage "contigs.fa"
 # whose records all fail to lift (symptom: "lifted 0 calls").
 cp contigs.tsv contigs.fa
+log "[2/6] done -- $(grep -c '^>' contigs.fa) contigs"
 
 # ── 3. Place contigs on the reference (EVALUATION ONLY — not part of calling) ─
+log "[3/6] aligning contigs to $REF with bwa mem (eval-only coordinate lift)..."
 bwa mem -t "$(nproc)" "$REF" contigs.fa 2>/dev/null > c2r.sam
+log "[3/6] done -- c2r.sam written"
 
 # ── 4. Lift contig-coordinate calls to genome coordinates ──────────────────
+log "[4/6] lifting contig-coordinate calls to genome coordinates..."
 python3 "$SC/lift_vcf.py" calls.vcf c2r.sam "$REF" $CHROM lifted.vcf contigs.fa
+log "[4/6] done"
 
 # ── 5. Truth for this window: het-only (reference-free sees only het), inside
 #       the GIAB confident regions, split SNV / INDEL ───────────────────────
+log "[5/6] fetching GIAB truth for $REGION, restricting to confident regions..."
 tabix -h "$TRUTH" "$REGION" 2>/dev/null | awk -v OFS='\t' '
   /^##contig/{next} /^#CHROM/{print "##contig=<ID=20,length=63025520>"; print; next}
   /^#/{print; next} {print}' > truth.vcf
 awk -v c=$CHROM -v lo=$LO -v hi=$HI '$1==c && $3>lo && $2<hi{
   s=($2>lo?$2:lo); e=($3<hi?$3:hi); if(e>s) print c"\t"s"\t"e}' "$BED" > regions.bed
-echo "confident bp in window: $(awk '{n+=$3-$2}END{print n+0}' regions.bed)"
+log "[5/6] done -- $(awk '{n+=$3-$2}END{print n+0}' regions.bed) confident bp in window"
 
 # SNV/INDEL classification. NOTE the ordering below: these run AFTER
 # `bcftools norm -m -any` has split multi-allelic records, so $5 is always a
@@ -132,6 +142,7 @@ prep lifted.vcf c_snv snv
 prep lifted.vcf c_ind indel
 
 # ── 6. Score with rtg vcfeval ──────────────────────────────────────────────
+log "[6/6] normalising, classifying, and scoring SNV+INDEL with rtg vcfeval..."
 [ -d "$HOME/refs/chr20.sdf" ] && SDF="$HOME/refs/chr20.sdf" || { rm -rf sdf; rtg format -o sdf "$REF" >/dev/null 2>&1; SDF=sdf; }
 score(){ rm -rf "e_$1"
   rtg vcfeval -b "$2" -c "$3" -t "$SDF" --squash-ploidy --bed-regions regions.bed \
@@ -141,6 +152,7 @@ score(){ rm -rf "e_$1"
       printf "%-6s TP=%-5s FP=%-5s FN=%-5s  P=%.3f  R=%.3f  F1=%.3f\n",n,tp,fp,fn,p,r,f}' "e_$1/summary.txt"
   else echo "$1: no summary (see e_$1)"; fi; }
 
+log "[6/6] done -- scoring"
 echo "======== $IND $WIN — CAPSULE reference-free — rtg vcfeval (GA4GH) ========"
 score SNV   t_snv.vcf.gz c_snv.vcf.gz
 score INDEL t_ind.vcf.gz c_ind.vcf.gz
