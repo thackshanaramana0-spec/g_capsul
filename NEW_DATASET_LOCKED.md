@@ -34,6 +34,38 @@ Verified live via NCBI eutils 2026-09-02, not guessed:
 - `_1` file size: ~3.5 GB (half of 6,973 MB total for both mates)
 - NOT on disk yet — queued for download
 
+**Second swap, 2026-09-03: Removed Campylobacter jejuni, added C. elegans (Animalia).**
+The 15-set as first locked had ZERO Animalia representation (Drosophila was
+removed in the first swap above, and C. elegans/T. cacao were excluded from
+this repo's set as "the big datasets" per `DATASET_LOCKED.md`). Auditing
+kingdom coverage found Bacteria over-represented at 6 of 15 while Animalia
+had none. C. jejuni (SRR40402583, an "extended set" addition, not one of
+the original primary-10 accessions) was the least structurally necessary of
+the 6 Bacteria entries to drop.
+
+- **Removed:** SRR40402583, Campylobacter jejuni, Bacteria, ~162x.
+- **Added:** SRR065390, C. elegans N2 WGS, Animalia — one of the ORIGINAL
+  primary-10 accessions (`DATASET_LOCKED.md` #6), not a new discovery. Was
+  already on disk at `/data/fastq/SRR065390_1.fq` (11,282,985,734 B,
+  135,234,184 lines = 33,808,546 reads) from the outer project's own
+  earlier work — verified present, not re-downloaded. 100 bp reads, ~34×
+  coverage (_1 only).
+  **No auto-chunk env var applies here** -- `ARCS_AUTOCHUNK_MB` is the
+  OUTER ARCS binary's own mechanism; checked directly against this repo's
+  encoder (`stages/106_inprocess.cpp`, `grep -rn AUTOCHUNK`) and confirmed
+  it has no auto-chunking behavior at all, so there is nothing to suppress.
+  The only real implication of this file's size for THIS encoder is that
+  it is simply a large single-pass input like any other -- expect
+  proportionally higher RAM/time than the smaller datasets, not a special
+  flag. (`DATASET_LOCKED.md`'s ~18 GB peak RAM figure for this accession is
+  measured on the OUTER `arcs` binary and is not assumed to transfer
+  unchanged to this repo's own encoder -- if this dataset's peak RAM here
+  needs stating, it should be measured fresh, not copied.)
+- SRR40402583 is NOT deleted from disk or from history — it remains a
+  valid, already-measured dataset (`results/phase_a/allphases_14dataset.csv`
+  row `SRR40402583`), just no longer one of the current 15 headline
+  accessions. Its number stays on record, marked superseded, not erased.
+
 **Kept as-is: Arabidopsis thaliana, low-coverage control.**
 - ERR17716639, 2.8x coverage, on disk at `/tmp/kd/ERR17716639.fastq`
 - This is the ONE remaining deliberate low-coverage dataset. It stays outside
@@ -60,15 +92,12 @@ Verified live via NCBI eutils 2026-09-02, not guessed:
 | 11 | SRR29296997 | Halobacterium salinarum | Archaea | ~54x | on disk |
 | 12 | ERR12954017 | Sulfolobus acidocaldarius | Archaea | ~116x | on disk |
 | 13 | SRR40271341 | Helicobacter pylori | Bacteria | ~139x | on disk |
-| 14 | SRR40402583 | Campylobacter jejuni | Bacteria | ~162x | on disk |
-| 15 | SRR10676752 | Utricularia gibba | Plantae | ~65x | **queued for download** |
+| 14 | SRR065390 | C. elegans N2 WGS | Animalia | ~34x | on disk |
+| 15 | SRR10676752 | Utricularia gibba | Plantae | ~65x | on disk |
 
-**Kingdom split:** Bacteria 6, Virus 2, Fungi 2, Protista 2, Archaea 2,
-Plantae 1. Animalia now has zero representation in the main 15 (Drosophila
-removed, C. elegans and T. cacao excluded as the "big" datasets per
-`DATASET_LOCKED.md`) — disclose this honestly, do not backfill with another
-low-coverage Animalia run (see `low_coverage_weakness` memory for why that
-would be confounded, not cheap).
+**Kingdom split:** Bacteria 5, Virus 2, Fungi 2, Protista 2, Archaea 2,
+Plantae 1, Animalia 1 — **all 6 standard kingdoms now represented**, one
+gap (Animalia) closed 2026-09-03 by the C. jejuni -> C. elegans swap above.
 
 **Low-coverage supplementary control (outside the 15):**
 
@@ -80,6 +109,18 @@ would be confounded, not cheap).
 
 ## Downloads needed
 
-Two accessions, both queued 2026-09-02:
-- SRR32429602 (HCMV)
-- SRR10676752 (Utricularia gibba)
+**None. All 15 confirmed on disk at `/data/fastq/<accession>_1.fq`,
+2026-09-03** (verified by direct file check, not assumed): the two
+originally queued (SRR32429602 HCMV, SRR10676752 Utricularia gibba) were
+completed and relocated from `/tmp/newdl/` — a non-persistent location,
+moved into place specifically so `scripts/run_claim1_bench.sh` (which reads
+from `$CAPSULE_DATA_DIR`, i.e. `/data/fastq/`) can find them — and
+SRR065390 (C. elegans, added in the second swap above) was already present
+from earlier work.
+
+**Outstanding, separate from "downloaded":** SRR10676752 (Utricularia
+gibba) has had three real G_CAPSUL-side encode attempts (sequence-only,
++names, +names+quality — the last completing at 1,655,447,728 B) but no
+saved archive, no lossless verification, and no SPRING/Genozip comparison
+yet. It is on disk and ready to run, not yet benchmarked. SRR065390 (C.
+elegans) has never been run through this repo's own comparison at all.
