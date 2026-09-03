@@ -29,7 +29,7 @@ CAPSULE_DATA_DIR=/mnt/other/fastq bash scripts/run_capsule.sh 1
 **Sub-phases**, once the default has run cleanly, per claim:
 ```bash
 bash scripts/run_capsule.sh 1 compress   # keep the archive, not just verify
-bash scripts/run_capsule.sh 1 sweep      # the real 14-dataset comparison (not yet a single script -- prints where to find the manual steps)
+bash scripts/run_capsule.sh 1 sweep      # T1+T2, the real 14-dataset comparison vs SPRING/Genozip (slow, hours)
 bash scripts/run_capsule.sh 2 giab       # real GIAB het-SNV+indel benchmark (needs chr20.fa + truth VCFs, see SERVER_SETUP_AND_DOWNLOADS.md)
 bash scripts/run_capsule.sh 2 window HG002 r2   # single-individual, single-window benchmark
 bash scripts/run_capsule.sh 3 full       # the real export/coverage/query benchmark vs SPAdes/bwa+mosdepth
