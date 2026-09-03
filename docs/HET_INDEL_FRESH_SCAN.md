@@ -100,6 +100,49 @@ difficulty as still open, using cross-sample or cross-assembly comparison
 (again, information CAPSULE's single-sample task doesn't have) rather than
 a single-sample technique this project could adopt directly.
 
+## Finding 3 — a real gap in the caller, generalized, tested, and REFUTED
+
+Tracing Finding 2's locus into the code found a genuine, previously
+undocumented gap. `extract_bubble`'s homopolymer run-length branch
+(`caps_caller.h`) guards on `rc0 == B[ib-1] && b2i(rc0) >= 0` — a **single
+repeating nucleotide**. It was never generalized to tandem repeats with a
+unit length >1bp, even though the flank-shift problem its own comment
+describes ("the flanks are themselves shifted by the length difference")
+applies identically to any periodic unit. The locus in Finding 2 is a
+`(TTTA)n` tetranucleotide repeat — GIAB's own truth annotates it
+`difficultregion=AllTandemRepeats_lt51bp_slop5` — so it can be reached by
+neither the homopolymer branch (unit too long) nor the generic
+`flank_match` loop (flanks shifted).
+
+**The generalization was implemented and measured, not just proposed**: a
+`U=2..6` run-length branch, mirroring the already-validated homopolymer
+logic, requiring ≥2 unit copies before the divergence, deliberately
+starting at `U=2` so the tuned homopolymer path is untouched.
+
+**Result: refuted.** Instrumented, the branch **fires 682 times** on HG002
+r2 — so the gap is real and the branch does reach these loci — but the
+caller's output is **byte-identical** with it on and off (`cmp` on
+`calls.vcf`), and the score is unchanged to the digit (INDEL P=0.704
+R=0.576 F1=0.633 both ways). Those STR loci were already being resolved
+equivalently by the generic loop, or their candidates die in the same
+downstream filters everything else dies in.
+
+This is a **third independent confirmation of the standing structural
+finding** (`HOW_DISCOSNP_WINS.md` §4): the indel gap is not in bubble
+geometry. Three separate geometry-side attempts have now been measured —
+tolerant flanks (net negative), the four filter attempts already on record
+(neutral/negative), and now STR run-length generalization (exactly zero) —
+and none moves the number. Kept behind `CAPS_STRBUBBLE=1`, off by default,
+per this project's rule that refuted ideas stay on the record with their
+measurement rather than being deleted.
+
+**Claim 1 verified unaffected**, as required: `verify_lossless.sh` on
+`ERR5181310` with the rebuilt binary reproduces exactly 836,191 bytes,
+matching `results/phase_a/allphases_14dataset.csv` byte for byte, and
+LOSSLESS. (Structurally it could not have been affected — `caps_caller.h`
+is only compiled into the `CAPS_CALL` path and touches no compression
+logic — but this was checked rather than asserted.)
+
 ## What this scan changes, and what it doesn't
 
 **Does not change:** the core conclusion already on record — the indel
