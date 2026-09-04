@@ -16,7 +16,7 @@ Each qualifier removes most of the literature.
 |---|---|---|
 | **DeepVariant, DRAGEN, Clair3, Octopus, Strelka2, GATK, FreeBayes** | indel F1 **0.89–0.97** (DRAGEN 96.99%, VarSome/Sentieon 89–93% on GIAB WES) | **reference-based.** They align to a known genome. Not comparable — different problem. |
 | **ska lo** (MBE 2025, newest reference-free tool) | 97–98% insertion sensitivity | **haploid bacteria, between-sample.** Its own paper: "identify within-strain variants in pathogen WGS data" by *comparing samples*. It does not call heterozygous variants from a single diploid sample. |
-| **eBWT2SNP** | 99.13% precision | **SNPs only.** Its paper leaves indel typing explicitly unimplemented ("extract the left-context ... perform a local alignment" — future work). |
+| **eBWT2SNP** | 99.13% precision on **SIMULATED** chr22 (29x); **66.62%** on REAL chr1 (43-47x), where DiscoSNP++ is actually MORE precise (74.57%) — see `docs/EBWT_LITERATURE_CORRECTION.md` | **SNPs only**, and the headline 99.13% is a simulated-data figure, not a real one. Its paper leaves indel typing explicitly unimplemented ("extract the left-context ... perform a local alignment" — future work); `ebwt2InDel` extends it but full indel typing is still not there. |
 | **Kmer2SNP** | — | **SNPs only**, by construction (heterozygous k-mer pair matching). |
 | **SKA (base)** | — | ignores indels entirely; `ska lo` exists to add them. |
 

@@ -568,6 +568,50 @@ int main(int argc,char** argv){
         if(L){ const uint64_t m=~0ULL<<(2*(32-L)); if((w32(pa)^w32(pb))&m) return false; }
         return true;
     };
+    // Same comparison, but COUNTS mismatching bases instead of stopping at the
+    // first, bailing once the count exceeds `cap`. Returns the count (>cap
+    // means "more than cap", value not exact).
+    //
+    // WHY THIS EXISTS. rcmp above is exact, and heterozygosity is by definition
+    // a DIFFERENCE, so the exact test can never see a het partner -- it drops
+    // it. But the partner is not invisible: the hash probe keys on a 16-base
+    // SEED while the verified overlap L runs up to ~148, so whenever the
+    // variant sits past the seed (measured ~89% of the time at L=148) the
+    // partner read SHARES the seed, is enumerated by the probe loop, fails
+    // rcmp by exactly one base, and is discarded unexamined at
+    // `if(!rcmp(...)) continue;`.
+    //
+    // That discarded set -- seed-sharing, exactly-1-mismatch -- is the het
+    // signal available at layer 1, and it costs no extra probing to look at:
+    // the read is already in hand at the moment rcmp rejects it. This is a
+    // DIFFERENT set from the ccnt>=2 ties measured in docs/GRAPH_HARVEST_
+    // REFUTED.md, which counted only reads that PASSED rcmp (85 found, 86% of
+    // them duplicate reads). Counting the near-misses was never measured.
+    //
+    // 2-bit-per-base popcount: XOR, fold the two bits of each base together so
+    // any differing base becomes a single set bit, mask to one bit per base.
+    // Returns the mismatch count (capped at 2 -- larger values are reported as
+    // 3 and are not exact) and, when the count is exactly 1, writes the
+    // 0-based offset of the differing base within the overlap into `mmpos`.
+    auto rcmp_mm1=[&](uint32_t a,uint32_t off,uint32_t b,uint32_t L,int& mmpos)->int{
+        uint64_t pa=woff[a]*32ULL+off, pb=woff[b]*32ULL;
+        int mm=0, base=0; mmpos=-1;
+        const uint64_t LO=0x5555555555555555ULL;
+        auto acc=[&](uint64_t x,int blk){
+            if(!x) return;
+            const uint64_t nz=((x>>1)|x)&LO;
+            mm+=__builtin_popcountll(nz);
+            if(mm==1){
+                // highest set 2-bit group = earliest differing base, because
+                // w32 packs the first base in the most significant bits
+                mmpos=blk+(__builtin_clzll(nz)>>1);
+            }
+        };
+        while(L>=32){ acc(w32(pa)^w32(pb),base); if(mm>2) return 3;
+                      pa+=32; pb+=32; L-=32; base+=32; }
+        if(L){ const uint64_t m=~0ULL<<(2*(32-L)); acc((w32(pa)^w32(pb))&m,base); }
+        return mm>2?3:mm;
+    };
     // unpack read i into buf (caller guarantees >= rlen[i] bytes)
     auto runp=[&](uint32_t i,char* buf){
         const uint32_t L=rlen[i]; const uint64_t base=woff[i]*32ULL;
@@ -744,6 +788,68 @@ int main(int argc,char** argv){
     // early-exit bound: a candidate is abandoned the moment it is worse than
     // what the read already has, so better placements also mean less work.
     std::vector<uint8_t> readMM;          // 255 = unplaced
+    // ── GRAPH HARVEST -- REFUTED BY ITS OWN MEASUREMENT, kept instrumented ──
+    //
+    // THE IDEA: the overlap graph is already computed inside the sweep below
+    // and thrown away. For each open tail `a` at level L, cand[i*CCAP +
+    // 0..ccnt[i]-1] is a's OUT-EDGE SET -- every read whose first L bases are
+    // verified equal (rcmp) to a's last L bases -- and the commit keeps the
+    // first untaken entry and discards the rest. Recording the discarded
+    // alternative looked free, and structurally matched DiscoSNP++'s own
+    // seeding step (Bubble.cpp:309: successors.size()>=2, then every pair).
+    //
+    // THE MEASUREMENT (HG002 r2, 75,115 reads, 2026-09-04):
+    //     commits=57,553   ccnt==1: 54,966 (95.5%)   ccnt==2: 2,453 (4.3%)
+    //     surviving branches: 85     of which 73 (86%) at L = 100% of Lmax
+    // Against 424 truth het-SNVs and 95 truth het-indels in the same window.
+    //
+    // WHY IT CANNOT WORK, and this is structural, not tuning:
+    //   1. `rcmp` is an EXACT match. Heterozygosity means the two haplotypes
+    //      DIFFER. Two haplotype reads can therefore never both exactly match
+    //      the same suffix unless the variant lies outside the overlap window.
+    //      A het site does not produce a tie here -- it produces exactly one
+    //      surviving candidate, which is why ccnt==1 is 95.5% of commits.
+    //   2. Of the ties that do occur, 86% sit at L = Lmax, and per the comment
+    //      at the head of the level loop below, "At L = rlen[a] the offset is 0
+    //      ... rcmp compares the two reads in full -- exactly the duplicate
+    //      test." They are duplicate reads, not branches.
+    //   3. 2,368 of the 2,453 two-candidate commits had the alternative
+    //      already claimed (prv[other]!=NONE): two chains meeting, not a branch.
+    //
+    // So this harvests ~12 non-duplicate ties per 519 truth variants. It
+    // cannot serve as a calling channel (accuracy), and it cannot replace
+    // rc_reads/pkidx as a candidate source (RAM/time) because it finds ~0.15%
+    // as many loci. Both halves of docs/GRAPH_HARVEST_EXACT_PLAN.md are dead.
+    //
+    // KEPT (not deleted) because it is CAPS_CALL-gated, verified bit-identical
+    // on the Claim 1 path (ERR5181310 ARCHIVE_TOTAL=352997 and every stream
+    // byte-for-byte), costs one predictable branch when off, and the printed
+    // histogram is the evidence for the paragraph above. Full write-up:
+    // docs/GRAPH_HARVEST_REFUTED.md.
+    struct GEdge { uint32_t a, b_taken, b_alt, L; };
+    std::vector<GEdge> g_branch;
+    // instrumentation: histogram of ccnt at the moment of commit (CCAP=8, so 0..8)
+    size_t g_cc_hist[9] = {0};
+    size_t g_commits = 0;
+    // L distribution for 2-way ties, bucketed as a percentage of Lmax: a tie at
+    // a long overlap is strong evidence (exact rcmp over many bases); a tie
+    // near the sweep floor could be an error-induced collision. Bucketing lets
+    // the threshold in any later filter be derived from measurement rather
+    // than guessed (standing rule 1: formulas over measured properties).
+    size_t g_L_bucket[11] = {0};
+    // ── NEAR-MISS HARVEST accumulators (see rcmp_mm above for the rationale) ─
+    // Declared out here, beside g_branch, because they are OpenMP reduction
+    // targets inside sweep() AND are reported after round 2 returns.
+    size_t nm1=0, nm2=0;
+    // alt = the base the OTHER haplotype's read carries at that position (2-bit)
+    struct NMObs { uint32_t read_a, pos_in_a; uint8_t alt; };
+    std::vector<NMObs> nm_obs;
+    // Minimum verified overlap for a near-miss to count, as a FRACTION of Lmax
+    // rather than a fixed constant (standing rule 1): at Lmax=148 this is 74
+    // bases, and one mismatch across 74+ otherwise-exact bases is not a chance
+    // collision. Overridable so the threshold can be swept, not guessed.
+    uint32_t nm_minL=Lmax/2;
+    if(const char* e=getenv("CAPS_NM_MINL")) nm_minL=(uint32_t)atoi(e);
     std::vector<uint32_t> nxt(n,NONE),prv(n,NONE),ovl(n,0),ch_h(n),ch_t(n);
     std::vector<uint64_t> seed(n,0);
     std::vector<uint8_t>  ok(n,0);
@@ -761,6 +867,13 @@ int main(int argc,char** argv){
     uint32_t sweep_minov=MINOV;
     auto sweep=[&](){
         links=0; probes=0;
+        // Round 1's result is discarded wholesale (nxt/prv/ovl are refilled on
+        // the next call, and round 1 exists only to compute `admit`), so its
+        // harvest must be discarded too -- only round 2's survives, which is
+        // correct: round 2's nxt/ovl are what build pg and g_contig_spans.
+        g_branch.clear(); g_commits=0; nm_obs.clear(); nm1=0; nm2=0;
+        for(size_t z=0;z<9;++z) g_cc_hist[z]=0;
+        for(size_t z=0;z<11;++z) g_L_bucket[z]=0;
         std::fill(nxt.begin(),nxt.end(),NONE); std::fill(prv.begin(),prv.end(),NONE);
         std::fill(ovl.begin(),ovl.end(),0);    std::fill(ok.begin(),ok.end(),0);
         for(uint32_t i=0;i<n;++i){ ch_h[i]=i; ch_t[i]=i; }
@@ -894,7 +1007,7 @@ int main(int argc,char** argv){
             // num_threads(T) with T=(w<4096?1:NT) existed only to dodge fork
             // cost on small levels; with the team already open there is no
             // fork to dodge, and the writes were disjoint either way.
-            #pragma omp for schedule(static) reduction(+:pr_total)
+            #pragma omp for schedule(static) reduction(+:pr_total,nm1,nm2)
             for(long long ii=0;ii<(long long)w;++ii){
                 const size_t i=(size_t)ii;
                 const uint32_t a=tails[i];
@@ -913,7 +1026,45 @@ int main(int argc,char** argv){
                                                              // never chain members -- without
                                                              // this they get emitted twice
                     if(rlen[b]<L) continue;
-                    if(!rcmp(a,off,b,L)) continue;
+                    if(!rcmp(a,off,b,L)){
+                        // ── NEAR-MISS HARVEST (CAPS_CALL only) ──────────────
+                        // The het partner dies on the line above. It shares
+                        // a's seed (that is why it is in this bucket at all)
+                        // but differs somewhere in the verified overlap. If it
+                        // differs by EXACTLY ONE base, that base is a
+                        // candidate heterozygous site and this read is the
+                        // alternate haplotype. No extra probe, no extra index:
+                        // `b` is already in hand at the instant it is rejected.
+                        //
+                        // Only counted at long overlaps: a 1-mismatch hit over
+                        // 100+ verified bases is strong evidence; the same over
+                        // 20 bases is a coincidence. NMIN is expressed as a
+                        // fraction of Lmax, not a constant, per standing rule 1.
+                        if(CAPS_CALL && L>=nm_minL){
+                            int mmpos=-1;
+                            const int mm=rcmp_mm1(a,off,b,L,mmpos);
+                            if(mm==1){
+                                ++nm1;
+                                // Record (tail read, offset of the differing
+                                // base within read a). ppos[a] is not known
+                                // until chains are emitted, so translation to
+                                // pg coordinates happens there -- the same
+                                // deferral g_contig_spans already uses.
+                                // ~44k pushes across the entire run, against
+                                // 20.9M probes: a critical section here is far
+                                // cheaper than per-thread buffers plus a merge,
+                                // and cannot race.
+                                // b's base at the differing position: b's
+                                // overlap starts at its own offset 0, so the
+                                // differing base is b[mmpos].
+                                const uint8_t altb=(uint8_t)((w32(woff[b]*32ULL+(uint32_t)mmpos)>>62)&3ULL);
+                                #pragma omp critical(nmobs)
+                                nm_obs.push_back({a,(uint32_t)(off+mmpos),altb});
+                            }
+                            else if(mm==2) ++nm2;
+                        }
+                        continue;
+                    }
                     cand[i*CCAP+c]=b;
                     if(++c==CCAP) break;
                 }
@@ -941,6 +1092,29 @@ int main(int argc,char** argv){
                 if(prv[b]!=NONE||ch_h[a]==b) continue;       // taken, or would cycle
                 nxt[a]=b; prv[b]=a; ovl[a]=L;
                 uint32_t h=ch_h[a],t=ch_t[b]; ch_t[h]=t; ch_h[t]=h; ++links;
+                // ── graph harvest: record the discarded alternative ─────────
+                // Placed here, inside the existing `omp single`, so it is
+                // already serial: no race, no critical section, no atomic.
+                // Reads only values the commit itself just used; writes only
+                // to g_* which nothing else touches. When CAPS_CALL is unset
+                // (every Claim 1 run) this is a single predictable branch and
+                // the emitted archive is bit-identical.
+                if(CAPS_CALL){
+                    ++g_commits;
+                    g_cc_hist[ccnt[i]<9?ccnt[i]:8]++;
+                    if(ccnt[i]==2){
+                        // the other entry of the pair, whichever slot it is in
+                        const uint32_t other=cand[i*CCAP+(c==0?1:0)];
+                        // It must be a genuine unclaimed alternative: if it is
+                        // already in a chain this is two chains meeting, not a
+                        // branch; ch_h guard mirrors the commit's own cycle test.
+                        if(other!=b && prv[other]==NONE && ch_h[a]!=other){
+                            g_branch.push_back({a,b,other,L});
+                            const uint32_t pct = Lmax? (uint32_t)((uint64_t)L*10ULL/Lmax) : 0;
+                            g_L_bucket[pct<11?pct:10]++;
+                        }
+                    }
+                }
                 done=true; break;
             }
             if(done||ccnt[i]<CCAP||!ok[a]) continue;         // list was complete
@@ -1227,6 +1401,17 @@ int main(int argc,char** argv){
     sweep();
     fprintf(stderr,"round2: probes=%zu links=%zu\n",probes,links);
     lap("round 2 (assembly)");
+    if(CAPS_CALL){
+        fprintf(stderr,"[HARVEST] commits=%zu branches(ccnt==2)=%zu  ccnt hist:",
+                g_commits,g_branch.size());
+        for(int z=0;z<9;++z) if(g_cc_hist[z]) fprintf(stderr," %d:%zu",z,g_cc_hist[z]);
+        fprintf(stderr,"\n[HARVEST] tie L as %% of Lmax:");
+        for(int z=0;z<11;++z) if(g_L_bucket[z]) fprintf(stderr," %d0%%:%zu",z,g_L_bucket[z]);
+        fprintf(stderr,"\n[HARVEST] memory=%zu KB (%zu B/edge)\n",
+                g_branch.size()*sizeof(GEdge)/1024,sizeof(GEdge));
+        fprintf(stderr,"[NEARMISS] minL=%u  1-mismatch=%zu  2-mismatch=%zu\n",
+                nm_minL,nm1,nm2);
+    }
 
     // ── emit chains; singletons held back for mapping ────────────────────────
     std::string pg; pg.reserve((size_t)n*40);
@@ -1294,6 +1479,77 @@ int main(int argc,char** argv){
     fprintf(stderr,"links=%zu chains(multi)=%u leftovers=%zu pg after chains=%zu\n",
             links,multi,leftovers.size(),pg.size());
     lap("emit chains");
+    // ── NEAR-MISS: translate to pg coordinates and cluster ──────────────────
+    // Each observation is (tail read a, offset of the differing base within a).
+    // ppos[a] is a's start in the pseudogenome, so ppos[a]+offset is the pg
+    // coordinate of the candidate variant. Reads covering the SAME genomic
+    // site land on the SAME pg coordinate, which is what turns ~44k raw
+    // observations into a much smaller set of distinct sites.
+    //
+    // The depth filter is the whole point: a heterozygous site is seen by many
+    // independent read pairs and therefore accumulates a high count at one
+    // coordinate; a sequencing error is seen once and sits alone. This is the
+    // same logic the pileup applies -- the difference is that these candidate
+    // pairs cost nothing to obtain, being a byproduct of chaining.
+    if(CAPS_CALL){
+        // key = pg position << 2 | alt base, so the same position with two
+        // different alternate bases stays two candidates (a real multi-allelic
+        // site) instead of being merged into one.
+        std::vector<uint64_t> sites; sites.reserve(nm_obs.size());
+        size_t unplaced=0;
+        for(const auto& o : nm_obs){
+            if(ppos[o.read_a]==UINT64_MAX){ ++unplaced; continue; }
+            sites.push_back(((ppos[o.read_a]+o.pos_in_a)<<2)|(uint64_t)o.alt);
+        }
+        std::sort(sites.begin(),sites.end());
+        size_t distinct=0; size_t d2=0,d3=0,d5=0,d10=0;
+        const char* NMV=getenv("CAPS_NM_VCF");
+        const int NMD=getenv("CAPS_NM_DEPTH")?atoi(getenv("CAPS_NM_DEPTH")):5;
+        FILE* nv=NMV?fopen(NMV,"w"):nullptr;
+        if(nv) fprintf(nv,"##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n");
+        for(size_t i=0;i<sites.size();){
+            size_t j=i; while(j<sites.size()&&sites[j]==sites[i]) ++j;
+            const size_t depth=j-i; ++distinct;
+            if(depth>=2)  ++d2;
+            if(depth>=3)  ++d3;
+            if(depth>=5)  ++d5;
+            if(depth>=10) ++d10;
+            if(nv && depth>=(size_t)NMD){
+                const uint64_t p=sites[i]>>2; const uint8_t alt=(uint8_t)(sites[i]&3ULL);
+                // locate the contig containing pg position p
+                auto it=std::upper_bound(g_contig_spans.begin(),g_contig_spans.end(),p,
+                        [](uint64_t v,const std::pair<uint64_t,uint64_t>& s){ return v<s.first; });
+                if(it!=g_contig_spans.begin()){
+                    --it;
+                    if(p<it->second && p<pg.size()){
+                        const size_t cid=(size_t)(it-g_contig_spans.begin());
+                        fprintf(nv,"contig_%zu\t%llu\t.\t%c\t%c\t.\tPASS\tSVTYPE=SNV;SRC=nearmiss;DP=%zu\n",
+                                cid,(unsigned long long)(p-it->first+1),pg[p],"ACGT"[alt],depth);
+                    }
+                }
+            }
+            i=j;
+        }
+        if(nv){ fclose(nv); fprintf(stderr,"[NEARMISS] VCF (depth>=%d) -> %s\n",NMD,NMV);
+            // Emit the MATCHING contig FASTA. CAPS_DUMP_CONTIGS writes the
+            // caller's COLLAPSED substrate (different count, different ids),
+            // so lifting this VCF against that file silently matches the wrong
+            // contigs -- these records are indexed by g_contig_spans.
+            std::string fa(NMV); fa+=".contigs.fa";
+            if(FILE* cf=fopen(fa.c_str(),"w")){
+                for(size_t k=0;k<g_contig_spans.size();++k)
+                    fprintf(cf,">contig_%zu\n%s\n",k,
+                            pg.substr(g_contig_spans[k].first,
+                                      g_contig_spans[k].second-g_contig_spans[k].first).c_str());
+                fclose(cf);
+                fprintf(stderr,"[NEARMISS] matching contigs -> %s\n",fa.c_str());
+            }
+        }
+        fprintf(stderr,"[NEARMISS] obs=%zu placed=%zu unplaced=%zu -> distinct (pos,alt)=%zu\n",
+                nm_obs.size(),sites.size(),unplaced,distinct);
+        fprintf(stderr,"[NEARMISS] sites by depth: >=2:%zu  >=3:%zu  >=5:%zu  >=10:%zu\n",
+                d2,d3,d5,d10);
+    }
 
     // The prefix index is not consulted anywhere in the mapping stage -- that
     // stage builds and queries its own seed index -- but it was staying live
@@ -1814,6 +2070,12 @@ int main(int argc,char** argv){
         // keep the no-CAPS_CALL path's memory footprint completely unaffected.
         std::vector<std::string> call_seqs, call_quals;
         call_seqs.reserve(n_orig); call_quals.reserve(n_orig);
+        // The graph-only caller consumes quality as a pass/fail bitmap; the
+        // pileup path needs real phred characters, so this is gated on the
+        // same flag the caller checks.
+        const bool QUAL_BITMAP = getenv("CAPS_DBG_ONLY") && getenv("CAPS_DBG");
+        const bool SEQ_PACK    = QUAL_BITMAP;   // same gate: graph-only caller
+        const int  QMIN = getenv("CAPS_DBG_MINQ") ? atoi(getenv("CAPS_DBG_MINQ")) : 20;
         {
             // std::getline, NOT fgets with a fixed buffer: the main load pass
             // uses getline, and any read line longer than the buffer would be
@@ -1830,8 +2092,65 @@ int main(int argc,char** argv){
                     while(!b.empty()&&(b.back()=='\n'||b.back()=='\r')) b.pop_back();
                     while(!d.empty()&&(d.back()=='\n'||d.back()=='\r')) d.pop_back();
                     if(b.size()>1023) continue;                // mirror the load-pass skip
-                    call_seqs.push_back(b);
-                    call_quals.push_back(d);
+                    if(SEQ_PACK){
+                        // 2-BIT PACK, but ONLY for reads that are pure ACGT.
+                        //
+                        // BUG FOUND AND FIXED: the first version packed every
+                        // read and mapped non-ACGT to 'A'. That DESTROYS the N
+                        // information -- a k-mer spanning an N became a valid
+                        // k-mer with an A substituted -- and silently added
+                        // 2,273 k-mers on the r2 window (1,065,880 vs the
+                        // correct 1,063,607). F1 did not move, so the F1 check
+                        // alone did not catch it; only k-mer-set identity did.
+                        //
+                        // Reads containing N are stored RAW instead. They are a
+                        // small minority, so nearly all of the memory saving
+                        // remains, and no information is lost.
+                        // Layout: [0][lo][hi][packed...]  or  [1][raw bases...]
+                        bool pure = true;
+                        for(size_t qi=0; qi<b.size(); ++qi){
+                            const char c2=b[qi];
+                            if(c2!='A'&&c2!='C'&&c2!='G'&&c2!='T'&&
+                               c2!='a'&&c2!='c'&&c2!='g'&&c2!='t'){ pure=false; break; }
+                        }
+                        if(!pure){
+                            std::string rawv; rawv.reserve(1+b.size());
+                            rawv.push_back((char)1);
+                            rawv += b;
+                            call_seqs.push_back(std::move(rawv));
+                        } else {
+                            std::string pk(3 + (b.size()+3)/4, '\0');
+                            pk[0] = (char)0;
+                            pk[1] = (char)(b.size() & 0xFF);
+                            pk[2] = (char)((b.size() >> 8) & 0xFF);
+                            for(size_t qi=0; qi<b.size(); ++qi){
+                                int bb;
+                                switch(b[qi]){case 'A':case 'a':bb=0;break;case 'C':case 'c':bb=1;break;
+                                              case 'G':case 'g':bb=2;break;default:bb=3;}
+                                pk[3 + (qi>>2)] = (char)(pk[3 + (qi>>2)] | (bb << (2*(qi&3))));
+                            }
+                            call_seqs.push_back(std::move(pk));
+                        }
+                    } else {
+                        call_seqs.push_back(b);
+                    }
+                    if(QUAL_BITMAP){
+                        // QUALITY AS A BITMAP, 1 bit per base.
+                        // The dBG caller only asks "is this base above the
+                        // confident-base threshold?" -- a one-bit question we
+                        // were answering with a full 8-bit phred character per
+                        // base. At 12.6M reads x ~148 bases that is 2.27 GB of
+                        // std::string to carry information that fits in 233 MB.
+                        // Packing here keeps the decision at the point where
+                        // the data is read, so nothing downstream has to hold
+                        // the full strings at all.
+                        std::string packed((d.size()+7)/8, '\0');
+                        for(size_t qi=0; qi<d.size(); ++qi)
+                            if((int)(d[qi]-33) >= QMIN) packed[qi>>3] |= (char)(1u << (qi&7));
+                        call_quals.push_back(std::move(packed));
+                    } else {
+                        call_quals.push_back(d);
+                    }
                 }
             }
         }
@@ -2564,8 +2883,67 @@ int main(int argc,char** argv){
         // decoder bug it found was real) but it is OFF: enable with
         // MEM_MAXMM_OVERRIDE only to reproduce the measurement.
         int MEM_MAXMM = 0;
+        // HETEROZYGOSITY PRE-SCAN (2026-09-03). Separate from leftover_frac
+        // above, which is about COVERAGE gaps. This is about PLOIDY: a
+        // haploid genome's pg, after dedup, holds each true stretch of
+        // sequence ONCE -- there is nothing left to link, so MEM_MAXMM>0
+        // would only cost bytes for zero calling benefit (het-SNV/indel
+        // calling is not even a coherent operation on a haploid sample).
+        // A heterozygous diploid genome's pg still holds BOTH haplotype
+        // copies as separate literal regions (MEM_MAXMM=0 hasn't linked
+        // them yet), so a canonical k-mer from their SHARED flanking
+        // sequence appears roughly TWICE in pg, not once. Sampling (not
+        // scanning every position) keeps this cheap: this must be "early,
+        // cheap, and accurate" -- a wrong call here silently mis-gates
+        // every downstream decision, so it is measured, not guessed.
+        bool het_detected = false;
+        double het_pair_frac = 0.0;
+        {
+            const size_t STRIDE = 41;   // sample every 41st position, not exhaustive
+            const int K = 31;
+            std::unordered_map<uint64_t,uint32_t> kc_sample;
+            size_t sampled = 0;
+            for (size_t i = 0; i + (size_t)K <= main_pg_end; i += STRIDE) {
+                uint64_t v = 0; bool ok = true;
+                for (int t = 0; t < K; ++t) { int bb = b2(pg[i+t]); if (bb < 0) { ok = false; break; } v = (v<<2) | (uint64_t)bb; }
+                if (!ok) continue;
+                // canonicalize against reverse complement (2*K bits, K<=31 fits in 62 bits)
+                uint64_t rv = 0, vv = v;
+                for (int t = 0; t < K; ++t) { rv = (rv<<2) | (3 - (vv & 3)); vv >>= 2; }
+                ++kc_sample[std::min(v,rv)];
+                ++sampled;
+            }
+            size_t pairs = 0, singles = 0, other = 0;
+            for (auto& kv : kc_sample) {
+                if (kv.second == 1) ++singles;
+                else if (kv.second == 2) ++pairs;
+                else ++other;
+            }
+            size_t distinct = pairs + singles + other;
+            het_pair_frac = distinct ? (double)pairs / (double)distinct : 0.0;
+            // Threshold, CALIBRATED against real measurement -- TWICE now,
+            // both times caught by actually testing, not by trusting the
+            // arithmetic. Attempt 1 (0.05) false-negatived on HG002
+            // (0.0264). Attempt 2 (0.020) was a real ARITHMETIC ERROR --
+            // 0.020 is BELOW M. tuberculosis's own measured 0.0209, so it
+            // false-positived on a HAPLOID dataset and was caught only by
+            // re-running M. tuberculosis and finding the archive had
+            // actually changed (1,653,912 -> 1,600,645 B), not by
+            // inspecting the number. Real measured values now on record:
+            // haploid -- E. coli 0.0172, M. tuberculosis 0.0209 (the real
+            // max), P. aeruginosa 0.0103; heterozygous -- HG002 0.0264.
+            // 0.024 sits strictly between the two groups with real margin
+            // on both sides (0.0031 below HG002, 0.0031 above TB). Still
+            // n=1 positive, n=3 negative -- re-validate against HG003/4/5
+            // and more haploid datasets before trusting this further.
+            const double HET_THRESH = 0.024;
+            het_detected = het_pair_frac >= HET_THRESH;
+            fprintf(stderr,"[HETSCAN] sampled=%zu distinct=%zu pairs=%zu singles=%zu other=%zu pair_frac=%.4f het=%d\n",
+                    sampled, distinct, pairs, singles, other, het_pair_frac, (int)het_detected);
+        }
+        if (het_detected) MEM_MAXMM = std::max(MEM_MAXMM, 2);
         if(getenv("MEM_MAXMM_OVERRIDE")) MEM_MAXMM = atoi(getenv("MEM_MAXMM_OVERRIDE"));
-        fprintf(stderr,"[MMTOL] leftover_frac=%.3f -> MEM_MAXMM=%d\n", leftover_frac, MEM_MAXMM);
+        fprintf(stderr,"[MMTOL] leftover_frac=%.3f het_pair_frac=%.4f -> MEM_MAXMM=%d\n", leftover_frac, het_pair_frac, MEM_MAXMM);
         {
             std::vector<uint8_t> c(main_pg_end,0), cr(main_pg_end,0);
             if(FWD_SELF) nm_main =run(pg.data(),main_pg_end,SELF_FWD,c,false,0,nullptr,0,0,MEM_MAXMM);
@@ -2747,6 +3125,103 @@ int main(int argc,char** argv){
           }
           if(totalmm) fprintf(stderr,"[MMTOL] extension mismatches recorded: %zu across %zu refs\n",
                                totalmm, allrefs.size());
+          // REAL PIPELINE INTEGRATION (2026-09-03): feed Claim 1's own
+          // mem_extmm data (pg-internal cross-haplotype SNV mismatches,
+          // computed above, gated by the same heterozygosity detection
+          // that gates MEM_MAXMM) directly into Claim 2's VCF, additively.
+          // This is the actual "call from what compression already
+          // computed" pipeline, not a probe: real archive-computed data,
+          // real VCF output, appended after run_variant_call's own
+          // contig-bubble calls so nothing already emitted is disturbed.
+          if (CAPS_CALL && totalmm) {
+              std::string call_vcf = getenv("CALL_VCF") ? getenv("CALL_VCF") : "out.vcf";
+              FILE* av = fopen(call_vcf.c_str(), "a");
+              if (av) {
+                  auto find_cid_mm=[&](uint64_t p)->int64_t{
+                      auto it=std::upper_bound(g_contig_spans.begin(),g_contig_spans.end(),
+                          std::make_pair(p,(uint64_t)0),
+                          [](const std::pair<uint64_t,uint64_t>& a,const std::pair<uint64_t,uint64_t>& b){return a.first<b.first;});
+                      if(it==g_contig_spans.begin()) return -1;
+                      --it;
+                      if(p>=it->second) return -1;
+                      return (int64_t)(it-g_contig_spans.begin());
+                  };
+                  size_t mmi=0, emitted=0;
+                  for(const Ref& r : allrefs){
+                      for(uint8_t k=0;k<r.mmcnt;++k){
+                          uint64_t dstpos = (uint64_t)r.dst + r.mmpos[k];
+                          int64_t cid = find_cid_mm(dstpos);
+                          if (cid>=0){
+                              uint64_t local = dstpos - g_contig_spans[(size_t)cid].first;
+                              char refc_ = (char)ref_mmref[mmi+k], obsc_ = (char)ref_mmobs[mmi+k];
+                              fprintf(av, "mcontig_%ld\t%zu\t.\t%c\t%c\t.\tPASS\tSVTYPE=SNV;SRC=mem_extmm;MLEN=%u;MMCNT=%u\n",
+                                      (long)cid, (size_t)local+1, refc_, obsc_, r.len, r.mmcnt);
+                              ++emitted;
+                          }
+                      }
+                      mmi += r.mmcnt;
+                  }
+                  // DIFFERENTIAL-GAP INDEL CHANNEL (2026-09-03) -- the one
+                  // mechanism in this codebase that gets its indel evidence
+                  // the way DiscoSNP++ gets its precision: from TWO
+                  // independently-real anchors, not from searching for one
+                  // coincidental shared k-mer between two separately-built
+                  // contigs (the bubble channel's known weakness -- its
+                  // false and true positives are statistically identical,
+                  // docs/INDEL_PRECISION_ROOT_CAUSE.md §8).
+                  // MEM's matcher is substitution-only, so a real indel
+                  // FORCES it to terminate a match and re-seed just past the
+                  // event. Two adjacent matches on the same haplotype pair
+                  // therefore straddle the indel, and the DIFFERENCE between
+                  // their src-gap and dst-gap IS the indel length -- the same
+                  // way minimap2-class aligners infer indels between
+                  // collinear blocks. Both ends are anchored by real extended
+                  // alignments, which is precisely the "re-convergence on a
+                  // shared node" property our bubble channel can only
+                  // approximate by luck.
+                  {
+                      size_t n_gap = 0;
+                      const int MAXGAPINDEL = 12;
+                      for (size_t i2 = 1; i2 < allrefs.size(); ++i2) {
+                          const Ref& a2 = allrefs[i2-1];
+                          const Ref& b2 = allrefs[i2];
+                          if (a2.is_rc != b2.is_rc) continue;
+                          uint64_t a_dend = (uint64_t)a2.dst + a2.len;
+                          uint64_t a_send = (uint64_t)a2.src + a2.len;
+                          if (b2.dst < a_dend) continue;              // overlapping, not adjacent
+                          if (b2.src < a_send) continue;
+                          uint64_t dgap = (uint64_t)b2.dst - a_dend;
+                          uint64_t sgap = (uint64_t)b2.src - a_send;
+                          if (dgap == sgap) continue;                  // collinear, no indel
+                          long long delta = (long long)dgap - (long long)sgap;
+                          if (delta > MAXGAPINDEL || delta < -MAXGAPINDEL) continue;
+                          if (dgap > 64 || sgap > 64) continue;        // too far apart to trust
+                          int64_t cid2 = find_cid_mm(a_dend);
+                          if (cid2 < 0) continue;
+                          uint64_t local2 = a_dend - g_contig_spans[(size_t)cid2].first;
+                          if (local2 == 0) continue;
+                          char anchb = pg[(size_t)a_dend - 1];
+                          if (delta > 0) {   // insertion in dst relative to src
+                              std::string ins2 = pg.substr((size_t)a_dend, (size_t)delta);
+                              fprintf(av, "mcontig_%ld\t%zu\t.\t%c\t%c%s\t.\tPASS\tSVTYPE=INDEL;SRC=mem_gap;LEN=%lld;DG=%llu;SG=%llu\n",
+                                      (long)cid2, (size_t)local2, anchb, anchb, ins2.c_str(),
+                                      (long long)delta, (unsigned long long)dgap, (unsigned long long)sgap);
+                          } else {           // deletion in dst relative to src
+                              long long dl = -delta;
+                              if ((size_t)a_send + (size_t)dl > pg.size()) continue;
+                              std::string del2 = pg.substr((size_t)a_send, (size_t)dl);
+                              fprintf(av, "mcontig_%ld\t%zu\t.\t%c%s\t%c\t.\tPASS\tSVTYPE=INDEL;SRC=mem_gap;LEN=%lld;DG=%llu;SG=%llu\n",
+                                      (long)cid2, (size_t)local2, anchb, del2.c_str(), anchb,
+                                      (long long)dl, (unsigned long long)dgap, (unsigned long long)sgap);
+                          }
+                          ++n_gap;
+                      }
+                      fprintf(stderr,"[CAPS-CALL] mem_gap INDEL channel: %zu records\n", n_gap);
+                  }
+                  fclose(av);
+                  fprintf(stderr,"[CAPS-CALL] mem_extmm channel: %zu SNV records appended to %s\n", emitted, call_vcf.c_str());
+              }
+          }
           if(getenv("DBG_STREAMS")){
               fprintf(stderr,"[DBGSTREAM] ref_mmcnt.size=%zu ref_mmpos.size=%zu ref_mmref.size=%zu ref_mmobs.size=%zu\n",
                       ref_mmcnt.size(), ref_mmpos.size(), ref_mmref.size(), ref_mmobs.size());

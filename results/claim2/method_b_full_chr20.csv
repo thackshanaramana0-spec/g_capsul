@@ -1,0 +1,26 @@
+# METHOD B (graph caller) — full chr20, 2026-09-04
+#
+# One pipeline: the same binary and the same pass that produces the Claim 1
+# archive. Run with CAPS_DBG=1 CAPS_DBG_ONLY=1.
+#
+# HG002 is the tuning individual. HG003 is HELD OUT -- no Method B parameter
+# was set on it. Every parameter is derived from measured properties or is
+# structural; see PIPELINE.md section 3.
+#
+# DiscoSNP++ measured on the identical reads, identical truth, identical
+# rtg vcfeval pipeline: P=0.951 R=0.763 F1=0.847, 76.5 s, 3.45 GB.
+#
+individual,held_out,TP,FP,FN,precision,recall,F1,caller_s,peak_rss_kb
+HG002,no,36444,1898,8131,0.951,0.818,0.879,98.5,6988504
+HG003,yes,37221,2158,8312,0.945,0.818,0.877,98.9,7118500
+#
+# Effect of the coverage ceiling (4 x measured haploid depth H), which removes
+# repeat/paralog collapses -- false positives carry 12x the allele depth of
+# true positives (168.3 vs 13.9):
+#   HG002  P 0.935 -> 0.951   R 0.823 -> 0.818   F1 0.876 -> 0.879
+#   HG003  P 0.931 -> 0.945   R 0.823 -> 0.818   F1 0.874 -> 0.877
+# The same shift on a held-out individual is what makes it structural rather
+# than fitted.
+#
+# NOT claimed: indels. Method B is SNV-only; superbubble indel emission
+# measured -0.051 F1 on held-out windows and is gated off.

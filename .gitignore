@@ -28,3 +28,5 @@ pg_full.txt
 *.spring
 *.genozip
 *.log
+out.arcs2
+*.arcs2

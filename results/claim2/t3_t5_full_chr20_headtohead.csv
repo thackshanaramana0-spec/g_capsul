@@ -1,0 +1,65 @@
+# FULL-SCALE HEAD-TO-HEAD — HG002, WHOLE chr20 at 30x — 2026-09-03
+#
+# The first full-scale Claim 2 comparison in this project's history. Both tools
+# ran on the IDENTICAL input file (/data/fastq/HG002_pooled.fq, 12,604,917
+# reads), against the IDENTICAL truth (GIAB v4.2.1 HG002 het-only, 56,634,719
+# confident bp on chr20), scored by the IDENTICAL pipeline (rtg vcfeval
+# --squash-ploidy, same normalise-then-classify order, DiscoSNP++ POS
+# off-by-one corrected). Scripts: run_fullchr20_bench_capsule.sh /
+# run_fullchr20_bench_disco.sh, both methodology-identical to the window
+# benchmarks they supersede.
+#
+# ============================ WHAT THIS CHANGES ============================
+#
+# 1. BOTH TOOLS DEGRADE AT FULL SCALE. Every previously published Claim 2
+#    number, for BOTH tools, was a ~75k-read 400 kb window. Neither set held:
+#      G_CAPSUL   SNV 0.890 (5-window mean) -> 0.849     (-0.041)
+#      DiscoSNP++ SNV 0.874 (5-window mean) -> 0.847     (-0.027)
+#    We degraded MORE than the competitor on SNV. The window-scale margin was
+#    real but it OVERSTATED our SNV advantage.
+#
+# 2. THE SNV RESULT IS NOW A TIE, NOT A WIN. +0.002 F1 (236 more TP, 155 more
+#    FP out of 45,885 truth variants) is not a difference anyone should claim.
+#    Reporting T3 as a "win" at full scale would be dishonest; report it as
+#    parity.
+#
+# 3. THE INDEL RESULT IS A REAL WIN, AND IT SURVIVED SCALING BETTER THAN THE
+#    SNV RESULT DID. +0.016 F1, driven entirely by recall (0.457 vs 0.419)
+#    while DiscoSNP++ holds far better precision (0.923 vs 0.839). This is the
+#    metric the previous session spent six failed mechanisms trying to fix at
+#    window scale; at full scale it is ahead.
+#
+# 4. WE LOSE THE RESOURCE AXIS BADLY, AND IT IS NOT CLOSE.
+#      peak RAM   34.94 GB vs 3.45 GB   -> 10.1x WORSE
+#      wall time  62.5 min vs 1.3 min   -> 48x SLOWER
+#    This belongs in the paper as a stated limitation next to the accuracy
+#    numbers. The 162x compression ratio is a DIFFERENT measurement and does
+#    not offset it. See docs/CALLER_RAM_SPEED_SKELETAL.md for the measured
+#    breakdown of where our RAM and time go and what is fixable (five fixes
+#    implemented, not yet validated as of this file's writing).
+#
+# ===========================================================================
+#
+scale,variant_class,tool,TP,FP,FN,precision,recall,F1
+full_chr20,SNV,G_CAPSUL,34269,1901,10306,0.947,0.769,0.849
+full_chr20,SNV,DiscoSNP++,34033,1746,10563,0.951,0.763,0.847
+full_chr20,INDEL,G_CAPSUL,3557,682,4225,0.839,0.457,0.592
+full_chr20,INDEL,DiscoSNP++,3257,270,4524,0.923,0.419,0.576
+#
+# margins (G_CAPSUL - DiscoSNP++), full chr20:
+#   SNV   F1 +0.002   (precision -0.004, recall +0.006)   -> PARITY, not a win
+#   INDEL F1 +0.016   (precision -0.084, recall +0.038)   -> real win, recall-driven
+#
+# resources,tool,peak_RSS_KB,peak_RSS_GB,wall_seconds,wall_human
+resources,G_CAPSUL,35701000,34.94,3749,1:02:29
+resources,DiscoSNP++,3450692,3.45,77,1:16.47
+#
+# calls emitted: G_CAPSUL SNV 40,714 indel 5,536 (73,808 total records)
+#                DiscoSNP++ SNV 38,495 indel 4,007 (42,502 chr20 records)
+# truth in scope: het-SNV 45,885, het-indel 8,882
+#
+# NOTE on the G_CAPSUL wall time: it includes building the 26 MB archive, which
+# DiscoSNP++ does not produce at all — its graph is built and discarded. That
+# is a genuine difference in deliverable, but it does NOT excuse a 48x gap, and
+# the caller (58.0 of the 62.5 min) is the part that is slow, not the
+# compressor (3.6 min).

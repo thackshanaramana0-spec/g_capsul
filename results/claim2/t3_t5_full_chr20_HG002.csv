@@ -1,0 +1,62 @@
+# FULL-SCALE Claim 2 measurement — HG002, WHOLE chr20 at 30x, 2026-09-03.
+# First full-scale Claim 2 run in this project's history. Every previously
+# published Claim 2 number is a ~75k-read 400 kb window; this is 12,604,917
+# reads over the whole chromosome, scored by the SAME pipeline
+# (scripts/run_fullchr20_bench_capsule.sh, methodology-identical to
+# run_window_bench_capsule.sh — same frozen caller params, same
+# normalise-then-classify order, same rtg vcfeval --squash-ploidy).
+#
+# HEADLINE: BOTH METRICS DEGRADE AT FULL SCALE. This is a negative result
+# against the project's own prior expectation and is recorded as such. The
+# window numbers did NOT simply hold, which is precisely the open question
+# docs/CLAIM2_FINAL_VERDICT.md §2 flagged as "a real, live question of whether
+# these window numbers hold at full scale, not an assumption that they do."
+#
+# The loss is RECALL, not precision — precision is nearly flat (SNV
+# 0.960->0.947, indel 0.870->0.839) while recall carries it (0.826->0.769,
+# 0.488->0.457). Consistent with a 63 Mb chromosome carrying far more paralogy
+# and repeat structure than a 400 kb window, so more true variants sit on
+# contigs that collapse ambiguously. NOT consistent with the caller emitting
+# more junk.
+#
+# Input: /data/fastq/HG002_pooled.fq (12,604,917 reads, 4,279,197,941 B)
+# Truth: GIAB v4.2.1 HG002, het-only, inside confident regions
+#        (56,634,719 confident bp on chr20)
+# Contigs dumped: 1,065,182; lifted with bwa mem (EVAL ONLY — not part of calling)
+#
+# Caller substrate at full scale (both views scale cleanly vs the window):
+#   pileup (dup=0.45): 451,578 -> 233,369 contigs; 49.5% reads placed (window 48.3%)
+#   bubble (dup=0.92): 451,578 -> 380,235 contigs; 98.7% reads placed (window 98.4%)
+#   emitted: 116,270 candidates -> 43,706 SNVs, 8,381 indels, 73,808 records
+#   pcluster indels=693 (window 8); xcontig SNVs=21,721 (window 176)
+#
+# Heterozygosity auto-detection is SCALE-INVARIANT: het_pair_frac = 0.0264 at
+# full scale, identical to the window value; het=1, MEM_MAXMM=2. The 0.024
+# threshold is therefore not a window artifact.
+#
+# Resources (/usr/bin/time -v): peak RSS 35,701,000 KB = 34.94 GB;
+# wall 1:02:29. The prior full-scale attempt was killed at 78 GB; this run was
+# only possible because of the caller RAM work (ridx off by default, chunked
+# k-mer counting, contig-batched pileup, flat sorted kidx) = 55% reduction.
+# Caller phases: build_substrate 738.0s (serial, called twice) / kc_H_build
+# 166.7s (serial) / parallel_loop 480.8s (threaded) / filter_snv_emit 0.9s /
+# indel_pass 2091.1s (serial, 60%) / TOTAL 3477.6s.
+#
+# DiscoSNP++ at full scale is a SEPARATE run and is NOT in this file. Do not
+# infer a win or a loss from these numbers alone: the competitor's published
+# comparison values (SNV 0.874, indel 0.639) are ALSO window numbers, and
+# whether they hold at 63 Mb is exactly as unknown as ours was before tonight.
+#
+scale,variant_class,tool,TP,FP,FN,precision,recall,F1
+full_chr20,SNV,G_CAPSUL,34269,1901,10306,0.947,0.769,0.849
+full_chr20,INDEL,G_CAPSUL,3557,682,4225,0.839,0.457,0.592
+window_r2,SNV,G_CAPSUL,332,14,70,0.960,0.826,0.888
+window_r2,INDEL,G_CAPSUL,40,6,43,0.870,0.488,0.625
+#
+# delta full_chr20 - window_r2: SNV F1 -0.039, INDEL F1 -0.033
+# delta vs published 5-window mean (SNV 0.890): -0.041
+#
+# truth in scope: full_chr20 het-SNV 45,885, het-indel 8,882
+#                 window_r2   het-SNV    424, het-indel     95
+# calls emitted:  full_chr20 SNV 40,714, indel 5,536
+#                 window_r2  SNV    361, indel    54
