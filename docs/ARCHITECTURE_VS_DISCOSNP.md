@@ -20,7 +20,7 @@ Written from `~/DiscoSnp/tools/kissnp2/src/*.cpp` and our own source.
 | 10 | indel closure shape | guaranteed by lockstep traversal | `LCP+LCS >= |s_short|` test, added after tracing theirs | **theirs** (geometry), **ours** (the explicit test) |
 | 11 | indel ambiguity | `checkRepeatSize`, reject `k-2-min(ext) > 20` | ported; **monotone loss on our data**, kept at their default | **theirs**, measured |
 | 12 | low complexity | DUST; **off by default** (`l="-l"`) | absent | **theirs**, not a gap |
-| 13 | read coherence | **kissreads2 — a separate tool, second pass over all reads** | reads are **already resident**; one indexed sweep, plus a 1-bit quality bitmap | **ours** |
+| 13 | read coherence | **kissreads2 — a separate tool that re-maps every read onto every bubble** | reads held in memory (a deliberate second FASTQ pass, cheap I/O — *not* left over from compression); one indexed sweep + 1-bit quality bitmap | **ours** |
 | 14 | quality use | mean phred per path | per-base bitmap (`MINQ=20`), 233 MB vs 2.27 GB of phred strings | **ours** |
 | 15 | parallelism | GATB thread pool throughout | traversal was serial under superbubble mode; now parallel, **2.9x**, counts identical | **textbook**, was our deficit |
 | 16 | coverage ceiling | none equivalent | `COVCAP = 2*PLOIDY*H`, derived from measured depth | **ours** |
@@ -43,13 +43,13 @@ difference between a ~57 s and a ~150 s Method B run. That is a measured,
 retained-assembly saving, and it is the project's actual thesis (Assemble →
 Retain → Compress → Serve), not a graph claim.
 
-**2. The reads are still in memory, so read coherence is not a second tool.**
-kissreads2 exists because a standalone caller has thrown the reads away by the
-time it has bubbles. We have not. That converts their separate pass into one
-indexed sweep and makes a *per-base* quality test affordable where they use a
-per-path mean — a strictly stronger filter (layers 13, 14). This is the layer
-where being a compressor is a genuine algorithmic advantage rather than a
-packaging difference.
+**2. Read coherence needs no second tool.** kissreads2 is a separate binary
+that re-maps every read onto every bubble. We keep the reads in memory and do
+one indexed sweep instead, which also makes a *per-base* quality test affordable
+where they use a per-path mean (layers 13, 14). Stated precisely: the reads are
+loaded by a deliberate second FASTQ pass, NOT left resident by compression — the
+encoder re-reads them specifically so the no-CAPS_CALL memory footprint is
+unaffected. The saving is the separate mapping tool, not the I/O.
 
 **3. Our parameters are derived from measured depth; theirs are constants.**
 `COHC = max(2, H/10)` and `COVCAP = 2*PLOIDY*H` are functions of the sample's
@@ -65,28 +65,42 @@ branching node while ours attempts one at 15.9% of them; that is a real
 architectural deficit, honestly a place where their design is better, and it is
 why the indel claim is withdrawn rather than argued.
 
-## Genuine architectural headroom
+## Architectural headroom — the leading candidate, tested and refuted
 
-**The one substantial, unexploited thing we own: free read threading.**
+**"Free read threading" does not exist. Built, measured twice, withdrawn.**
+Full detail in `PLACEMENTS_AS_LINKS_REFUTED.md`.
 
-McCortex's Linked de Bruijn Graph augments a dBG with long-range connectivity by
-**threading reads back through the graph in a separate pass**, and the cost is
-real — the published figure is 20 GiB for links on top of 50 GiB for the graph
-([Turner et al., *Bioinformatics* 2018](https://academic.oup.com/bioinformatics/article/34/15/2556/4938484)).
-Link construction is a whole pipeline stage.
+The hypothesis was that our `ppos`/`read_cid` placements are the read-to-path
+threading McCortex pays a dedicated pass and ~20 GiB of links for
+([Turner et al. 2018](https://academic.oup.com/bioinformatics/article/34/15/2556/4938484)),
+and that LueVari pays succinct structures for as read colours
+([Bioinformatics 2020](https://academic.oup.com/bioinformatics/article/36/22-23/5275/5734643)).
+The placements are real and were being discarded — but they carry no signal:
 
-Our pseudogenome construction **already computes, for every read, which contig
-it lies on and at which offset** (`ppos`, `read_cid`) — because that is what
-mapping reads onto the pseudogenome means. That is precisely the read-to-path
-placement McCortex pays a separate pass for, and we currently throw it away
-after compression.
+| split | TP | FP | precision |
+|---|---|---|---|
+| alleles share a contig | 76 | 7 | 0.916 |
+| alleles disjoint | 260 | 13 | 0.952 |
+| pseudogenome span <= 10 kb | 73 | 4 | 0.948 |
+| span > 10 kb | 267 | 16 | 0.944 |
+| baseline | 336 | 20 | 0.944 |
 
-Wiring it into the caller would give long-range connectivity at essentially zero
-marginal cost, and it attacks the exact failure mode we measured: `find_sb`
-exhausts on 960,541 of 1,225,194 branching nodes because it cannot decide which
-way to go through a repeat. A read placement says which way an actual molecule
-went. This is the strongest remaining lever and it is ours by construction, not
-borrowed.
+Precision is identical across every split. The reason is structural: a
+pseudogenome is built by greedy overlap chaining, whose coordinates are
+optimised for compressibility, and chaining **deliberately merges** near
+identical sequence — repeat copies are the most compressible thing in a genome,
+so they collapse first. `ppos` records where a read was **stored**, not where it
+came **from**. The repeat information was not left unexploited; it was **spent**
+to compress. Recovering it would mean not collapsing repeat copies, which is
+directly opposed to what makes Claim 1 win.
+
+Note also that the underlying idea was never novel: LueVari already does
+reference-free SNP calling on a read-coloured graph for exactly this purpose.
+
+**What remains genuinely free, and is measured:** the assembly (point 1 above) —
+encoder contigs reused, `build_substrate` skipped, 738 s saved at full chr20.
+That is the retained-assembly thesis, and unlike the threading idea it survives
+measurement.
 
 **Prior art to be careful about.** "Searchable compressed archive of reads" is
 not new — BEETL-fastq
