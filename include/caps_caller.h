@@ -1972,6 +1972,28 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             return s;
         };
 
+        // ── WHY INDEL RECALL IS BOUNDED, AND IT IS NOT A TUNING PROBLEM ────
+        // Traced every missed indel on HG002 r2 back into kc. At the missed
+        // sites the branching node has GOOD coverage (12-30) but exactly ONE
+        // successor -- and that holds with NO coverage floor at all: raw
+        // successor counts come back as [0,0,21,0]. The alternate haplotype's
+        // k-mers are not below MINC, they are ABSENT.
+        //
+        // The reason: 66% of the missed indels are homopolymer-length changes
+        // and most of the rest are tandem-repeat expansions. Inserting a base
+        // into a run of the same base does not create a distinct k-mer path --
+        // it makes the run longer. Probing the reads directly confirms it: for
+        // a G->GT call inside a T-run, the REF and ALT probes are the SAME
+        // STRING (TCTGGGTTTTTGTTTTTCGGGTTTTTTTTTTT), each found in 6 reads.
+        //
+        // There is no second path, so no bubble exists -- for us OR for any
+        // de Bruijn caller, DiscoSNP++ included. This is a representational
+        // limit of the graph, not a defect in the traversal, and it is why
+        // nine successive attempts at filters, gates and orderings all failed
+        // to move indel recall. Resolving these events needs length-aware
+        // evidence (read pileup depth over the run), which is a different
+        // mechanism from bubble finding.
+        //
         // ── SUPERBUBBLE SEARCH (CAPS_DBG_SB=1) ──────────────────────────────
         // Strictly generalises the pairwise lockstep walk above, which is a
         // faithful port of DiscoSNP++ (Bubble.cpp:509-527) and inherits two
