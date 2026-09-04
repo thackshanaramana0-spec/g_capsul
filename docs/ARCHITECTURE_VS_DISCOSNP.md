@@ -8,7 +8,7 @@ Written from `~/DiscoSnp/tools/kissnp2/src/*.cpp` and our own source.
 
 | # | layer | DiscoSNP++ (kissnp2 / GATB) | G_CAPSUL (Method B) | provenance |
 |---|---|---|---|---|
-| 1 | k-mer counting | GATB: minimizer-partitioned superkmers, disk-partitioned | same shape, but the table is **already built by the compressor** for its own coverage statistic | **textbook** (KMC2/GATB) — our reuse is ours |
+| 1 | k-mer counting | GATB: minimizer-partitioned superkmers, disk-partitioned | same shape, built **by the caller** (`kc_H_build`), not by the compressor — see the correction below | **textbook** (KMC2/GATB) |
 | 2 | minimizer ordering | frequency-ranked (partition balance) | lexicographic; frequency ranking implemented, **measured +14% volume, rejected** | **theirs**, and measured not to pay here |
 | 3 | memory budget | `-max-memory`, declared | ceiling = 60% of measured MemAvailable, spill self-enables | **textbook** systems practice |
 | 4 | graph representation | cascading-Bloom dBG, GATB | flat hash table (`kc`) + `kc_find` as membership oracle | **textbook** |
@@ -29,12 +29,19 @@ Written from `~/DiscoSnp/tools/kissnp2/src/*.cpp` and our own source.
 
 ## Why we are different from them, not just similar
 
-**1. The graph is a byproduct, not a build step.** DiscoSNP++ constructs a dBG
-in order to call variants. We construct `kc` to compute one scalar the
-*compressor* needs, and the graph is what that table already is. The
-comparison is not "two callers"; it is "a caller" versus "a compressor that
-answers the same question for free". Layers 1, 4 and 13 are all cheaper for
-this reason, and it is why the archive and the VCF come out of one pass.
+**1. The ASSEMBLY is the byproduct — not the graph. (Corrected 2026-09-05.)**
+An earlier version of this file claimed the k-mer table was "already built by
+the compressor". That is false: `kc_H_build` is inside `run_variant_call`
+(`include/caps_caller.h:1812`) and `stages/106_inprocess.cpp` builds no k-mer
+table at all. We pay for the graph like everyone else.
+
+What IS genuinely free is the **assembly**. The encoder builds contigs in order
+to compress, and Method B reuses them directly — `[DBG-ONLY] substrate skipped
+(451,578 encoder contigs reused)`. The alternative, `build_substrate`, re-places
+all 12.6M reads and measured **738 s serial at full chr20**; skipping it is the
+difference between a ~57 s and a ~150 s Method B run. That is a measured,
+retained-assembly saving, and it is the project's actual thesis (Assemble →
+Retain → Compress → Serve), not a graph claim.
 
 **2. The reads are still in memory, so read coherence is not a second tool.**
 kissreads2 exists because a standalone caller has thrown the reads away by the
