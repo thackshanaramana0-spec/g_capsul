@@ -62,10 +62,10 @@ NPROC=$(nproc 2>/dev/null || echo 4)
 # mechanism to suppress for any large input (verified: `grep -rn AUTOCHUNK
 # stages/106_inprocess.cpp include/*.h` returns nothing), so a big file is
 # just a big file here, not a different code path.
-# 15 non-human (NEW_DATASET_LOCKED.md) + the 4 GIAB human chr20 sets.
+# 15 non-human (NEW_DATASET_LOCKED.md) + the 4 GIAB human chr20 sets = 19.
 # The human sets are FASTQ like any other and are compressed by the identical
 # code path, so they belong in the compression table too -- they are also the
-# Claim 2 inputs, which is the point: ONE pipeline compresses all 20 and calls
+# Claim 2 inputs, which is the point: ONE pipeline compresses all 19 and calls
 # variants on the 4 that are diploid human.
 DATASETS="ERR5181310 SRR554369 ERR552797 SRR2584863 SRR29296997 ERR12954017 \
 SRR065390 SRR40271341 ERR17740259 SRR37283774 DRR976266 SRR36741279 \

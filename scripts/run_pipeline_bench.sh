@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# ONE PIPELINE, ALL 20 DATASETS.
+# ONE PIPELINE, ALL 19 DATASETS.
 #
 # G_CAPSUL is a single pass over the reads that produces an archive (Claim 1),
 # variant calls (Claim 2) and an addressable structure (Claim 3). The separate
 # per-claim benchmark scripts remain for focused work, but THIS is the script
 # that runs the pipeline as one thing across everything it is claimed on:
 #
-#   ALL 20 datasets  -> compressed: archive size / time / RAM, lossless verified
+#   ALL 19 datasets  -> compressed: archive size / time / RAM, lossless verified
 #   the 4 human ones -> ALSO variant-called from that same compression pass
 #
 # The human sets are not a separate category. They are FASTQ files, they are
 # compressed by the identical code path, and they appear in the Claim 1 table
-# alongside the other 16. What makes them special is only that they are diploid
+# alongside the other 15. What makes them special is only that they are diploid
 # human, so Claim 2 runs on them too -- from the same pass.
 #
 # The human sets go through the identical binary with CAPS_CALL=1, so the
@@ -67,7 +67,7 @@ parse_time_v(){
 # Claim 1 number. Calling the real script removes that whole class of bug:
 # there is exactly one Claim 1 implementation and this is a caller of it.
 run_claim1_all(){
-    log "[C1] delegating to run_claim1_bench.sh (15 datasets, adaptive + lossless + SPRING/Genozip)"
+    log "[C1] delegating to run_claim1_bench.sh (19 datasets, adaptive + lossless + SPRING/Genozip)"
     bash "$HERE/scripts/run_claim1_bench.sh" "$FQDIR" "$OUT/claim1" 2>&1 | tee -a "$LOG" | tail -20
     local src="$OUT/claim1"
     log "[C1] done -> $src"
