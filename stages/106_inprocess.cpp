@@ -2055,11 +2055,17 @@ int main(int argc,char** argv){
         }
         const size_t n_orig=orig2uid.size();
         cd.read_cid.resize(n_orig); cd.read_pos.resize(n_orig); cd.read_rc.resize(n_orig);
+        cd.read_ppos.resize(n_orig);
         for(size_t o=0;o<n_orig;++o){
             uint32_t u=orig2uid[o];
             cd.read_cid[o]=(u<n)?uid_cid[u]:UINT32_MAX;
             cd.read_pos[o]=(u<n)?uid_pos[u]:0;
             cd.read_rc[o] =(u<n)?prc[u]:0;
+            // ppos[u] is the read's offset in the pseudogenome -- the number the
+            // compressor computed in order to store the read as a position
+            // instead of a sequence. Carrying it costs one vector; it is the
+            // only global coordinate that exists for a read.
+            cd.read_ppos[o]=(u<n)?ppos[u]:UINT64_MAX;
         }
         cd.valid=true;
 
