@@ -6,8 +6,13 @@
 # per-claim benchmark scripts remain for focused work, but THIS is the script
 # that runs the pipeline as one thing across everything it is claimed on:
 #
-#   15 non-human datasets  -> archive size / time / RAM, lossless verified
-#    5 human chr20 sets    -> archive AND variant calls from the SAME run
+#   ALL 20 datasets  -> compressed: archive size / time / RAM, lossless verified
+#   the 4 human ones -> ALSO variant-called from that same compression pass
+#
+# The human sets are not a separate category. They are FASTQ files, they are
+# compressed by the identical code path, and they appear in the Claim 1 table
+# alongside the other 16. What makes them special is only that they are diploid
+# human, so Claim 2 runs on them too -- from the same pass.
 #
 # The human sets go through the identical binary with CAPS_CALL=1, so the
 # archive they produce is the same archive Claim 1 measures. Nothing is run
@@ -36,6 +41,8 @@ log(){ echo "[pipeline] $(date '+%H:%M:%S') $*" | tee -a "$LOG"; }
 # 5 human: 4 GIAB individuals at full chr20 + HG002 again as the tuning set.
 # HG002 appears once; the fifth slot is HG005, kept separate because its source
 # coverage differs.
+# The same four individuals that Claim 1 just compressed. Claim 2 calls
+# variants on them; it does not re-compress them.
 C2_SETS="HG002 HG003 HG004 HG005"
 
 CSV="$OUT/pipeline_results.csv"
