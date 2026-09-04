@@ -178,11 +178,11 @@ for DS in $DATASETS; do
     phase "${DS_IDX}.3" "[$DS] SPRING"
     A="$WD/$DS.spring"; OUTFQ="$WD/$DS.spring.dec"
     TF="$WD/t_spr_c_$$"
-    /usr/bin/time -v spring -c -i "$IN" -o "$A" -t "$NPROC" -g 2>"$TF"
+    /usr/bin/time -v spring -c -i "$IN" -o "$A" -t "$NPROC" 2>"$TF"
     read -r CWALL CRAMKB <<< "$(parse_time_v "$TF")"
     ARCH=$(stat -c %s "$A")
     TF2="$WD/t_spr_d_$$"
-    /usr/bin/time -v spring -d -i "$A" -o "$OUTFQ" -t "$NPROC" -g 2>"$TF2"
+    /usr/bin/time -v spring -d -i "$A" -o "$OUTFQ" -t "$NPROC" 2>"$TF2"
     read -r DWALL DRAMKB <<< "$(parse_time_v "$TF2")"
     LL=$(losscmp_plain "$IN" "$OUTFQ")
     rm -f "$TF" "$TF2" "$A" "$OUTFQ"
