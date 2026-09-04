@@ -125,6 +125,14 @@ compression continues after the caller returns. Standalone the caller is ~3.4 GB
 at parity. Method B is also **SNV-only**; superbubble indel emission measured
 -0.051 F1 held-out and is gated off.
 
+**Indels are a closed loss, not an open task** (`docs/INDEL_BOUND.md`). At
+TP=3,290 against 7,768 truth indels, beating DiscoSNP++'s 0.576 requires
+FP < 366 — a 79% cut with zero TP loss — and *perfect* precision yields only
+0.595. Recall is capped by representation (ALT k-mers absent, 66% homopolymer)
+and reference context cannot fix precision (TPs are more homopolymeric than FPs,
+0.531 vs 0.427 at n=5,001). Our indel *recall* already beats DiscoSNP++
+(0.424 vs 0.393); the gap is precision alone.
+
 ## 5. Verification gates — what every change must pass
 
 | gate | requirement |
