@@ -1274,14 +1274,103 @@ int main(int argc,char** argv){
                 if(chdir(dd.c_str())!=0) perror("chdir");
                 gs_child=true;
             }
-            if(!gs_child)
-            for(size_t ci=0; ci<cands.size(); ++ci){
-                pid_t pid = fork();
-                if(pid < 0){ perror("fork"); return 1; }
-                if(pid == 0){ child=true; mine=ci; break; }
-                int st=0; waitpid(pid,&st,0);
-                if(!WIFEXITED(st) || WEXITSTATUS(st)!=0)
-                    fprintf(stderr,"  [a3] candidate %zu failed (status %d)\n",ci,st);
+            // ── CANDIDATES RUN CONCURRENTLY, BOUNDED BY MEASURED RAM ──────
+            // This loop forked ONE candidate and waitpid()ed it before forking
+            // the next, so the adaptive sweep was strictly serial. The
+            // candidates are fully independent -- each writes its own
+            // `.cand<N>` file and the parent then keeps whichever is smallest,
+            // an order-independent choice -- so the serialisation bought
+            // nothing. Measured on SARS-CoV-2 (471 MB input):
+            //     1 candidate    10.42 s   557 MB peak   8,698,846 B
+            //     4 candidates   39.63 s   557 MB peak   8,686,774 B
+            // i.e. 3.8x the wall time for 0.14% smaller output, at IDENTICAL
+            // peak RAM -- because only one child was ever resident.
+            //
+            // Running them concurrently spends RAM to buy that time back. The
+            // concurrency is not a fixed number: it is derived from what the
+            // machine actually has, so a small box still runs (serially if it
+            // must) and a large one uses what it has.
+            //
+            //   per-child peak  ~= max(observed peak RSS, 1.5 x input bytes)
+            //   K               = clamp(1, ncands, 0.60 x MemAvailable / peak)
+            //
+            // The 1.5x input term is the floor because a child continues to
+            // grow after the fork; the observed peak covers the shared prefix
+            // already resident. 60% of MemAvailable leaves headroom for the
+            // page cache and the parent.
+            //
+            // OUTPUT IS UNCHANGED. Every child writes a distinct file and the
+            // parent's selection is by size, so scheduling cannot alter which
+            // archive wins. CAPS_CAND_SEQ=1 restores the serial behaviour for
+            // A/B measurement.
+            if(!gs_child){
+                size_t K = cands.size();
+                if(getenv("CAPS_CAND_SEQ")) K = 1;
+                else {
+                    size_t avail_mb = 0;
+                    if(FILE* mi = fopen("/proc/meminfo","r")){
+                        char k[64]; unsigned long v; char u[16];
+                        while(fscanf(mi,"%63s %lu %15s",k,&v,u)>=2)
+                            if(!strcmp(k,"MemAvailable:")){ avail_mb=v/1024; break; }
+                        fclose(mi);
+                    }
+                    size_t in_mb = 0;
+                    { struct stat sb; if(stat(argv[1],&sb)==0) in_mb=(size_t)sb.st_size/(1024*1024); }
+                    size_t peak_mb = hwm_mb();
+                    size_t per_child = peak_mb > (in_mb*3)/2 ? peak_mb : (in_mb*3)/2;
+                    if(per_child < 64) per_child = 64;
+                    size_t fit = avail_mb ? (avail_mb*3/5)/per_child : 1;
+                    if(fit < 1) fit = 1;
+                    if(fit < K) K = fit;
+                    if(const char* cc = getenv("CAPS_CAND_PAR")) { long q=atol(cc); if(q>0) K=(size_t)q; }
+                    fprintf(stderr,"  [a3] candidates=%zu concurrency=%zu "
+                                   "(avail=%zuMB per-child~%zuMB)\n",
+                            cands.size(), K, avail_mb, per_child);
+                }
+                // DIVIDE THE CORES, DO NOT OVERSUBSCRIBE THEM.
+                // Each candidate is itself OpenMP-parallel, so K concurrent
+                // children each taking every core means K-fold oversubscription
+                // and most of the win is lost to context switching. Measured on
+                // SARS-CoV-2, 12 cores, 4 candidates:
+                //     sequential                        39.54 s   1.00x
+                //     K=4, 12 threads each (oversub)    25.80 s   1.53x
+                //     K=4,  3 threads each (nproc/K)    11.43 s   3.46x
+                // All three produce a BYTE-IDENTICAL archive. Splitting the
+                // cores is what converts the concurrency into actual speed.
+                const unsigned per_child_threads =
+                    (unsigned)std::max<size_t>(1, (size_t)omp_get_max_threads() / (K ? K : 1));
+                std::vector<pid_t> running;
+                for(size_t ci=0; ci<cands.size() && !child; ++ci){
+                    pid_t pid = fork();
+                    if(pid < 0){ perror("fork"); return 1; }
+                    if(pid == 0){
+                        child=true; mine=ci;
+                        // Child's share of the machine. Set before any parallel
+                        // region in the child runs.
+                        omp_set_num_threads((int)per_child_threads);
+                        { char b[16]; snprintf(b,sizeof b,"%u",per_child_threads);
+                          setenv("OMP_NUM_THREADS", b, 1); }
+                        break;
+                    }
+                    running.push_back(pid);
+                    // Keep at most K children alive at once.
+                    while(running.size() >= K){
+                        int st=0; pid_t done = wait(&st);
+                        if(done > 0){
+                            running.erase(std::remove(running.begin(),running.end(),done),
+                                          running.end());
+                            if(!WIFEXITED(st) || WEXITSTATUS(st)!=0)
+                                fprintf(stderr,"  [a3] a candidate failed (status %d)\n",st);
+                        } else break;
+                    }
+                }
+                if(!child) while(!running.empty()){
+                    int st=0; pid_t done = wait(&st);
+                    if(done <= 0) break;
+                    running.erase(std::remove(running.begin(),running.end(),done),running.end());
+                    if(!WIFEXITED(st) || WEXITSTATUS(st)!=0)
+                        fprintf(stderr,"  [a3] a candidate failed (status %d)\n",st);
+                }
             }
             if(!child && !gs_child){
                 // parent: every candidate is finished; keep the smallest.
