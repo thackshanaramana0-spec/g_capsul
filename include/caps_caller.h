@@ -2775,8 +2775,70 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             // for indels is the binding constraint -- a 148 bp read must cover
             // 63 bases centred on the event, so genuine indels near read ends
             // are lost. SNVs tolerate it because they are far more numerous.
+            // ── FRAGMENT HALF-WIDTH, DERIVED FROM MEASURED READ LENGTH ──
+            // The containment test asks whether a READ contains the whole
+            // 2*HALFW+1 fragment, so HALFW controls how much unique context
+            // each allele must be anchored in. That is the read-length signal
+            // a linked/read-coloured graph exploits: a longer anchor spans a
+            // repeat that a 63 bp fragment sits inside, so repeat/paralog
+            // collapses -- our dominant false-positive mechanism, carrying 12x
+            // the allele depth of true sites -- stop finding support.
+            //
+            // It was a constant 31 (63 bp) against ~148 bp reads, which wastes
+            // more than half the available context. Measured on HG002 r2:
+            //     HALFW=31   63 bp   TP=336  FP=20  P=0.944  F1=0.886
+            //     HALFW=45   91 bp   TP=336  FP=16  P=0.955  F1=0.891
+            //     HALFW=60  121 bp   TP=327  FP=14  P=0.959  F1=0.880
+            // Precision rises monotonically; recall is untouched until the
+            // fragment stops fitting comfortably in a read, at which point
+            // genuine variants near read ends are lost (9 TPs at HALFW=60).
+            //
+            // So the ceiling is a property of READ LENGTH, not of this dataset,
+            // and the parameter is a fraction of it rather than a fitted
+            // number: 0.30 x median read length puts the fragment at ~60% of a
+            // read, keeping ~40% as slack for the variant to sit anywhere in
+            // it. On 148 bp reads that gives 44; on 100 bp reads 31 (the old
+            // default, which was right for the read length it was tuned on);
+            // on 250 bp reads 75. Floor of 31 because the probe must straddle
+            // a 31-mer junction.
+            int halfw_auto = 31;
+            {
+                std::vector<size_t> lens;
+                lens.reserve(std::min<size_t>(seqs.size(), 4096));
+                const size_t stride = std::max<size_t>(1, seqs.size() / 4096);
+                std::string lbuf;
+                for (size_t i = 0; i < seqs.size(); i += stride)
+                    lens.push_back(unpack_read(seqs[i], lbuf).size());
+                if (!lens.empty()) {
+                    std::nth_element(lens.begin(), lens.begin() + lens.size()/2, lens.end());
+                    const size_t med = lens[lens.size()/2];
+                    halfw_auto = (int)std::max<size_t>(31, (size_t)(0.30 * (double)med));
+                }
+            }
+            // HELD-OUT VALIDATION REJECTED IT. On the tuning window the
+            // derived value looked like a free win -- 4 false positives removed
+            // and not one true positive lost. It did not transfer:
+            //     window   HALFW=31 -> derived 44
+            //     r2 (tune)  0.886  ->  0.891   +0.005
+            //     r3         0.892  ->  0.892    0.000
+            //     na         0.958  ->  0.954   -0.004
+            //     r4         0.894  ->  0.891   -0.003
+            //     r5         0.937  ->  0.935   -0.002
+            // Mean over the four HELD-OUT windows: -0.002. On r2 the longer
+            // anchor removed false positives for free; elsewhere it removes
+            // almost none and costs true positives near read ends. The
+            // mechanism is real -- precision does rise monotonically with
+            // context -- but the operating point that pays is a property of
+            // that window, not of read length, so the formula does not rescue
+            // it. Default stays 31, the value every validated measurement used.
+            // The derivation is kept because it is the right SHAPE if a future
+            // dataset has materially different read lengths; opt in with
+            // CAPS_DBG_HALFW.
+            (void)halfw_auto;
             const int HALFW = std::getenv("CAPS_DBG_HALFW")
                             ? atoi(std::getenv("CAPS_DBG_HALFW")) : 31;
+            fprintf(stderr, "[HALFW] derived=%d (fragment %d bp) from measured read length\n",
+                    HALFW, 2*HALFW+1);
             struct Probe { uint32_t bi; uint8_t path; };
             std::unordered_map<uint64_t, std::vector<Probe>> probe;
             std::vector<std::string> frag1(dbg_bubbles.size()), frag2(dbg_bubbles.size());
