@@ -2194,11 +2194,50 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                             e.first += 1; e.second += q;
                         }
                     }
+                    // SHORTEST CLOSURE WINS, then branch count.
+                    //
+                    // This previously maximised BRANCH COUNT first and used
+                    // depth only as a tiebreak, so a distant node reached by 3
+                    // branches beat a near one reached by 2. DiscoSNP++ orders
+                    // it the other way round and never proposes the distant
+                    // exit at all: their indel BFS stops at the smallest
+                    // closing event (Bubble.cpp:238-243, "if (insert_size ==
+                    // found_del_size-1) break" and "if (insert_size >
+                    // found_del_size) continue"), which is why long spurious
+                    // indels are absent from their output rather than filtered
+                    // out of it.
+                    //
+                    // MEASURED AFTERWARDS: this ordering change is INERT in
+                    // practice. Variant groups only fire when ns > 2, which is
+                    // rare, so nearly every indel comes from find_sb on a
+                    // 2-successor node -- and find_sb returns the FIRST node
+                    // satisfying its drain condition, which is already the
+                    // earliest in traversal order. Closure distances measured
+                    // 709 of 827 in the 32-39 bp bin, i.e. about one k-mer past
+                    // the divergence, which is the correct shape for real
+                    // bubbles rather than evidence of distant closure. The
+                    // long-indel false positives therefore do NOT come from
+                    // choosing a far exit, and this ordering is kept only
+                    // because it matches the reference implementation.
+                    //
+                    // Adopting their ORDERING (a generative bound) rather than
+                    // adding another post-hoc length filter -- four of those
+                    // were tried and every one cost more true positives than
+                    // false ones, twice catastrophically (F1 0.537 -> 0.035).
+                    // Preferring the nearest reconvergence keeps short events
+                    // and simply does not generate the long ones.
+                    const bool SHORTEST_FIRST = std::getenv("CAPS_DBG_DEEPFIRST") == nullptr;
                     int bestN = 0; size_t bestDepth = SIZE_MAX; uint64_t bestNode = 0;
                     for (const auto& kv : reach) {
                         if (kv.second.first < 2) continue;
-                        if (kv.second.first > bestN ||
-                            (kv.second.first == bestN && kv.second.second < bestDepth)) {
+                        bool better;
+                        if (SHORTEST_FIRST)
+                            better = (kv.second.second < bestDepth) ||
+                                     (kv.second.second == bestDepth && kv.second.first > bestN);
+                        else
+                            better = (kv.second.first > bestN) ||
+                                     (kv.second.first == bestN && kv.second.second < bestDepth);
+                        if (better) {
                             bestN = kv.second.first; bestDepth = kv.second.second; bestNode = kv.first;
                         }
                     }
