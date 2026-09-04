@@ -39,6 +39,10 @@
 #include <cstdlib>
 #include <cstdint>
 #include <cstring>
+#include <cerrno>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <chrono>
 #include <queue>
 #include <deque>
@@ -1003,7 +1007,73 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
     // Disk-spill for the counting runs. OFF unless CAPS_KC_SPILLDIR is set, so
     // default behaviour is byte-identical. See the spill site below for why
     // this is the peak-RAM lever and how GATB uses the same trade.
-    const char* SPILLDIR = std::getenv("CAPS_KC_SPILLDIR");
+    // ── LAYER 3: DECLARED MEMORY CEILING ────────────────────────────────────
+    // Standard systems practice (GATB/KMC both take a `-max-memory`), and the
+    // reason it is here is a concrete failure, not tidiness: the spill was
+    // opt-in through an environment variable, so a full-chr20 run launched
+    // without it counted entirely in RAM and peaked at 28.8 GB instead of the
+    // configured ~12 GB, at 190.9 s instead of 25.4 s for kc_H_build. The
+    // k-mer set was identical and every accuracy number was unaffected -- the
+    // run was simply 4x heavier than the tool is capable of, because a
+    // performance-critical default lived in the caller's environment.
+    //
+    // A budget the tool DECLARES cannot be forgotten. The ceiling defaults to
+    // 60% of MemAvailable (measured at run time, not assumed), the projected
+    // in-RAM cost of counting is estimated from the input, and the spill turns
+    // itself on when the estimate exceeds the ceiling.
+    //
+    // This changes no output. Spilling alters WHERE k-mers are counted, never
+    // which ones exist -- the merge sums counts per key across runs either way
+    // -- and that identity is what the k-mer-count gate verifies.
+    auto mem_available_mb = []() -> size_t {
+        FILE* f = fopen("/proc/meminfo", "r");
+        if (!f) return 0;
+        char key[64]; unsigned long val; char unit[16]; size_t avail = 0;
+        while (fscanf(f, "%63s %lu %15s", key, &val, unit) >= 2) {
+            if (!strcmp(key, "MemAvailable:")) { avail = val / 1024; break; }
+        }
+        fclose(f);
+        return avail;
+    };
+    const size_t MEM_AVAIL_MB = mem_available_mb();
+    const size_t MEM_CEIL_MB  = std::getenv("CAPS_MAXRAM_MB")
+                              ? (size_t)atoll(std::getenv("CAPS_MAXRAM_MB"))
+                              : (MEM_AVAIL_MB ? (MEM_AVAIL_MB * 3) / 5 : 0);
+    // Projected in-RAM counting cost: every k-mer of every read becomes one
+    // 16-byte KC record in the run buffers before RLE, which is what actually
+    // sets the peak. Reads and lengths are already resident and are not part
+    // of the delta being budgeted here.
+    // Length is read from the packed header without unpacking the bases.
+    auto packed_len = [&](const std::string& src) -> size_t {
+        if (!SEQ_PACKED) return src.size();
+        if (src.empty()) return 0;
+        if ((uint8_t)src[0] == 1) return src.size() - 1;      // raw (had non-ACGT)
+        if (src.size() < 3) return 0;
+        return (size_t)(uint8_t)src[1] | ((size_t)(uint8_t)src[2] << 8);
+    };
+    size_t proj_kmers = 0;
+    for (size_t i = 0; i < seqs.size(); ++i) {
+        const size_t L = packed_len(seqs[i]);
+        if (L >= 31) proj_kmers += L - 30;
+    }
+    const size_t PROJ_MB = (proj_kmers * sizeof(KC)) / (1024 * 1024);
+
+    const char* SPILLDIR_ENV = std::getenv("CAPS_KC_SPILLDIR");
+    // Auto-enable when the projection exceeds the ceiling and a target
+    // directory is derivable. Explicit settings always win over the estimate.
+    static std::string spill_auto;
+    const char* SPILLDIR = SPILLDIR_ENV;
+    bool spill_forced_off = std::getenv("CAPS_KC_NOSPILL") != nullptr;
+    if (!SPILLDIR && !spill_forced_off && MEM_CEIL_MB && PROJ_MB > MEM_CEIL_MB) {
+        const char* base = std::getenv("TMPDIR");
+        if (!base) base = "/tmp";
+        spill_auto = std::string(base) + "/caps_kc_spill_" + std::to_string((long)getpid());
+        if (mkdir(spill_auto.c_str(), 0700) == 0 || errno == EEXIST)
+            SPILLDIR = spill_auto.c_str();
+    }
+    fprintf(stderr, "[KC-BUDGET] avail=%zuMB ceiling=%zuMB projected=%zuMB -> %s\n",
+            MEM_AVAIL_MB, MEM_CEIL_MB, PROJ_MB,
+            SPILLDIR ? (SPILLDIR_ENV ? "spill (explicit)" : "spill (auto)") : "in-RAM");
     const bool  SPILL    = (SPILLDIR != nullptr);
     // 2^SPILL_BITS key-range partitions. 256 partitions keeps each one small
     // enough to sort in RAM while staying far under any open-file limit.
@@ -1012,7 +1082,89 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
     const size_t PBUF_MAX  = 1u << 16;      // entries buffered per partition per thread
     // Superkmer spill: minimizer-partitioned, 2-bit packed. Verified at
     // 1.161 bytes/k-mer vs 12 for records, k-mer multiset identical.
-    const bool  SUPERK = SPILL && std::getenv("CAPS_KC_SUPERKMER") != nullptr;
+    // SUPERKMER IS THE DEFAULT WHENEVER WE SPILL, AND THAT IS A CORRECTNESS
+    // REQUIREMENT, NOT A PERFORMANCE ONE.
+    //
+    // It used to be opt-in on top of the spill, which left the key-only spill
+    // reachable as the default spilling path. Measured on HG002 r2 with the
+    // ceiling forced low enough to trigger a spill:
+    //
+    //     in-RAM             kc nodes = 1,063,607   SNV F1 = 0.886
+    //     spill, key-only    kc nodes =   741,350   SNV F1 = 0.000
+    //     spill, superkmer   kc nodes = 1,063,607   SNV F1 = 0.886
+    //
+    // The key-only path silently drops 30% of the k-mer set. docs/ called it
+    // "built, unverified"; it is in fact broken, and it was one environment
+    // variable away from being used. Superkmer reproduces the in-RAM multiset
+    // exactly, so it is what a spill turns on.
+    //
+    // CAPS_KC_NOSUPERKMER=1 restores the old path for re-measurement only.
+    const bool  SUPERK = SPILL && std::getenv("CAPS_KC_NOSUPERKMER") == nullptr;
+
+    // ── LAYER 2: FREQUENCY-RANKED MINIMIZERS ────────────────────────────────
+    // Standard practice in KMC2/GATB, adopted here with attribution; the
+    // mechanism is theirs, the derivation from our own data is ours.
+    //
+    // The minimizer was the LEXICOGRAPHICALLY smallest 10-mer in each window.
+    // That is the worst possible choice for low-complexity DNA: poly-A packs to
+    // the value 0, so it wins every window it touches, and the most frequent
+    // m-mers in a genome end up selected constantly. Frequent minimizers make
+    // SHORT runs -- the minimizer changes as soon as the window slides past the
+    // repeat -- and each run pays a length byte plus k-1 bases of overlap. Long
+    // runs are what make a superkmer cheap.
+    //
+    // Ranking by measured frequency inverts it: a RARE m-mer stays the window
+    // minimum for longer, so runs lengthen and bytes/k-mer falls. The ordering
+    // key is (frequency, m-mer), so it is derived from the input rather than
+    // fixed, and the m-mer breaks ties to keep the result deterministic.
+    //
+    // The table is 4^10 counts = 4 MB, filled from a strided SAMPLE of reads.
+    // A sample is sufficient because only the ORDER matters, not the counts,
+    // and the stride is deterministic so runs are reproducible.
+    //
+    // THIS CANNOT CHANGE THE K-MER SET. A superkmer is a container: whichever
+    // minimizer is chosen, the span still yields exactly its L k-mers and the
+    // merge still sums counts per key. Grouping changes, membership does not --
+    // which is precisely what the k-mer-count gate checks.
+    // MEASURED AND REJECTED AS A VOLUME LEVER -- OPT-IN (CAPS_KC_FREQMIN=1).
+    // On HG002 r2 with an identical k-mer set (1,063,607 both ways) and
+    // identical SNV F1 (0.886 both ways):
+    //     lexicographic     10,832,693 spill bytes   10.185 B/k-mer
+    //     frequency-ranked  12,398,016 spill bytes   11.657 B/k-mer  (+14%)
+    //
+    // The reasoning that motivated it was backwards. Lexicographic ordering
+    // makes poly-A win, and because it KEEPS winning across a repetitive
+    // stretch the minimizer run is LONG -- which is exactly what makes a
+    // superkmer cheap. Frequency ranking elects whichever rare m-mer is in the
+    // window, and rare m-mers are transient, so the minimizer changes more
+    // often and runs get SHORTER. KMC2/GATB adopt frequency ranking for
+    // PARTITION BALANCE, not for volume; the "~1.16 -> ~0.95 B/k-mer"
+    // expectation was carried over without checking which property it buys.
+    // Kept, off, because partition balance may still matter if the merge is
+    // ever made memory-bound per partition.
+    const bool FREQMIN = SUPERK && std::getenv("CAPS_KC_FREQMIN") != nullptr;
+    std::vector<uint32_t> mm_freq;
+    size_t sk_bytes_total = 0;   // superkmer spill volume, for bytes/k-mer
+    if (FREQMIN) {
+        const int MM_ = 10;
+        const uint32_t MMASK_ = (1u << (2*MM_)) - 1;
+        mm_freq.assign((size_t)1 << (2*MM_), 0u);
+        const size_t STRIDE = std::getenv("CAPS_KC_FREQSTRIDE")
+                            ? (size_t)atoll(std::getenv("CAPS_KC_FREQSTRIDE")) : 32;
+        std::string fbuf;
+        for (size_t si = 0; si < seqs.size(); si += STRIDE) {
+            const std::string& s = unpack_read(seqs[si], fbuf);
+            uint32_t mv = 0; int have = 0;
+            for (size_t i = 0; i < s.size(); ++i) {
+                const int b = b2i(s[i]);
+                if (b < 0) { have = 0; continue; }
+                mv = ((mv << 2) | (uint32_t)b) & MMASK_;
+                if (++have >= MM_) ++mm_freq[mv];
+            }
+        }
+        fprintf(stderr, "[KC-FREQMIN] sampled every %zu reads, %zu-mer ranking table built\n",
+                STRIDE, (size_t)MM_);
+    }
     // (definition for RunSrc::RBUF_ lives at namespace scope below)
     {
         // PARALLEL. Each thread collects and RLE-compresses its own batches
@@ -1123,6 +1275,8 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                              SPILLDIR, part, omp_get_thread_num());
                     FILE* f = fopen(path, "ab");
                     if (f) { fwrite(skbuf[part].data(), 1, skbuf[part].size(), f); fclose(f); }
+                    #pragma omp atomic
+                    sk_bytes_total += skbuf[part].size();
                     skbuf[part].clear();
                 };
                 std::string ubuf;
@@ -1134,7 +1288,14 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                     const size_t nk = s.size() - 31 + 1;
                     std::vector<uint32_t> mini(nk, 0xFFFFFFFFu);
                     {
-                        std::deque<std::pair<uint32_t,size_t>> dq;
+                        // Ordering key: frequency first, m-mer as a
+                        // deterministic tie-break. Falls back to the plain
+                        // m-mer when frequency ranking is off.
+                        auto mkey = [&](uint32_t m) -> uint64_t {
+                            return FREQMIN ? (((uint64_t)mm_freq[m] << 20) | m)
+                                           : (uint64_t)m;
+                        };
+                        std::deque<std::pair<uint64_t,size_t>> dq;
                         uint32_t mv = 0; int have = 0;
                         // lastN is the most recent invalid base. A k-mer is only
                         // valid if its whole 31-base window starts after it --
@@ -1150,13 +1311,17 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                             mv = ((mv << 2) | (uint32_t)b) & MMASK;
                             if (++have < MM) continue;
                             const size_t mpos = i - MM + 1;
-                            while (!dq.empty() && dq.back().first >= mv) dq.pop_back();
-                            dq.push_back({mv, mpos});
+                            const uint64_t kv = mkey(mv);
+                            while (!dq.empty() && dq.back().first >= kv) dq.pop_back();
+                            dq.push_back({kv, mpos});
                             if (i + 1 >= 31) {
                                 const size_t kpos = i + 1 - 31;
                                 if ((long long)kpos <= lastN) continue;   // window still spans an N
                                 while (!dq.empty() && dq.front().second < kpos) dq.pop_front();
-                                if (!dq.empty()) mini[kpos] = dq.front().first;
+                                if (!dq.empty())
+                                    mini[kpos] = FREQMIN
+                                               ? (uint32_t)(dq.front().first & 0xFFFFFu)
+                                               : (uint32_t)dq.front().first;
                             }
                         }
                     }
@@ -1369,7 +1534,9 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         }
         for (size_t i = 0; i < sf.size(); ++i) if (sf[i].f) fclose(sf[i].f);
         for (auto& sp : sorted_parts) ::remove(sp.c_str());
-        fprintf(stderr, "[KC-SUPERK] partitions=%zu distinct=%zu\n", sorted_parts.size(), kc.size());
+        fprintf(stderr, "[KC-SUPERK] partitions=%zu distinct=%zu spill_bytes=%zu bytes/kmer=%.3f freqmin=%d\n",
+                sorted_parts.size(), kc.size(), sk_bytes_total,
+                kc.empty() ? 0.0 : (double)sk_bytes_total / (double)kc.size(), (int)FREQMIN);
     } else if (SPILL) {
         // PARTITION-AT-A-TIME BUILD. Each partition owns a disjoint, ascending
         // slice of key space (top SPILL_BITS of the canonical k-mer), so:
@@ -2081,20 +2248,29 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         // missing recall is (ours 0.468 vs DiscoSNP++ 0.763 from the same
         // k-mer set), rather than guessing.
         size_t ab_tip = 0, ab_cycle = 0, ab_budget = 0, ab_exhaust = 0, ab_ok = 0;
+        // Independent indel discovery (their start_indel_prediction).
+        // OPT-IN (CAPS_DBG_IBFS=1) and never on by default. The indel claim is
+        // withdrawn -- see docs/CLAIM2_FINAL.md -- so this path is kept for the
+        // record and for future work, but it is unmeasured at scale and must
+        // not be able to affect a shipped number. IBFS_MAXINDEL mirrors D=100.
+        const bool WANT_IBFS = std::getenv("CAPS_DBG_IBFS") != nullptr;
+        const int IBFS_MAXINDEL = std::getenv("CAPS_DBG_IBFSMAX")
+                                ? atoi(std::getenv("CAPS_DBG_IBFSMAX")) : 100;
+        size_t n_ibfs_found = 0;
         auto find_sb = [&](uint64_t s0, uint64_t& t_out) -> bool {
             std::unordered_set<uint64_t> visited, seen;
             std::vector<uint64_t> S; S.push_back(s0);
             int guard = 0;
             while (!S.empty()) {
-                if (++guard > SB_BUDGET) { ++ab_budget; return false; }
+                if (++guard > SB_BUDGET) { _Pragma("omp atomic") ++ab_budget; return false; }
                 const uint64_t v = S.back(); S.pop_back();
                 visited.insert(v); seen.erase(v);
                 uint64_t ch[4]; uint32_t cc[4];
                 const int nc = succs_live(v, ch, cc);
-                if (nc == 0) { ++ab_tip; return false; }   // tip
+                if (nc == 0) { _Pragma("omp atomic") ++ab_tip; return false; }   // tip
                 for (int i = 0; i < nc; ++i) {
                     const uint64_t u = ch[i];
-                    if (u == s0) { ++ab_cycle; return false; }  // cycle back to entrance
+                    if (u == s0) { _Pragma("omp atomic") ++ab_cycle; return false; }  // cycle back to entrance
                     if (visited.count(u)) continue;
                     uint64_t pa[4];
                     const int np = preds_live(u, pa);
@@ -2104,9 +2280,9 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                     if (allv) { S.push_back(u); seen.erase(u); }
                     else seen.insert(u);
                 }
-                if (S.size() == 1 && seen.empty()) { t_out = S[0]; ++ab_ok; return true; }
+                if (S.size() == 1 && seen.empty()) { t_out = S[0]; _Pragma("omp atomic") ++ab_ok; return true; }
             }
-            ++ab_exhaust;
+            _Pragma("omp atomic") ++ab_exhaust;
             return false;
         };
         // BOTH ORIENTATIONS. kc stores CANONICAL k-mers, so each entry stands
@@ -2129,10 +2305,30 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         // WANT_SB is left on the serial path: find_sb's abort counters are
         // shared diagnostics and superbubble mode is not the default.
         size_t branching = 0;
-        #pragma omp parallel if(!WANT_SB)
+        // ── LAYER 15: PARALLELISE THE SUPERBUBBLE TRAVERSAL ─────────────
+        // This region used to be `if(!WANT_SB)`, i.e. the ENTIRE traversal ran
+        // single-threaded whenever superbubble mode was on -- which is every
+        // Method B run. Traversal is the dominant cost (55 s of 98.5 s at full
+        // chr20), so the caller was giving up ~11 of 12 cores for its longest
+        // stage. The stated reason was that find_sb's abort counters are
+        // shared; that is a two-line fix (atomics), not a reason to serialise.
+        //
+        // What is shared, and how each is handled:
+        //   * dbg_bubbles  -- already per-thread (`local_bubbles`), merged once
+        //   * sb_sites     -- now per-thread (`local_sb`), merged once
+        //   * ab_* counters-- diagnostics only, made atomic
+        // Nothing else in the loop writes shared state; kc, MINC and the walk
+        // lambdas are read-only.
+        //
+        // Bubble and site ORDER changes with thread scheduling. That is already
+        // documented as harmless -- every record is self-contained and the VCF
+        // is sorted downstream -- and the gate for this change is that the
+        // bubble COUNT and the resulting F1 are unchanged.
+        #pragma omp parallel
         {
         std::vector<DbgBubble> local_bubbles;
-        #pragma omp for schedule(dynamic, 2048) reduction(+:branching) nowait
+        std::vector<SbSite> local_sb;
+        #pragma omp for schedule(dynamic, 2048) reduction(+:branching,n_ibfs_found) nowait
         for (long long ni = 0; ni < (long long)kc.size(); ++ni) {
             const KC& node0 = kc[(size_t)ni];
             if (node0.cnt < MINC) continue;
@@ -2327,7 +2523,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                         for (size_t i = 0; i < bestSeq.size(); ++i)
                             st.alleles.push_back({bestSeq[i],
                                                   i < mins.size() ? mins[i] : 0u});
-                        sb_sites.push_back(std::move(st));
+                        local_sb.push_back(std::move(st));
                     }
                 }
                 // DO NOT skip the pairwise walk.
@@ -2382,10 +2578,116 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                     bb.rext = ext_right(closenode, MAXFLANK);
                     local_bubbles.push_back(std::move(bb));
                 }
+
+            // ── INDEL DISCOVERY (DiscoSNP++ start_indel_prediction) ─────────
+            // Ported from kissnp2 Bubble.cpp:200-285, reimplemented from the
+            // published algorithm. THE recall gap, found by tracing their
+            // control flow rather than their filters.
+            //
+            // THEIR STRUCTURE (Bubble.cpp:310-346): at every branching node,
+            // for every successor PAIR, they call start_snp_prediction() and
+            // then start_indel_prediction() -- INDEPENDENTLY. The indel search
+            // does not require the SNP search to succeed, and it does not
+            // require any superbubble to exist.
+            //
+            // OURS, BEFORE THIS: SNVs came from the pairwise lockstep walk
+            // (runs at every branching node) but indels came ONLY from
+            // find_sb, the Onodera superbubble detector. Measured at full
+            // chr20, find_sb SUCCEEDS ON 15.9% OF NODES:
+            //
+            //     ok=195,133  exhausted=960,541  budget=51,942  tip=17,409
+            //
+            // so at 1,030,061 branching nodes we never attempted an indel at
+            // all. That is the same asymmetry as the results: SNV recall 0.827
+            // from the path that runs everywhere, indel recall 0.414 from the
+            // path that runs on a sixth of the graph. It is not the
+            // homopolymer limit -- that explains the hardest subset, this
+            // explains the population.
+            //
+            // THE ALGORITHM. Extend ONE path while the other waits, until the
+            // extended path's last base equals the base that would let the two
+            // reconverge, then close in LOCKSTEP with the existing walk() --
+            // which is exactly their expand(). Note that with their default
+            // `authorised_branching=0` the breadth-first queue never holds more
+            // than one live node (they abandon the search at the first
+            // junction), so this is a unitig extension, not a search.
+            //
+            // The shape test is applied inline here for the same reason it is
+            // applied to superbubble records: lockstep closure guarantees the
+            // tail agrees, but the inserted block must still be ONE contiguous
+            // event.
+            if (WANT_IBFS) {
+                const uint64_t begin_[2] = { 0, 0 };
+                (void)begin_;
+                for (int i = 0; i < ns; ++i)
+                for (int j = i + 1; j < ns; ++j) {
+                    const uint64_t bg[2] = { so[i], so[j] };
+                    const uint32_t bc[2] = { sc[i], sc[j] };
+                    int found_del = IBFS_MAXINDEL + 10;
+                    for (int ext_id = 0; ext_id < 2; ++ext_id) {
+                        const uint64_t other = bg[1 - ext_id];
+                        const char end_ins = "ACGT"[other & 3ULL];
+                        uint64_t cur = bg[ext_id];
+                        std::string ins;                 // the inserted block
+                        for (int step = 0; step < IBFS_MAXINDEL; ++step) {
+                            uint64_t ch[4]; uint32_t cc[4];
+                            const int nc = succs_live(cur, ch, cc);
+                            // authorised_branching == 0: abandon at a junction
+                            if (nc != 1) break;
+                            cur = ch[0];
+                            ins += "ACGT"[cur & 3ULL];
+                            const int insert_size = (int)ins.size();
+                            if (insert_size >= found_del) break;
+                            if ("ACGT"[cur & 3ULL] != end_ins) continue;
+                            // candidate closure: lockstep from here
+                            std::string e1, e2;
+                            uint32_t m1 = bc[ext_id], m2 = bc[1 - ext_id];
+                            uint64_t closenode = 0;
+                            if (!walk(cur, other, e1, e2, m1, m2, closenode)) continue;
+                            std::string p_ext =
+                                std::string(1, "ACGT"[bg[ext_id] & 3ULL]) + ins + e1;
+                            std::string p_oth =
+                                std::string(1, "ACGT"[other & 3ULL]) + e2;
+                            if (p_ext.size() == p_oth.size()) continue;   // not an indel
+                            // one contiguous event only (LCP + LCS test)
+                            {
+                                const std::string& sl =
+                                    (p_ext.size() > p_oth.size()) ? p_ext : p_oth;
+                                const std::string& ss =
+                                    (p_ext.size() > p_oth.size()) ? p_oth : p_ext;
+                                size_t lcp = 0;
+                                while (lcp < ss.size() && ss[lcp] == sl[lcp]) ++lcp;
+                                size_t lcs = 0;
+                                while (lcs < ss.size() - lcp &&
+                                       ss[ss.size()-1-lcs] == sl[sl.size()-1-lcs]) ++lcs;
+                                if (lcp + lcs < ss.size()) continue;
+                            }
+                            DbgBubble bb2;
+                            bb2.flank = k2s(node.kmer);
+                            bb2.path1 = (ext_id == 0) ? p_ext : p_oth;
+                            bb2.path2 = (ext_id == 0) ? p_oth : p_ext;
+                            bb2.cov1 = sc[i];  bb2.cov2 = sc[j];
+                            bb2.min1 = (ext_id == 0) ? m1 : m2;
+                            bb2.min2 = (ext_id == 0) ? m2 : m1;
+                            bb2.len  = (int)std::max(p_ext.size(), p_oth.size());
+                            bb2.lext = ext_left(node.kmer, MAXFLANK);
+                            bb2.rext = ext_right(closenode, MAXFLANK);
+                            bb2.from_sb = 1;             // indel-shaped record
+                            local_bubbles.push_back(std::move(bb2));
+                            ++n_ibfs_found;
+                            found_del = insert_size;     // prefer the shortest
+                            break;
+                        }
+                    }
+                }
+            }
             }   // end orientation loop
         }
         #pragma omp critical(dbgbub)
-        for (auto& b : local_bubbles) dbg_bubbles.push_back(std::move(b));
+        {
+            for (auto& b : local_bubbles) dbg_bubbles.push_back(std::move(b));
+            for (auto& t : local_sb)      sb_sites.push_back(std::move(t));
+        }
         }   // end parallel
         // ── READ-COHERENCE: the fragment must exist in REAL READS ───────────
         // THE FP MECHANISM, named in this repo's own docs: a CHIMERIC JUNCTION.
@@ -3057,6 +3359,8 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         fprintf(stderr, "[DBG-RSS] after traversal: %ldMB  bubbles=%zu\n", rss_kb()/1024, dbg_bubbles.size());
         fprintf(stderr, "[DBG-ABORT] ok=%zu tip=%zu cycle=%zu budget=%zu exhausted=%zu\n",
                 ab_ok, ab_tip, ab_cycle, ab_budget, ab_exhaust);
+        fprintf(stderr, "[DBG-IBFS] independent indel discovery: %zu records (enabled=%d, maxindel=%d)\n",
+                n_ibfs_found, (int)WANT_IBFS, IBFS_MAXINDEL);
         fprintf(stderr, "[DBG] kc nodes=%zu  branching=%zu  bubbles=%zu  minc=%u  %.2fs\n",
                 kc.size(), branching, dbg_bubbles.size(), MINC,
                 elapsed_s(t_dbg, clk::now()));
