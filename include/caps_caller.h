@@ -38,6 +38,12 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstdint>
+#include <cstring>
+#include <chrono>
+#include <queue>
+#include <deque>
+#include <set>
+#include <functional>
 #include <climits>
 
 namespace capscall {
@@ -630,8 +636,34 @@ inline Substrate build_substrate(const std::vector<std::string>& seqs, const Cal
     }
 
     // 3. place every read, both strands, fewest mismatches wins
+    //
+    // PARALLEL (2026-09-03). This loop was the single largest phase in the
+    // caller -- 738 s of the first full-chr20 run, and it runs TWICE (here for
+    // the pileup substrate, again at the bubble substrate inside indel_pass).
+    // It was serial only because it had never been profiled at scale: the
+    // enclosing phase marker is called "ridx_build", but ridx is disabled by
+    // default, so all of that time was actually being spent right here under
+    // a name that pointed at dead code.
+    //
+    // Safe to parallelise by inspection, not by hope: iteration `o` writes
+    // ONLY S.read_cid[o] / read_pos[o] / read_rc[o] / read_clip[o], which are
+    // disjoint across iterations and pre-sized above; `idx` and `S.contigs`
+    // are read-only once step 2 has finished (bound through a const ref below
+    // so a stray insert cannot compile); every best_* accumulator is declared
+    // inside the body and is therefore private. `placed`/`improved` are the
+    // only shared scalars and are a reduction. Output is order-independent,
+    // so the result is byte-identical to the serial version, not merely
+    // equivalent -- which is the gate this change is held to.
+    //
+    // NOTE the prior negative result this does NOT contradict: OpenMP over
+    // CONTIGS in the pileup measured slower (+11%, +13%, comment at the top of
+    // run_variant_call). That loop has few, wildly unequal items. This one has
+    // 12.6M uniform items; dynamic scheduling covers the tail.
+    const auto& cidx = idx;                     // read-only view for the parallel region
     size_t placed = 0, improved = 0;
-    for (size_t o = 0; o < n; ++o) {
+    #pragma omp parallel for schedule(dynamic, 256) reduction(+:placed,improved)
+    for (long long o_ = 0; o_ < (long long)n; ++o_) {
+        const size_t o = (size_t)o_;
         const std::string& raw = seqs[o];
         if ((int)raw.size() < K) continue;
         // Placement score. Comparing raw mismatch COUNTS across candidates is
@@ -643,15 +675,21 @@ inline Substrate build_substrate(const std::vector<std::string>& seqs, const Cal
         long best_score = LONG_MIN; int best_mm = INT32_MAX;
         uint32_t best_c = UINT32_MAX, best_p = 0; uint8_t best_rc = 0;
         uint16_t best_clip = 0;
+        // Strand 0 used to COPY the read (`std::string r = strand ? ... : raw`)
+        // for no reason at all -- two heap allocations per read, ~50M across
+        // the two calls at full-chromosome scale. Bind a reference for the
+        // forward strand and materialise only the reverse complement.
+        std::string rcbuf;
         for (int strand = 0; strand < 2; ++strand) {
-            std::string r = strand ? rc_str(raw) : raw;
+            if (strand) rcbuf = rc_str(raw);
+            const std::string& r = strand ? rcbuf : raw;
             const int rl = (int)r.size();
             const int step = std::max(1, rl / 8);
             for (int off = 0; off + K <= rl; off += step) {
                 uint64_t v; if (!pack25(r.data() + off, v)) continue;
                 uint64_t rcv = rc25(v), can = v < rcv ? v : rcv;
-                auto it = idx.find(can);
-                if (it == idx.end()) continue;
+                auto it = cidx.find(can);
+                if (it == cidx.end()) continue;
                 for (auto& pr : it->second) {
                     const std::string& c = S.contigs[pr.first];
                     // seed may be stored in either orientation; try both implied starts
@@ -717,10 +755,55 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
     using namespace detail;
     if (!cd_in.valid) { fprintf(stderr, "caps_caller: no placement data\n"); return -1; }
     const size_t n = seqs.size();
+    // TEMPORARY phase timing (2026-09-03), added to find where wall time
+    // actually goes before optimizing blind -- OpenMP over contigs measured
+    // SLOWER at both 400kb and 5Mb scale (+11%, +13%), so the assumption
+    // that the per-contig loop dominates needs checking, not more tuning.
+    using clk = std::chrono::steady_clock;
+    auto t_start = clk::now();
+    auto elapsed_s = [](clk::time_point a, clk::time_point b){
+        return std::chrono::duration<double>(b - a).count(); };
+    // Real per-phase RSS, not another structure-by-structure guess. Reads
+    // VmRSS straight from /proc/self/status (Linux-only, this project's own
+    // server) -- no third-party dependency, no sampling thread, negligible
+    // cost next to the phases themselves.
+    auto rss_kb = []() -> long {
+        FILE* f = fopen("/proc/self/status", "r");
+        if (!f) return -1;
+        char line[256]; long kb = -1;
+        while (fgets(line, sizeof line, f)) {
+            if (strncmp(line, "VmRSS:", 6) == 0) { sscanf(line + 6, "%ld", &kb); break; }
+        }
+        fclose(f);
+        return kb;
+    };
+    auto phase = [&](const char* name, clk::time_point& mark){
+        auto now = clk::now();
+        fprintf(stderr, "[CAPS-CALL-TIMING] %-16s %8.3fs  RSS=%ldMB\n",
+                name, elapsed_s(mark, now), rss_kb() / 1024);
+        mark = now;
+    };
+    auto t_mark = t_start;
+    fprintf(stderr, "[CAPS-CALL-TIMING] %-16s %8.3fs  RSS=%ldMB\n", "entry", 0.0, rss_kb() / 1024);
 
     // Rebuild the calling substrate (collapse + mismatch-tolerant placement).
+    //
+    // METHOD B DOES NOT NEED THIS. Bubble finding reads only `kc`; the
+    // substrate is consulted in this path for exactly one thing -- the ploidy
+    // gate samples cd.contigs -- and the ENCODER'S OWN contigs (cd_in) serve
+    // that purpose identically, at zero cost, because they already exist.
+    // build_substrate re-places all 12.6M reads and measured 738 s serial at
+    // full chr20; skipping it is the difference between a ~57 s and a ~150 s
+    // Method B run. The pileup path still builds it as before.
+    const bool DBG_ONLY_MODE = std::getenv("CAPS_DBG_ONLY") != nullptr
+                            && std::getenv("CAPS_DBG") != nullptr;
     CallData cd;
-    {
+    if (DBG_ONLY_MODE) {
+        cd.contigs = cd_in.contigs;          // consensus source for the ploidy gate
+        cd.valid = true;
+        fprintf(stderr, "[DBG-ONLY] substrate skipped (%zu encoder contigs reused)\n",
+                cd.contigs.size());
+    } else {
         Substrate S = build_substrate(seqs, cd_in);
         cd.contigs = std::move(S.contigs);
         cd.read_cid = std::move(S.read_cid);
@@ -734,30 +817,86 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
     if (const char* pe = std::getenv("CAPS_PLOIDY")) { int v = atoi(pe); if (v >= 2 && v <= 4) PLOIDY = v; }
 
 
-    // ── READ SEED INDEX (for the read-substring test below) ──────────────
+    // ── READ SEED INDEX -- DISABLED BY DEFAULT (2026-09-03), see below ──────
     // EBWT2SNP's precision mechanism, from its paper: every emitted fragment
     // of length 2k+1 must be an actual SUBSTRING of at least C real READS
     // (within Hamming distance 2). It reports 99.13% precision against
-    // DiscoSNP++'s 77.80% on chr22, and that guarantee is why.
+    // DiscoSNP++'s 77.80% -- BUT on SIMULATED chr22 data (29x). CORRECTED
+    // 2026-09-04 after reading the primary source (docs/EBWT_LITERATURE_
+    // CORRECTION.md): on the paper's own REAL chr1 data (43-47x) eBWT2SNP is
+    // 66.62% precision and DiscoSNP++ is actually MORE precise at 74.57%. The
+    // guarantee below was real and worth testing, but its justification here
+    // was a simulated-data number, not a real one, and the real-data result
+    // for the source method is BELOW what this project already measures.
     // Our previous test only asked whether individual 31-mers appear in the
     // read k-mer TABLE -- far weaker, because a CHIMERIC junction (two
     // paralogs joined at a shared anchor) can have every one of its 31-mers
     // present, each contributed by a different read, while no single read
     // contains the whole fragment. That is precisely our false-positive class.
-    std::unordered_map<uint64_t, std::vector<std::pair<uint32_t,uint32_t>>> ridx;
-    const bool WANT_RSUB = std::getenv("CAPS_NO_READSUB") == nullptr;
+    //
+    // THE FLIP: this index was already recorded as near-vacuous for us
+    // (docs/INDEL_PRECISION_ROOT_CAUSE.md, "Group B -- read-support tests
+    // are near-vacuous for us": every candidate we emit is read-supported BY
+    // CONSTRUCTION, since it was built FROM reads in the first place -- the
+    // test EBWT2SNP needs to reject chimeras built from a GRAPH has nothing
+    // to reject here). That was documented, but the index was still built
+    // every run because a config flag (CAPS_NO_READSUB) existed to skip it,
+    // not because the default did. Verified fresh, not just trusted from the
+    // doc: ran all 5 standard windows (r2,r3,r4,r5,na) with CAPS_NO_READSUB=1
+    // and diffed every TP/FP/FN against the enabled run -- BYTE-IDENTICAL on
+    // all 5, SNV and indel both. So this is not a shrink like ridx's sorted-
+    // array rewrite below (kept for the record, now dead code under the
+    // opt-in flag) -- it is a full elimination of the largest remaining
+    // single structure (~900 MB at 971K reads, projected multi-GB at full
+    // chr20), for a change already measured to move nothing.
+    // CAPS_FORCE_READSUB=1 restores the old default for re-measurement if
+    // this ever needs revisiting (e.g. a future substrate change makes
+    // candidates less strictly read-derived than they are today).
+    struct RidxEntry { uint64_t kmer; uint32_t read; uint32_t pos; };
+    std::vector<RidxEntry> ridx;
+    const bool WANT_RSUB = std::getenv("CAPS_FORCE_READSUB") != nullptr;
     if (WANT_RSUB) {
-        ridx.reserve(1u << 22);
+        ridx.reserve(seqs.size() * 26);   // ~(148-25)/5+1 25-mers/read, before capping
         for (uint32_t i = 0; i < (uint32_t)seqs.size(); ++i) {
             const std::string& q = seqs[i];
             for (size_t j = 0; j + 25 <= q.size(); j += 5) {
                 uint64_t v; if (!detail::pack25(q.data() + j, v)) continue;
                 uint64_t rv = detail::rc25(v), cn = v < rv ? v : rv;
-                auto& vec = ridx[cn];
-                if (vec.size() < 40) vec.push_back({i, (uint32_t)j});
+                ridx.push_back({cn, i, (uint32_t)j});
             }
         }
+        std::stable_sort(ridx.begin(), ridx.end(),
+            [](const RidxEntry& a, const RidxEntry& b){ return a.kmer < b.kmer; });
+        // Cap each key's group at 40 entries IN PLACE. A second `capped`
+        // vector here would hold two full copies at once -- at full-chromosome
+        // scale that is two multi-GB buffers alive simultaneously, i.e. the
+        // very overhead this change exists to remove, reintroduced at the
+        // last step. Compaction only ever keeps an order-preserving subset,
+        // so one write cursor trailing the read cursor is enough: w <= j at
+        // every step, so no element is overwritten before it has been read.
+        size_t w = 0;
+        for (size_t i = 0; i < ridx.size(); ) {
+            size_t j = i; int cnt = 0;
+            while (j < ridx.size() && ridx[j].kmer == ridx[i].kmer) {
+                if (cnt < 40) ridx[w++] = ridx[j];
+                ++cnt; ++j;
+            }
+            i = j;
+        }
+        ridx.resize(w);
+        // Only reclaim the tail when capping actually removed enough to be
+        // worth a reallocation -- shrink_to_fit copies into a fresh buffer,
+        // so calling it unconditionally would itself spike to ~2x right here
+        // for, in the common case (most k-mers occur well under 40 times),
+        // almost no saving.
+        if (w < ridx.capacity() / 5 * 4) ridx.shrink_to_fit();
     }
+    auto ridx_lo = [&](uint64_t cn){
+        return std::lower_bound(ridx.begin(), ridx.end(), cn,
+            [](const RidxEntry& e, uint64_t k){ return e.kmer < k; }); };
+    auto ridx_hi = [&](uint64_t cn){
+        return std::upper_bound(ridx.begin(), ridx.end(), cn,
+            [](uint64_t k, const RidxEntry& e){ return k < e.kmer; }); };
     // Is `frag` a substring of at least `need` reads, allowing <= tol mismatches?
     auto read_support = [&](const std::string& frag, int need, int tol) -> bool {
         if (!WANT_RSUB) return true;
@@ -773,22 +912,21 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         for (int off = 0; off + 25 <= L; off += 1) {
             uint64_t v; if (!detail::pack25(frag.data() + off, v)) continue;
             uint64_t rv = detail::rc25(v), cn = v < rv ? v : rv;
-            auto it = ridx.find(cn);
-            if (it == ridx.end()) continue;
-            for (auto& pr : it->second) {
-                const std::string& q = seqs[pr.first];
+            auto lo = ridx_lo(cn), hi = ridx_hi(cn);
+            for (auto e = lo; e != hi; ++e) {
+                const std::string& q = seqs[e->read];
                 // try the read forward and reverse-complemented
                 for (int st = 0; st < 2; ++st) {
                     std::string qq = st ? detail::rc_str(q) : q;
-                    // the seed sits at pr.second (fwd) -- for rc, recompute by search
+                    // the seed sits at e->pos (fwd) -- for rc, recompute by search
                     for (int shift = -2; shift <= 2; ++shift) {
-                        long start = (st ? -1 : (long)pr.second - off + shift);
+                        long start = (st ? -1 : (long)e->pos - off + shift);
                         if (st) break;                       // rc handled by frag rc below
                         if (start < 0 || start + L > (long)qq.size()) continue;
                         int mm = 0;
                         for (int t = 0; t < L && mm <= tol; ++t)
                             if (qq[(size_t)(start + t)] != frag[(size_t)t]) ++mm;
-                        if (mm <= tol) { hits.insert(pr.first); break; }
+                        if (mm <= tol) { hits.insert(e->read); break; }
                     }
                 }
                 if ((int)hits.size() >= need) return true;
@@ -801,33 +939,549 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         for (int off = 0; off + 25 <= L; off += 1) {
             uint64_t v; if (!detail::pack25(rf.data() + off, v)) continue;
             uint64_t rv = detail::rc25(v), cn = v < rv ? v : rv;
-            auto it = ridx.find(cn);
-            if (it == ridx.end()) continue;
-            for (auto& pr : it->second) {
-                const std::string& q = seqs[pr.first];
-                long start = (long)pr.second - off;
+            auto lo = ridx_lo(cn), hi = ridx_hi(cn);
+            for (auto e = lo; e != hi; ++e) {
+                const std::string& q = seqs[e->read];
+                long start = (long)e->pos - off;
                 if (start < 0 || start + L > (long)q.size()) continue;
                 int mm = 0;
                 for (int t = 0; t < L && mm <= tol; ++t)
                     if (q[(size_t)(start + t)] != rf[(size_t)t]) ++mm;
-                if (mm <= tol) hits.insert(pr.first);
+                if (mm <= tol) hits.insert(e->read);
                 if ((int)hits.size() >= need) return true;
             }
         }
         return (int)hits.size() >= need;
     };
 
+    phase("ridx_build", t_mark);
     // ── 1. Internal canonical-31-mer counts ──
-    std::unordered_map<uint64_t, uint32_t> kc;
-    kc.reserve(1u << 21);
-    for (const auto& s : seqs) {
-        if (s.size() < 31) continue;
-        for (size_t i = 0; i + 31 <= s.size(); ++i) {
-            uint64_t v;
-            if (pack31(s.data() + i, v)) ++kc[canon31(v)];
+    // CHUNKED COUNTING (2026-09-03) -- the properly-done version of the
+    // sorted-array idea that was tried and REVERTED once already (see git
+    // history / prior comment here): a single-shot "collect everything, then
+    // sort" spikes to ~11.9 GB transient at full chr20 scale, which can be
+    // WORSE at peak than the hash map it replaces. This version bounds that
+    // transient to one batch: collect and RLE-compress BATCH_KMERS raw
+    // k-mers at a time into a small sorted run, discard the raw batch, then
+    // k-way merge the runs (summing counts for a key that appears in more
+    // than one run). Peak extra memory is O(batch size + distinct k-mers),
+    // never O(total k-mer occurrences) -- the number that made the earlier
+    // attempt fail. Output (the (kmer,count) set) is identical either way.
+    // Batch size is DIVIDED BY THREAD COUNT so aggregate batch memory is the
+    // same as the serial version. Each thread reserving the full 32M entries
+    // (268 MB) would cost 268 MB x nthreads -- 3.2 GB on 12 cores -- turning
+    // the parallel speedup into a RAM regression. Smaller batches simply mean
+    // more, shorter runs, which the k-way merge handles natively.
+    size_t BATCH_KMERS = 32u << 20;       // ~256 MB of raw uint64 in total
+    {
+        int nth = 1;
+        #ifdef _OPENMP
+        nth = omp_get_max_threads();
+        #endif
+        if (nth > 1) BATCH_KMERS = std::max<size_t>(1u << 20, BATCH_KMERS / (size_t)nth);
+    }
+    struct KC { uint64_t kmer; uint32_t cnt; };
+    // Reads arrive 2-bit packed in graph-only mode (see 106_inprocess.cpp
+    // SEQ_PACK). Unpack on demand into a caller-supplied buffer so only one
+    // read is ever expanded at a time.
+    const bool SEQ_PACKED = std::getenv("CAPS_DBG_ONLY") && std::getenv("CAPS_DBG");
+    auto unpack_read = [&](const std::string& src, std::string& dst) -> const std::string& {
+        if (!SEQ_PACKED) return src;
+        if (src.empty()) { dst.clear(); return dst; }
+        if ((uint8_t)src[0] == 1) {           // raw: read contained non-ACGT
+            dst.assign(src, 1, std::string::npos);
+            return dst;
+        }
+        if (src.size() < 3) { dst.clear(); return dst; }
+        const size_t L = (size_t)(uint8_t)src[1] | ((size_t)(uint8_t)src[2] << 8);
+        dst.resize(L);
+        for (size_t i = 0; i < L; ++i)
+            dst[i] = "ACGT"[((uint8_t)src[3 + (i >> 2)] >> (2 * (i & 3))) & 3];
+        return dst;
+    };
+    std::vector<std::vector<KC>> kc_runs;
+    // Disk-spill for the counting runs. OFF unless CAPS_KC_SPILLDIR is set, so
+    // default behaviour is byte-identical. See the spill site below for why
+    // this is the peak-RAM lever and how GATB uses the same trade.
+    const char* SPILLDIR = std::getenv("CAPS_KC_SPILLDIR");
+    const bool  SPILL    = (SPILLDIR != nullptr);
+    // 2^SPILL_BITS key-range partitions. 256 partitions keeps each one small
+    // enough to sort in RAM while staying far under any open-file limit.
+    const int   SPILL_BITS = std::getenv("CAPS_KC_SPILLBITS")
+                           ? atoi(std::getenv("CAPS_KC_SPILLBITS")) : 8;
+    const size_t PBUF_MAX  = 1u << 16;      // entries buffered per partition per thread
+    // Superkmer spill: minimizer-partitioned, 2-bit packed. Verified at
+    // 1.161 bytes/k-mer vs 12 for records, k-mer multiset identical.
+    const bool  SUPERK = SPILL && std::getenv("CAPS_KC_SUPERKMER") != nullptr;
+    // (definition for RunSrc::RBUF_ lives at namespace scope below)
+    {
+        // PARALLEL. Each thread collects and RLE-compresses its own batches
+        // into its own runs; the k-way merge below already sums counts for a
+        // key across every run, so partitioning the reads across threads
+        // changes only WHICH run holds a key, never the summed count. The
+        // (kmer,count) set is therefore identical to the serial version by
+        // construction -- this is not an approximation.
+        #pragma omp parallel
+        {
+            std::vector<uint64_t> batch; batch.reserve(BATCH_KMERS);
+            std::vector<std::vector<KC>> myruns;
+            std::vector<std::vector<uint64_t>> pbuf(SPILL ? (1u << SPILL_BITS) : 0);
+            auto flush = [&](){
+                if (batch.empty()) return;
+                std::sort(batch.begin(), batch.end());
+                std::vector<KC> run; run.reserve(batch.size());
+                for (size_t i = 0; i < batch.size(); ) {
+                    size_t j = i;
+                    while (j < batch.size() && batch[j] == batch[i]) ++j;
+                    run.push_back({batch[i], (uint32_t)(j - i)});
+                    i = j;
+                }
+                // SPILL BY KEY RANGE (GATB's design, simplified).
+                //
+                // The first version of this spill wrote each batch as one
+                // sorted RUN. That was the wrong shape: every run spans the
+                // whole key space, so the k-way merge has to hold all runs
+                // open simultaneously and peak stays proportional to the total.
+                //
+                // GATB does not do that. SortingCountAlgorithm.cpp:804 routes
+                // each superkmer to a partition chosen by its MINIMIZER --
+                //     size_t p = _repartition(superKmer.minimizer);
+                // so every partition owns a DISJOINT slice of key space and
+                // partitions are processed one at a time, with no merge across
+                // them at all. Their peak is one partition; ours was the sum.
+                //
+                // We can do it more simply than they do: partition on the TOP
+                // BITS of the canonical k-mer. Then partition order IS key
+                // order, so concatenating the sorted partitions yields a
+                // globally sorted kc with no merge step whatsoever. (GATB needs
+                // minimizers because superkmers must keep adjacent k-mers
+                // together; we store plain k-mers, so we do not.)
+                if (SPILL) {
+                    // SPILL ONLY THE KEY, NOT THE COUNT.
+                    // A (kmer,count) record is 12 bytes; the count is
+                    // recomputed when the partition is read back and sorted,
+                    // so writing it is pure waste. Measured: the count made
+                    // the full-chr20 spill 25 GB, which exhausted a 233 GB
+                    // disk. Dropping it is a 33% cut for free. (GATB gets far
+                    // more -- ~0.95 B/k-mer -- by packing SUPERKMERS, which
+                    // needs the whole minimizer chain; this is the part
+                    // available without it.)
+                    for (const KC& e : run) {
+                        const uint32_t part = (uint32_t)(e.kmer >> (62 - SPILL_BITS));
+                        std::vector<uint64_t>& pb = pbuf[part];
+                        // one entry per OCCURRENCE, so the count survives as
+                        // repetition and is recovered by the read-back sort
+                        for (uint32_t rep = 0; rep < e.cnt; ++rep) pb.push_back(e.kmer);
+                        if (pb.size() >= PBUF_MAX) {
+                            char path[512];
+                            snprintf(path, sizeof path, "%s/p%05u_t%d.bin",
+                                     SPILLDIR, part, omp_get_thread_num());
+                            FILE* f = fopen(path, "ab");
+                            if (f) { fwrite(pb.data(), sizeof(uint64_t), pb.size(), f); fclose(f); }
+                            pb.clear();
+                        }
+                    }
+                    batch.clear();
+                    return;
+                }
+                myruns.push_back(std::move(run));
+                batch.clear();
+            };
+            // ROLLING K-MER WINDOW.
+            //
+            // The previous loop called pack31() and canon31() at every
+            // position, and BOTH are O(k): pack31 loops 31 times to build the
+            // k-mer, rc31 loops 31 times to reverse-complement it. At full
+            // chr20 that is ~1.4 BILLION k-mer positions x ~62 operations
+            // = ~87 billion operations, and it is the reason this phase costs
+            // 72.8 s -- almost none of that work is necessary.
+            //
+            // A k-mer and its reverse complement can both be updated in O(1)
+            // from the previous position:
+            //     fwd = ((fwd << 2) | b) & MASK31        -- shift in the new base
+            //     rev = (rev >> 2) | ((3-b) << 60)       -- complement, shift out
+            // so the inner loop drops from ~62 operations to ~4. `have`
+            // tracks how many valid bases are currently in the window, which
+            // is what makes N bases a reset rather than a special case.
+            const uint64_t KMASK = (~0ULL) >> 2;          // 62 bits = 31 bases
+            // ── SUPERKMER PATH ──────────────────────────────────────────────
+            // Consecutive k-mers in a read almost always share a minimizer, so
+            // a RUN of them can be stored as ONE overlapping sequence: L k-mers
+            // occupy L+k-1 bases, packed 4 bases/byte. Verified standalone
+            // before wiring: 1.161 bytes/k-mer against 12 for (kmer,count)
+            // records, with the k-mer multiset proven identical.
+            // This is what makes the spill sustainable -- the record format hit
+            // 25 GB at full chr20 and exhausted the disk twice.
+            if (SUPERK) {
+                const int MM = 10;                       // minimizer size
+                const uint32_t MMASK = (1u << (2*MM)) - 1;
+                std::vector<std::vector<uint8_t>> skbuf(1u << SPILL_BITS);
+                auto sk_flush = [&](uint32_t part){
+                    if (skbuf[part].empty()) return;
+                    char path[512];
+                    snprintf(path, sizeof path, "%s/sk%05u_t%d.bin",
+                             SPILLDIR, part, omp_get_thread_num());
+                    FILE* f = fopen(path, "ab");
+                    if (f) { fwrite(skbuf[part].data(), 1, skbuf[part].size(), f); fclose(f); }
+                    skbuf[part].clear();
+                };
+                std::string ubuf;
+                #pragma omp for schedule(static)
+                for (long long si = 0; si < (long long)seqs.size(); ++si) {
+                    const std::string& s = unpack_read(seqs[(size_t)si], ubuf);
+                    if (s.size() < 31) continue;
+                    // rolling minimizer per k-mer (monotonic deque, O(1) amortised)
+                    const size_t nk = s.size() - 31 + 1;
+                    std::vector<uint32_t> mini(nk, 0xFFFFFFFFu);
+                    {
+                        std::deque<std::pair<uint32_t,size_t>> dq;
+                        uint32_t mv = 0; int have = 0;
+                        // lastN is the most recent invalid base. A k-mer is only
+                        // valid if its whole 31-base window starts after it --
+                        // without this the deque refills 10 bases past an N and
+                        // assigns minimizers to k-mers that still contain it,
+                        // which silently dropped 93 k-mers on the r2 window
+                        // (1,063,514 vs 1,063,607) because those superkmers were
+                        // then rejected wholesale.
+                        long long lastN = -1;
+                        for (size_t i = 0; i < s.size(); ++i) {
+                            const int b = b2i(s[i]);
+                            if (b < 0) { dq.clear(); have = 0; lastN = (long long)i; continue; }
+                            mv = ((mv << 2) | (uint32_t)b) & MMASK;
+                            if (++have < MM) continue;
+                            const size_t mpos = i - MM + 1;
+                            while (!dq.empty() && dq.back().first >= mv) dq.pop_back();
+                            dq.push_back({mv, mpos});
+                            if (i + 1 >= 31) {
+                                const size_t kpos = i + 1 - 31;
+                                if ((long long)kpos <= lastN) continue;   // window still spans an N
+                                while (!dq.empty() && dq.front().second < kpos) dq.pop_front();
+                                if (!dq.empty()) mini[kpos] = dq.front().first;
+                            }
+                        }
+                    }
+                    size_t st = 0;
+                    while (st < nk) {
+                        if (mini[st] == 0xFFFFFFFFu) { ++st; continue; }   // window had an N
+                        size_t en = st;
+                        while (en + 1 < nk && mini[en+1] == mini[st] && (en - st + 1) < 255) ++en;
+                        const size_t L = en - st + 1, nb = L + 31 - 1;
+                        // reject if any base in the span is invalid
+                        bool ok = true;
+                        for (size_t i = 0; i < nb && ok; ++i) if (b2i(s[st+i]) < 0) ok = false;
+                        if (ok) {
+                            const uint32_t part = mini[st] & ((1u << SPILL_BITS) - 1);
+                            std::vector<uint8_t>& ob = skbuf[part];
+                            ob.push_back((uint8_t)L);
+                            const size_t need = (nb + 3) / 4, base = ob.size();
+                            ob.resize(base + need, 0);
+                            for (size_t i = 0; i < nb; ++i)
+                                ob[base + (i >> 2)] |= (uint8_t)(b2i(s[st+i]) << (2 * (i & 3)));
+                            if (ob.size() >= (1u << 20)) sk_flush(part);
+                        }
+                        st = en + 1;
+                    }
+                }
+                for (uint32_t pp = 0; pp < (1u << SPILL_BITS); ++pp) sk_flush(pp);
+            } else {
+            std::string ubuf2;
+            #pragma omp for schedule(static)
+            for (long long si = 0; si < (long long)seqs.size(); ++si) {
+                const std::string& s = unpack_read(seqs[(size_t)si], ubuf2);
+                if (s.size() < 31) continue;
+                uint64_t fwd = 0, rev = 0;
+                int have = 0;
+                for (size_t i = 0; i < s.size(); ++i) {
+                    const int b = b2i(s[i]);
+                    if (b < 0) { have = 0; fwd = rev = 0; continue; }   // N: restart window
+                    fwd = ((fwd << 2) | (uint64_t)b) & KMASK;
+                    rev = (rev >> 2) | ((uint64_t)(3 - b) << 60);
+                    if (++have < 31) continue;
+                    if (have > 31) have = 31;
+                    batch.push_back(fwd < rev ? fwd : rev);
+                    if (batch.size() >= BATCH_KMERS) flush();
+                }
+            }
+            }
+            flush();
+            if (SPILL) {
+                for (uint32_t part = 0; part < pbuf.size(); ++part) {
+                    if (pbuf[part].empty()) continue;
+                    char path[512];
+                    snprintf(path, sizeof path, "%s/p%05u_t%d.bin",
+                             SPILLDIR, part, omp_get_thread_num());
+                    FILE* f = fopen(path, "ab");
+                    if (f) { fwrite(pbuf[part].data(), sizeof(uint64_t), pbuf[part].size(), f); fclose(f); }
+                    std::vector<uint64_t>().swap(pbuf[part]);
+                }
+            }
+            #pragma omp critical(kcruns)
+            for (auto& r : myruns) kc_runs.push_back(std::move(r));
         }
     }
+    // k-way merge: at each step pick the smallest head key across all runs
+    // and sum every run's count for that key. Runs are few (total k-mer
+    // occurrences / BATCH_KMERS -- roughly 47 at full chr20 scale), so a
+    // linear scan per output element is simple and correct; a heap would be
+    // faster but is not needed at this run count.
+    // HEAP MERGE, TWO PASSES (2026-09-03). The comment above ("a heap would be
+    // faster but is not needed at this run count") was correct about the run
+    // count and wrong about the cost, because the cost is driven by the OUTPUT
+    // length, not the run count. The previous version did two linear scans over
+    // all runs per output element: at full chr20 that is roughly
+    //     ~400M distinct 31-mers x 47 runs x 2 scans = ~37 BILLION comparisons,
+    // which is essentially all of this phase's 166.7 s. A min-heap over run
+    // heads makes it O(output x log runs) instead.
+    //
+    // Pass 1 counts distinct keys so pass 2 can allocate `kc` exactly once.
+    // The tempting one-pass alternative -- reserve the summed run lengths --
+    // is an exact upper bound but a useless one: every run carries its own copy
+    // of each common key, so that sum is ~47 x 32M entries (~18 GB reserved) to
+    // hold ~400M (~4.8 GB) of real output. Two heap passes cost ~2x the merge
+    // but the merge is now ~8-17x cheaper, so this is still several times
+    // faster than the code it replaces AND removes the ~14.4 GB transient the
+    // un-reserved doubling caused at the final reallocation.
+    //
+    // Byte-identical by construction: a k-way merge is a pure function of its
+    // runs, and both passes visit keys in the same ascending order and sum the
+    // same per-run counts.
+    std::vector<KC> kc;
+    if (SUPERK) {
+        // ── READ BACK SUPERKMERS ────────────────────────────────────────────
+        // One partition at a time: read its superkmers, expand each into its L
+        // k-mers, canonicalise, sort, and run-length count. Partitions are keyed
+        // by MINIMIZER, so they are not key-ranges -- a k-mer from any partition
+        // can sort anywhere -- and the per-partition results are therefore
+        // written to sorted temp files and k-way merged at the end. Peak stays
+        // at one partition plus the output, never the sum.
+        const uint64_t KMASK = (~0ULL) >> 2;
+        std::vector<std::string> sorted_parts;
+        size_t total_k = 0;
+        // PARALLEL OVER PARTITIONS. Each partition reads its own files and
+        // writes its own sorted output, so they are fully independent, and this
+        // is the largest parallelism available in the read-back phase.
+        //
+        // This was once reverted after the parallel version produced 2,273
+        // extra k-mers -- but that was a MISDIAGNOSIS. The extra k-mers came
+        // from 2-bit read packing mapping non-ACGT bases to 'A', which made
+        // k-mers spanning an N look valid. The parallelism was never at fault;
+        // reverting it removed a correct optimisation. Restored once the N bug
+        // was fixed and kc identity (1,063,607) re-verified.
+        sorted_parts.resize(1u << SPILL_BITS);
+        #pragma omp parallel for schedule(dynamic, 1) reduction(+:total_k)
+        for (long long pi_ = 0; pi_ < (long long)(1u << SPILL_BITS); ++pi_) {
+            const uint32_t pi = (uint32_t)pi_;
+            std::vector<uint8_t> raw;
+            std::vector<uint64_t> kms;
+            for (int t = 0; t < 64; ++t) {
+                char path[512];
+                snprintf(path, sizeof path, "%s/sk%05u_t%d.bin", SPILLDIR, pi, t);
+                FILE* f = fopen(path, "rb");
+                if (!f) continue;
+                fseek(f, 0, SEEK_END); const long sz = ftell(f); fseek(f, 0, SEEK_SET);
+                const size_t base = raw.size();
+                raw.resize(base + (size_t)sz);
+                if (fread(raw.data() + base, 1, (size_t)sz, f) != (size_t)sz) raw.resize(base);
+                fclose(f); ::remove(path);
+            }
+            if (raw.empty()) continue;
+            // expand: [uint8 L][ceil((L+30)/4) packed bases]
+            for (size_t off = 0; off + 1 <= raw.size(); ) {
+                const size_t L = raw[off]; ++off;
+                if (L == 0) break;
+                const size_t nb = L + 31 - 1, need = (nb + 3) / 4;
+                if (off + need > raw.size()) break;
+                const uint8_t* pk = raw.data() + off;
+                uint64_t fwd = 0, rev = 0;
+                for (size_t i = 0; i < nb; ++i) {
+                    const int b = (pk[i >> 2] >> (2 * (i & 3))) & 3;
+                    fwd = ((fwd << 2) | (uint64_t)b) & KMASK;
+                    rev = (rev >> 2) | ((uint64_t)(3 - b) << 60);
+                    if (i + 1 >= 31) kms.push_back(fwd < rev ? fwd : rev);
+                }
+                off += need;
+            }
+            if (kms.empty()) continue;
+            // ── RADIX PRE-BINNING before sorting ────────────────────────────
+            // GATB never sorts one large array: PartitionsCommand.cpp bins
+            // k-mers into 256 radix buckets as they are read and sorts each
+            // bucket separately (executeRead -> executeSort -> executeDump).
+            // One n log n over a huge array thrashes cache; O(n) binning plus
+            // many cache-resident sorts does not. Bins are ordered by the top
+            // 8 bits, so concatenating the sorted bins is globally sorted --
+            // the result is identical to sorting the whole array, which is why
+            // this needs no separate correctness gate beyond the kc identity
+            // check that already covers it.
+            {
+                const int RB = 8, NB = 1 << RB;
+                std::vector<uint32_t> cnt(NB + 1, 0);
+                for (uint64_t v : kms) ++cnt[(size_t)(v >> (62 - RB)) + 1];
+                for (int i = 0; i < NB; ++i) cnt[i+1] += cnt[i];
+                std::vector<uint64_t> tmp(kms.size());
+                std::vector<uint32_t> pos(cnt.begin(), cnt.end() - 1);
+                for (uint64_t v : kms) tmp[pos[(size_t)(v >> (62 - RB))]++] = v;
+                // no nested parallel region: the partition loop is already
+                // parallel, so these bins are sorted serially within a thread
+                for (int b = 0; b < NB; ++b)
+                    std::sort(tmp.begin() + cnt[b], tmp.begin() + cnt[b+1]);
+                kms.swap(tmp);
+            }
+            char spath[512];
+            snprintf(spath, sizeof spath, "%s/srt%05u.bin", SPILLDIR, pi);
+            FILE* sf = fopen(spath, "wb");
+            if (sf) {
+                for (size_t i = 0; i < kms.size(); ) {
+                    size_t j = i; while (j < kms.size() && kms[j] == kms[i]) ++j;
+                    const KC e{ kms[i], (uint32_t)(j - i) };
+                    fwrite(&e, sizeof(KC), 1, sf);
+                    ++total_k; i = j;
+                }
+                fclose(sf);
+                sorted_parts[pi] = spath;
+            }
+        }
+        {   // partitions that produced nothing leave empty slots
+            std::vector<std::string> nz;
+            for (auto& sp : sorted_parts) if (!sp.empty()) nz.push_back(sp);
+            sorted_parts.swap(nz);
+        }
+        // k-way merge the sorted per-partition files
+        struct SF { FILE* f; KC cur; bool ok; };
+        std::vector<SF> sf(sorted_parts.size());
+        using HE = std::pair<uint64_t, uint32_t>;
+        std::priority_queue<HE, std::vector<HE>, std::greater<HE>> pq;
+        for (size_t i = 0; i < sorted_parts.size(); ++i) {
+            sf[i].f = fopen(sorted_parts[i].c_str(), "rb");
+            sf[i].ok = sf[i].f && fread(&sf[i].cur, sizeof(KC), 1, sf[i].f) == 1;
+            if (sf[i].ok) pq.push({sf[i].cur.kmer, (uint32_t)i});
+        }
+        kc.reserve(total_k);
+        while (!pq.empty()) {
+            const uint64_t key = pq.top().first;
+            uint32_t sum = 0;
+            while (!pq.empty() && pq.top().first == key) {
+                const uint32_t i = pq.top().second; pq.pop();
+                sum += sf[i].cur.cnt;
+                sf[i].ok = fread(&sf[i].cur, sizeof(KC), 1, sf[i].f) == 1;
+                if (sf[i].ok) pq.push({sf[i].cur.kmer, i});
+            }
+            kc.push_back({key, sum});
+        }
+        for (size_t i = 0; i < sf.size(); ++i) if (sf[i].f) fclose(sf[i].f);
+        for (auto& sp : sorted_parts) ::remove(sp.c_str());
+        fprintf(stderr, "[KC-SUPERK] partitions=%zu distinct=%zu\n", sorted_parts.size(), kc.size());
+    } else if (SPILL) {
+        // PARTITION-AT-A-TIME BUILD. Each partition owns a disjoint, ascending
+        // slice of key space (top SPILL_BITS of the canonical k-mer), so:
+        //   * partitions can be processed one at a time -- peak is ONE
+        //     partition plus the growing output, never the sum of all runs;
+        //   * partition order IS key order, so simply appending each sorted
+        //     partition produces a globally sorted kc with NO merge step.
+        // This is GATB's structure (disjoint partitions, processed
+        // independently) without needing minimizers, which they require only
+        // because superkmers must keep adjacent k-mers together.
+        size_t total_in = 0;
+        std::vector<KC> part;
+        for (uint32_t pi = 0; pi < (1u << SPILL_BITS); ++pi) {
+            part.clear();
+            for (int t = 0; t < 64; ++t) {
+                char path[512];
+                snprintf(path, sizeof path, "%s/p%05u_t%d.bin", SPILLDIR, pi, t);
+                FILE* f = fopen(path, "rb");
+                if (!f) continue;
+                fseek(f, 0, SEEK_END); const long sz = ftell(f); fseek(f, 0, SEEK_SET);
+                const size_t n = (size_t)sz / sizeof(KC);
+                const size_t base = part.size();
+                part.resize(base + n);
+                if (fread(part.data() + base, sizeof(KC), n, f) != n) part.resize(base);
+                fclose(f);
+                ::remove(path);
+            }
+            if (part.empty()) continue;
+            total_in += part.size();
+            // RESERVE FROM THE FIRST PARTITION'S DISTINCT RATE.
+            // kc.push_back was growing by doubling, and at full chr20 the
+            // final array is ~1.7 GB, so the last reallocation held old+new
+            // ~3.4 GB -- a pure transient with no phase attached to it
+            // (measured at 2M reads: RSS flat at 2772 MB, PEAK 4127 MB).
+            // The two-pass merge this replaced used an exact reserve; the
+            // partitioned build lost it. Partitions are uniform slices of key
+            // space, so the first one's distinct count scales to a good total
+            // estimate. 15% headroom absorbs partition-to-partition variance;
+            // being slightly over only wastes a little, while being under
+            // merely restores one doubling.
+            if (kc.capacity() == 0 && !part.empty()) {
+                size_t d0 = 1;
+                for (size_t i = 1; i < part.size(); ++i)
+                    if (part[i].kmer != part[i-1].kmer) ++d0;
+                const size_t est = (size_t)((double)d0 * (1u << SPILL_BITS) * 1.15);
+                kc.reserve(est);
+                fprintf(stderr, "[KC-SPILL] reserve estimate %zu from partition 0\n", est);
+            }
+            std::sort(part.begin(), part.end(),
+                      [](const KC& x, const KC& y){ return x.kmer < y.kmer; });
+            for (size_t i = 0; i < part.size(); ) {
+                size_t j = i; uint32_t sum = 0;
+                while (j < part.size() && part[j].kmer == part[i].kmer) { sum += part[j].cnt; ++j; }
+                kc.push_back({part[i].kmer, sum});
+                i = j;
+            }
+        }
+        std::vector<KC>().swap(part);
+        fprintf(stderr, "[KC-SPILL] partitions=%d entries_in=%zu distinct=%zu\n",
+                (1 << SPILL_BITS), total_in, kc.size());
+    } else {
+        // In-RAM path (default): heap merge over the runs, exactly as before.
+        // Two passes so the output is reserved exactly once.
+        using HE = std::pair<uint64_t, uint32_t>;
+        auto merge_pass = [&](bool fill_out) -> size_t {
+            std::vector<size_t> idx(kc_runs.size(), 0);
+            std::priority_queue<HE, std::vector<HE>, std::greater<HE>> pq;
+            for (uint32_t r = 0; r < (uint32_t)kc_runs.size(); ++r)
+                if (!kc_runs[r].empty()) pq.push({kc_runs[r][0].kmer, r});
+            size_t nout = 0;
+            while (!pq.empty()) {
+                const uint64_t key = pq.top().first;
+                uint32_t sum = 0;
+                while (!pq.empty() && pq.top().first == key) {
+                    const uint32_t r = pq.top().second; pq.pop();
+                    sum += kc_runs[r][idx[r]].cnt;
+                    if (++idx[r] < kc_runs[r].size()) pq.push({kc_runs[r][idx[r]].kmer, r});
+                }
+                if (fill_out) kc.push_back({key, sum});
+                ++nout;
+            }
+            return nout;
+        };
+        kc.reserve(merge_pass(false));
+        merge_pass(true);
+    }
+    kc_runs.clear(); kc_runs.shrink_to_fit();
+    auto kc_find = [&](uint64_t key) -> const KC* {
+        auto it = std::lower_bound(kc.begin(), kc.end(), key,
+            [](const KC& e, uint64_t k){ return e.kmer < k; });
+        return (it != kc.end() && it->kmer == key) ? &*it : nullptr;
+    };
     uint32_t H = 30;
+    // The k-mer count histogram's VALLEY -- the minimum between the error peak
+    // and the true single-copy peak -- is the standard, dataset-measured
+    // solid-k-mer threshold. It is computed below to locate H and was being
+    // discarded; it is hoisted here because the dBG channel needs exactly this
+    // quantity and must NOT use a fixed constant for it (see MINC).
+    uint32_t KVALLEY = 2;
+    // Is this sample actually DIPLOID? A heterozygous diploid's k-mer count
+    // histogram is bimodal -- a heterozygous peak at the haploid depth H and a
+    // homozygous peak at ~2H -- while a haploid genome shows only the single
+    // peak. This is the standard GenomeScope/findGSE signature and it costs
+    // nothing here because the histogram is already built to locate H.
+    //
+    // WHY IT MATTERS: the dBG bubble channel looks for heterozygous bubbles.
+    // Run on a HAPLOID sample it can only produce noise -- measured, it emitted
+    // 163 "sites" on E. coli and 180 on SARS-CoV-2, organisms that have no
+    // heterozygous variants at all. Claim 2 is entirely diploid human so this
+    // never showed up in benchmarking, which is exactly why it needs a guard
+    // rather than an assumption.
+    bool looks_diploid = true;
     {
         // H ESTIMATOR BUG (found 2026-09-02): cnt_max was the MAXIMUM k-mer
         // count, which is set by repeats and pinned at the 5000 cap, so
@@ -841,14 +1495,14 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         // k-mers above the range are irrelevant to locating the single-copy
         // peak, and 2000 covers any realistic per-haplotype depth.
         uint32_t cnt_max = 0;
-        for (auto& kv : kc) cnt_max = std::max(cnt_max, kv.second);
+        for (auto& kv : kc) cnt_max = std::max(cnt_max, kv.cnt);
         cnt_max = std::min(cnt_max, 2000u);
         if (cnt_max >= 4) {
             uint32_t bw = 1;
             uint32_t nb = cnt_max / bw + 2;
             std::vector<uint64_t> bkt(nb, 0);
             for (auto& kv : kc)
-                if (kv.second >= 2 && kv.second <= cnt_max) bkt[kv.second / bw]++;
+                if (kv.cnt >= 2 && kv.cnt <= cnt_max) bkt[kv.cnt / bw]++;
             size_t valley = 2;
             for (size_t b = 1; b + 1 < nb / 3 && b + 1 < bkt.size(); ++b) {
                 if (bkt[b] < bkt[b - 1] && bkt[b] < bkt[b + 1]) { valley = b; break; }
@@ -857,107 +1511,55 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             for (size_t b = valley + 1; b < bkt.size(); ++b)
                 if (bkt[b] > bkt[peak]) peak = b;
             uint32_t H_hist = (uint32_t)((peak + 0.5) * bw);
-            if (H_hist >= 5) H = H_hist;
+            if (H_hist >= 5) { H = H_hist; KVALLEY = (uint32_t)std::max<size_t>(2, valley * bw); }
+            // (A histogram-bimodality ploidy test was tried here and REMOVED:
+            // it did not discriminate. Measured ratios: HG002 0.125 (diploid),
+            // SARS-CoV-2 0.331 (haploid), E. coli 0.088 (haploid) -- the
+            // haploids fell both above AND below the diploid, so no threshold
+            // separates them. The reasoning was wrong: at 30x with k=31 the
+            // located peak sits near the HOMOZYGOUS depth, so "mass at 2H"
+            // measures repeats, not ploidy. Ploidy is detected instead by the
+            // pair test below, the mechanism already validated 5/5 by HETSCAN.)
+
         }
     }
     auto kcount = [&](const std::string& km) -> uint32_t {
         if (km.size() != 31) return 0;
         uint64_t v; if (!pack31(km.data(), v)) return 0;
-        auto it = kc.find(canon31(v)); return it == kc.end() ? 0u : it->second;
+        const KC* e = kc_find(canon31(v)); return e ? e->cnt : 0u;
     };
 
-    // ── 2. Pileup from placements (contig frame). Skip reads with mm>=7 (mapq<20). ──
+    // ── 2-6a. Per-contig pileup, candidates, flank pass, filters, SNV emit ──
+    // CONTIG-BATCHED (2026-09-03). Previously col/C/FLmaj/FLmin/majoff/minoff
+    // were built ONCE over every read in the whole chromosome and held
+    // resident simultaneously -- measured as the dominant RAM sink on a real
+    // full chr20 run (tens of GB). Nothing in this stretch crosses a contig
+    // boundary: colkey always carries cid, and every lookup into these five
+    // structures is keyed by a (cid,pos) that only ever matches the contig
+    // being scanned. So the identical computation is re-scoped to run one
+    // contig at a time, with all five structures declared fresh inside the
+    // loop and freed before the next contig starts -- peak RAM becomes
+    // O(largest single contig's pileup), not O(whole chromosome).
+    // Output is byte-identical to the old global-pass version: the original
+    // did one `std::sort(kept)` over (cid,pos) pairs from every contig before
+    // emitting; emitting per-contig in increasing cid order and concatenating
+    // produces the exact same total order, since cid is the primary sort key
+    // and each contig's own `kept` is still locally sorted by pos.
     struct Rec { uint32_t cid, pos; std::string seq, qual; };
-    std::vector<Rec> recs; recs.reserve(n);
-    std::unordered_map<uint64_t, std::vector<std::pair<int,int>>> col;
-    col.reserve(1u << 20);
-
-    for (size_t oi = 0; oi < n; ++oi) {
-        uint32_t cid = cd.read_cid[oi], pos = cd.read_pos[oi];
-        if (cid >= cd.contigs.size()) continue;
-        const std::string& cc = cd.contigs[cid];
-        bool rc = cd.read_rc[oi] != 0;
-        std::string seq = rc ? rc_str(seqs[oi]) : seqs[oi];
-        std::string qual = (oi < quals.size()) ? quals[oi] : std::string();
-        if (rc) std::reverse(qual.begin(), qual.end());
-        // Honour the left-overhang clip: the read's base `clip` is what sits at
-        // contig position `pos`, so drop the clipped prefix from both the read
-        // and its quality before anything downstream indexes them.
-        uint16_t clip = (oi < cd.read_clip.size()) ? cd.read_clip[oi] : 0;
-        if (clip) {
-            if (clip >= seq.size()) continue;
-            seq.erase(0, clip);
-            if (clip < qual.size()) qual.erase(0, clip); else qual.clear();
-        }
-        const int rl = (int)seq.size();
-        int mm = 0;
-        for (int j = 0; j < rl; ++j) {
-            uint32_t p = pos + (uint32_t)j;
-            if (p >= cc.size()) { mm = rl; break; }
-            char a = seq[(size_t)j];
-            if (b2i(a) >= 0 && cc[p] != a) ++mm;
-        }
-        if (mm >= 7) continue;
-        recs.push_back({cid, pos, seq, qual});
-        for (int j = 0; j < rl; ++j) {
-            uint32_t p = pos + (uint32_t)j;
-            if (p >= cc.size()) break;
-            int b = b2i(seq[(size_t)j]);
-            if (b < 0) continue;
-            int q = (j < (int)qual.size() && qual[(size_t)j] >= 33) ? (qual[(size_t)j] - 33) : 40;
-            col[colkey(cid, p)].push_back({b, q});
-        }
-    }
-
-    // ── 3. Candidate columns ──
     struct Cand { int M, mn; int cnt[4]; int d; };
-    std::unordered_map<uint64_t, Cand> C;
-    for (auto& kv : col) {
-        auto& rl = kv.second;
-        int d = (int)rl.size();
-        if (d < 6) continue;
-        int cnt[4] = {0,0,0,0};
-        for (auto& bq : rl) cnt[bq.first]++;
-        int o[4] = {0,1,2,3};
-        std::sort(o, o + 4, [&](int a, int b){ return cnt[a] > cnt[b]; });
-        int M = o[0], mn = o[1];
-        if (cnt[mn] < 2) continue;
-        std::vector<int> mq;
-        for (auto& bq : rl) if (bq.first == mn) mq.push_back(bq.second);
-        std::sort(mq.begin(), mq.end());
-        double medq = mq.empty() ? 0 : (mq.size() % 2 ? (double)mq[mq.size()/2]
-                                        : (mq[mq.size()/2 - 1] + mq[mq.size()/2]) / 2.0);
-        if (medq < 20) continue;
-        int alMn[2] = {M, mn}, alM[1] = {M};
-        if (10.0 * (loglik(rl, alMn, 2) - loglik(rl, alM, 1)) / std::log(10.0) < 10) continue;
-        Cand c; c.M = M; c.mn = mn; c.cnt[0]=cnt[0]; c.cnt[1]=cnt[1]; c.cnt[2]=cnt[2]; c.cnt[3]=cnt[3]; c.d = d;
-        C[kv.first] = c;
-    }
-    if (C.empty()) fprintf(stderr, "caps_caller: 0 candidates\n");
+    struct OutRec { uint32_t cid, pos; std::string ref, alt, info; int src; };
+    std::vector<OutRec> orecs;
+    size_t total_candidates = 0;
 
-    if (const char* he = std::getenv("CAPS_HAPLOID_COV")) { int v = atoi(he); if (v > 0) H = (uint32_t)v; }
-
-    // ── 4. Flank pass ──
-    std::unordered_map<uint64_t, std::unordered_map<std::string,int>> FLmaj, FLmin;
-    std::unordered_map<uint64_t, std::array<std::array<int,4>,31>> majoff, minoff;
-    for (auto& r : recs) {
-        const int rl = (int)r.seq.size();
-        for (int j = 0; j < rl; ++j) {
-            uint64_t key = colkey(r.cid, r.pos + (uint32_t)j);
-            auto ci = C.find(key);
-            if (ci == C.end()) continue;
-            int b = b2i(r.seq[(size_t)j]);
-            if (b < 0) continue;
-            bool isM = (b == ci->second.M), ismn = (b == ci->second.mn);
-            if (!isM && !ismn) continue;
-            if (j - HALF >= 0 && j + HALF + 1 <= rl)
-                (isM ? FLmaj : FLmin)[key][r.seq.substr((size_t)(j - HALF), 2 * HALF + 1)]++;
-            auto& grp = isM ? majoff[key] : minoff[key];
-            for (int off = -HALF; off <= HALF; ++off) {
-                if (off == 0) continue;
-                int p = j + off;
-                if (p >= 0 && p < rl) { int bb = b2i(r.seq[(size_t)p]); if (bb >= 0) grp[(size_t)(off + HALF)][(size_t)bb]++; }
-            }
+    // Method B skips build_substrate, so there are no per-read placements to
+    // index here. The pileup is the only consumer and it does not run in that
+    // mode; guarding is required because this loop sits BEFORE the DBG-only
+    // exit and would otherwise dereference an empty array.
+    std::vector<std::vector<uint32_t>> reads_by_contig(cd.contigs.size());
+    if (cd.read_cid.size() >= n) {
+        for (size_t oi = 0; oi < n; ++oi) {
+            uint32_t rcid = cd.read_cid[oi];
+            if (rcid < cd.contigs.size()) reads_by_contig[rcid].push_back((uint32_t)oi);
         }
     }
 
@@ -979,6 +1581,1410 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
     // together. k=2 gives exactly MAF, so the diploid path -- and every
     // het-SNV result -- is byte-identical.
     const double MAF_K = MAF * 2.0 / (double)PLOIDY;
+
+    // Hoisted out of the per-contig loop (2026-09-03): this override does not
+    // depend on cid0 at all -- it re-read the same env var on every contig
+    // for no reason, and once the loop below runs on multiple threads,
+    // writing the shared `H` from inside it would be a data race. Reading it
+    // once here, before any thread starts, is both a correctness fix for the
+    // parallel version and a no-op for the sequential one (same value either
+    // way).
+    if (const char* he = std::getenv("CAPS_HAPLOID_COV")) { int v = atoi(he); if (v > 0) H = (uint32_t)v; }
+
+    // WHAT IS AND IS NOT BATCHED, corrected 2026-09-03 after a review pass
+    // caught an over-reach in the first version of this refactor.
+    // Only `col` (the pileup: every read base at every covered position) and
+    // `recs` are large -- measured shapes put col in the tens of GB at full
+    // chr20 scale, recs at a few GB. `C` (candidate columns) and the flank
+    // maps are SMALL: 585 candidates on a 400 kb window scales to roughly
+    // 1e5 genome-wide, a few hundred MB with the flank contexts included.
+    // The first version of this refactor scoped C and the flank maps per
+    // contig too, which bought nothing and silently broke `med_cand_depth`
+    // -- the depth guard's median, which the original computes over ALL
+    // candidates chromosome-wide, became a per-contig median. That guard is
+    // inert on the default path (it is gated on !collapse_ran) so no
+    // recorded result moved, but it is exactly the kind of silent
+    // methodology change this project forbids.
+    // So: build col/recs per contig and free them there, accumulate C and
+    // the flank maps into thread-local buffers, then merge and run the
+    // filter/emit stages EXACTLY as the original wrote them, over the
+    // complete global C. Keys are (cid,pos) and each contig is handled by
+    // exactly one thread, so no two threads ever produce the same key and
+    // merging is a pure move with no count reconciliation.
+    phase("kc_H_build", t_mark);
+
+    // ── PLOIDY GATE (the encoder's HETSCAN mechanism, validated 5/5) ────────
+    // A heterozygous site yields TWO k-mers differing at exactly one position,
+    // both at real depth; a haploid genome yields almost none. This is the
+    // encoder's own test (het_pair_frac, threshold 0.024: E. coli 0.0172,
+    // M. tuberculosis 0.0209, P. aeruginosa 0.0103 -> haploid; HG002 0.0264,
+    // HG003 0.0261 -> diploid), reproduced here because HETSCAN runs AFTER the
+    // caller and therefore cannot gate it.
+    {
+        const uint32_t PLMIN = std::max(2u, H / 4u);
+        size_t sampled = 0, pairs = 0;
+        // Sample the CONTIGS, not kc. kc holds raw read k-mers including
+        // sequencing errors; at high depth those errors clear any count
+        // threshold and every one of them has a 1-mismatch partner (its own
+        // correct version), so the pair fraction saturates. Measured: sampling
+        // kc gave SARS-CoV-2 frac=0.8927 -- a haploid virus scored as more
+        // heterozygous than HG002. The encoder's HETSCAN does not have this
+        // problem because it samples the assembled pseudogenome, i.e. consensus
+        // sequence with errors already removed. cd.contigs is the caller's
+        // equivalent of that consensus.
+        size_t ctotal = 0;
+        for (const auto& c : cd.contigs) ctotal += c.size();
+        const size_t STRIDE = std::max<size_t>(41, ctotal / 200000);
+        for (const auto& c : cd.contigs) {
+            if (c.size() < 31) continue;
+            for (size_t off = 0; off + 31 <= c.size(); off += STRIDE) {
+                uint64_t kv;
+                if (!pack31(c.data() + off, kv)) continue;
+                const KC* self = kc_find(canon31(kv));
+                if (!self || self->cnt < PLMIN) continue;
+                ++sampled;
+                bool found = false;
+                for (int pos = 0; pos < 31 && !found; ++pos) {
+                    const uint64_t sh = (uint64_t)(2 * (30 - pos));
+                    const uint64_t cur = (kv >> sh) & 3ULL;
+                    for (uint64_t b = 0; b < 4 && !found; ++b) {
+                        if (b == cur) continue;
+                        const uint64_t alt = (kv & ~(3ULL << sh)) | (b << sh);
+                        const KC* e = kc_find(canon31(alt));
+                        if (e && e->cnt >= PLMIN) found = true;
+                    }
+                }
+                if (found) ++pairs;
+            }
+        }
+        const double frac = sampled ? (double)pairs / (double)sampled : 0.0;
+        looks_diploid = frac >= 0.024;
+        fprintf(stderr, "[PLOIDY] sampled=%zu pairs=%zu frac=%.4f -> %s\n",
+                sampled, pairs, frac, looks_diploid ? "diploid" : "haploid");
+    }
+
+    // ── DBG BUBBLE CHANNEL — DiscoSNP++'s algorithm on the graph WE ALREADY BUILD ──
+    //
+    // THE REALIZATION. A de Bruijn graph is exactly two things: a set of
+    // k-mers, and the implicit edge X->Y whenever Y = (X shifted left one base
+    // + one new base) is also in the set. `kc` above IS that set -- every
+    // canonical 31-mer of every read, with its count -- and `kc_find` IS the
+    // membership test. We spend 166.7 s building a full de Bruijn graph and
+    // then use it to compute ONE SCALAR (H, the coverage threshold below).
+    //
+    // So DiscoSNP++'s bubble finder does not need a new index, a new pass over
+    // the reads, or a second assembly. Every primitive it uses maps onto a
+    // kc_find:
+    //
+    //   their graph.successors(node)        -> 4 kc_find probes, keep cnt >= minc
+    //   their branching node (>= 2 succ)    -> same test
+    //   their graph.successors(node1,node2) -> for b in ACGT, BOTH extensions
+    //                                          present (their getNodesCouple in
+    //                                          GATB Graph.cpp:1602-1640 requires
+    //                                          the SAME nt on both paths)
+    //   their closure (succ.first==.second) -> node1 == node2
+    //
+    // This is a faithful port of Bubble.cpp:300-347 (start: branching node,
+    // every successor PAIR) and Bubble.cpp:509-527 (expand: lockstep walk,
+    // close on node equality), not an approximation of it. Two earlier attempts
+    // this session failed precisely because they lacked this closure test:
+    // chaining ties are exact-match and so blind to heterozygosity
+    // (docs/GRAPH_HARVEST_REFUTED.md), and near-miss pairs have no graph to
+    // walk against so they fall back on a string-flank test that was already
+    // measured net-negative (flank_match_tol, line ~132).
+    //
+    // Opt-in while it is being measured: CAPS_DBG=1.
+    // min1/min2 = the WEAKEST k-mer count along each path. DiscoSNP++ obtains
+    // the equivalent by running kissreads2 as a whole separate pass, mapping
+    // every read back onto every bubble. We do not need that pass: a canonical
+    // k-mer's count in kc IS the number of reads containing it, so walking the
+    // path and taking the minimum gives per-path read support directly. The
+    // minimum rather than the mean because a bubble is only as well supported
+    // as its weakest link -- one unsupported k-mer means no read spans it.
+    struct DbgBubble { std::string flank, path1, path2, lext, rext;
+                       uint32_t cov1, cov2; uint32_t min1, min2; int len; };
+    std::vector<DbgBubble> dbg_bubbles;   // hoisted: also read by DBG-ONLY mode below
+    if (std::getenv("CAPS_DBG") && (looks_diploid || std::getenv("CAPS_DBG_FORCE"))) {
+        auto t_dbg = clk::now();
+        // MINC -- ARCHITECTURAL, NOT TUNED.
+        //
+        // This was previously DERIVED from the k-mer histogram valley (capped
+        // at H/3), which sounds principled and is optimising the wrong thing.
+        // The valley is the right threshold only when the floor is your ONLY
+        // filter. It is not: every bubble is validated downstream against real
+        // reads (the coherence pass). In a two-stage design -- permissive
+        // generation, then evidence-based filtering -- ALL precision must come
+        // from the evidence stage, because precision bought upstream costs
+        // recall that no downstream stage can recover.
+        //
+        // MEASURED, on the window's k-mer count distribution:
+        //     cnt=1      60.4% of nodes   (singleton errors)
+        //     cnt=2-9     3.9%
+        //     cnt>=10    35.6%            (real signal)
+        // Nodes surviving:  >=2: 39.6%   >=3: 38.2%   >=4: 37.8%   >=5: 37.6%
+        // So raising the floor from 2 to 5 removes 5% of nodes -- no
+        // meaningful compute saving -- while deleting exactly the 2-4 count
+        // band where LOW-COVERAGE HETEROZYGOUS ALLELES live. The floor's only
+        // real job is discarding the 60% singletons.
+        //
+        // This also explains a failure of the derived version: it moved UP
+        // (4 -> 5) at full chr20, precisely when more data makes a lower floor
+        // SAFER, because absolute error counts grow and drag the valley with
+        // them. That is the wrong direction for the wrong reason.
+        //
+        // DiscoSNP++ runs -c 3 for the same reason: a permissive graph, with
+        // kissreads2 supplying precision. 2 is the smallest defensible value
+        // ("seen more than once"), so the floor now does only what it should.
+        const uint32_t MINC = std::getenv("CAPS_DBG_MINC")
+                            ? (uint32_t)atoi(std::getenv("CAPS_DBG_MINC"))
+                            : 2u;
+        const int MAXEXT = std::getenv("CAPS_DBG_MAXEXT")
+                            ? atoi(std::getenv("CAPS_DBG_MAXEXT")) : 60;
+        const uint64_t MASK31 = (~0ULL) >> 2;          // 62 bits = 31 bases
+        auto k2s = [](uint64_t v) {                    // 31-mer -> ACGT string
+            std::string s(31, 'N');
+            for (int i = 30; i >= 0; --i) { s[i] = "ACGT"[v & 3ULL]; v >>= 2; }
+            return s;
+        };
+
+        // successors of a FORWARD-oriented 31-mer: shift in each base, test the
+        // canonical form against kc. Returns forward-oriented successors.
+        auto succs = [&](uint64_t fwd, uint64_t out[4], uint32_t cnt[4]) -> int {
+            int n = 0;
+            for (uint64_t b = 0; b < 4; ++b) {
+                const uint64_t nx = ((fwd << 2) | b) & MASK31;
+                const KC* e = kc_find(canon31(nx));
+                if (e && e->cnt >= MINC) { out[n] = nx; cnt[n] = e->cnt; ++n; }
+            }
+            return n;
+        };
+        // Lockstep walk, the direct analogue of Bubble.cpp:509-527. Advances
+        // both paths by the SAME base at each step and stops when they land on
+        // the same node (bubble closed) or when no single common base extends
+        // both (dead end).
+        // Also accumulates the weakest k-mer count seen on each path (see the
+        // DbgBubble comment): this is per-path read support, obtained during
+        // the walk we are already doing rather than from a second pass.
+        // Extension with BOUNDED RECURSION over ambiguous continuations.
+        //
+        // The previous version bailed the instant the two paths had more than
+        // one common successor ("if (++nc > 1) return false"). DiscoSNP++ does
+        // NOT do this: expand() (Bubble.cpp:598) recurses over every successor
+        // pair through expand_heart. So we were MORE permissive than them at
+        // the bubble entrance (no checkBranching) and STRICTLY LESS permissive
+        // during extension -- and the abort counters showed the cost: of 2,628
+        // entrances only 462 closed, 1,856 died mid-walk.
+        //
+        // A node budget bounds the search: branching factor is at most 4 and
+        // depth at most MAXEXT, so unbounded recursion is exponential in the
+        // worst case. The budget is shared across the whole search for one
+        // bubble, so a tangled region gives up quickly instead of exploding.
+        const int WALK_BUDGET = std::getenv("CAPS_DBG_WALKBUDGET")
+                              ? atoi(std::getenv("CAPS_DBG_WALKBUDGET")) : 0;
+        const int MAXPOLY = std::getenv("CAPS_DBG_MAXPOLY")
+                          ? atoi(std::getenv("CAPS_DBG_MAXPOLY")) : 1;
+        // WHY 1 IS STRUCTURAL, not a fitted value. MAXPOLY caps how many EXTRA
+        // differences a single bubble may absorb. At k=31 and human
+        // heterozygosity ~1/1000, the chance a second het site falls inside the
+        // same 31 bp window is small and a third is rare, so 1 already captures
+        // essentially all genuine clustering; larger values mostly admit paths
+        // through repeats. The sweep agrees rather than defines it -- recall
+        // saturates by P=2 (0.808 at both 2 and 3) while false positives keep
+        // rising (F1 0.861 / 0.850 / 0.850 with coherence, 0.828 / 0.794 /
+        // 0.765 without). A genome with much higher heterozygosity would
+        // justify a higher cap, which is the property that makes this a
+        // reasoned bound rather than a benchmark constant.
+        // DiscoSNP++'s own -P default is 3. Measured here, 1 is better on this
+        // data both WITHOUT coherence (F1 0.828 / 0.794 / 0.765 for P=1/2/3)
+        // and WITH it (0.861 / 0.850 / 0.850): recall saturates by P=2 while
+        // false positives keep accumulating. Defaulting to 3 would have made a
+        // bare run silently worse than every number reported for this channel.
+        std::function<bool(uint64_t,uint64_t,std::string&,std::string&,
+                           uint32_t&,uint32_t&,uint64_t&,int,int&,int)> walk_rec;
+        walk_rec = [&](uint64_t n1, uint64_t n2, std::string& e1, std::string& e2,
+                       uint32_t& mn1, uint32_t& mn2, uint64_t& closenode,
+                       int depth, int& budget, int poly) -> bool {
+            if (n1 == n2) { closenode = n1; return true; }     // closed
+            if (depth >= MAXEXT) return false;                 // too long
+            // budget is spent ONLY on ambiguous decisions (see below), so a
+            // clean walk of any length costs nothing and the knob means
+            // "how many tangles may this bubble cross".
+            struct Opt { uint64_t x1, x2; uint32_t k1, k2; char b; };
+            Opt opts[4]; int no = 0;
+            for (uint64_t b = 0; b < 4; ++b) {
+                const uint64_t x1 = ((n1 << 2) | b) & MASK31;
+                const uint64_t x2 = ((n2 << 2) | b) & MASK31;
+                const KC* a = kc_find(canon31(x1));
+                if (!a || a->cnt < MINC) continue;
+                const KC* c = kc_find(canon31(x2));
+                if (!c || c->cnt < MINC) continue;
+                opts[no++] = { x1, x2, a->cnt, c->cnt, "ACGT"[b] };
+            }
+            // MULTI-POLYMORPHISM EXTENSION (DiscoSNP++'s -P, default 3).
+            // If no single base extends BOTH paths, the two haplotypes differ
+            // again within the k-mer window -- a second variant close to the
+            // first. Requiring identical bases at every step kills the bubble
+            // outright, and measurement says that is our single largest source
+            // of missed variants: of 115 missed truth SNVs on HG002 r2, 35
+            // (30%) die exactly here as "dead end".
+            // DiscoSNP++ does not stop: expand_heart is called with
+            // nb_polymorphism+1 over successor pairs carrying DIFFERENT bases
+            // (Bubble.cpp:636), up to max_polymorphism. We benchmark them at
+            // -P 3, so this is a capability we were being measured against
+            // without having ported it.
+            if (no == 0 && poly < MAXPOLY) {
+                for (uint64_t b1 = 0; b1 < 4; ++b1) {
+                    const uint64_t x1 = ((n1 << 2) | b1) & MASK31;
+                    const KC* a = kc_find(canon31(x1));
+                    if (!a || a->cnt < MINC) continue;
+                    for (uint64_t b2 = 0; b2 < 4; ++b2) {
+                        if (b2 == b1) continue;            // same-base case handled above
+                        const uint64_t x2 = ((n2 << 2) | b2) & MASK31;
+                        const KC* c = kc_find(canon31(x2));
+                        if (!c || c->cnt < MINC) continue;
+                        std::string s1 = e1 + "ACGT"[b1], s2 = e2 + "ACGT"[b2];
+                        uint32_t m1 = std::min(mn1, a->cnt), m2 = std::min(mn2, c->cnt);
+                        if (walk_rec(x1, x2, s1, s2, m1, m2, closenode,
+                                     depth + 1, budget, poly + 1)) {
+                            e1 = s1; e2 = s2; mn1 = m1; mn2 = m2;
+                            return true;
+                        }
+                    }
+                }
+            }
+            if (no == 0) return false;                         // dead end
+            if (no > 1 && --budget < 0) return false;          // out of tangle allowance
+            // Try the best-supported continuation first: on a real bubble the
+            // true path carries genuine coverage, so this finds the closure
+            // sooner and spends less budget on error branches.
+            for (int i = 1; i < no; ++i)
+                for (int j = i; j > 0 && std::min(opts[j].k1, opts[j].k2)
+                                       > std::min(opts[j-1].k1, opts[j-1].k2); --j)
+                    std::swap(opts[j], opts[j-1]);
+            for (int i = 0; i < no; ++i) {
+                std::string s1 = e1 + opts[i].b, s2 = e2 + opts[i].b;
+                uint32_t m1 = std::min(mn1, opts[i].k1), m2 = std::min(mn2, opts[i].k2);
+                if (walk_rec(opts[i].x1, opts[i].x2, s1, s2, m1, m2,
+                             closenode, depth + 1, budget, poly)) {
+                    e1 = s1; e2 = s2; mn1 = m1; mn2 = m2;
+                    return true;
+                }
+            }
+            return false;
+        };
+        auto walk = [&](uint64_t n1, uint64_t n2, std::string& e1, std::string& e2,
+                        uint32_t& mn1, uint32_t& mn2, uint64_t& closenode) -> bool {
+            int budget = WALK_BUDGET;
+            return walk_rec(n1, n2, e1, e2, mn1, mn2, closenode, 0, budget, 0);
+        };
+
+        // ── UNITIG EXTENSION ────────────────────────────────────────────────
+        // MEASURED MOTIVATION, not a guess: without this a bubble sequence is
+        // flank(31) + path, mean 63 bp on HG002 r2. bwa cannot place a 63-mer
+        // uniquely in a 63 Mb chromosome, so found bubbles were being lost at
+        // the LIFT rather than at the calling -- 397 bubbles produced only 243
+        // lifted calls. DiscoSNP++ does not have this problem because it
+        // extends each bubble into its surrounding unitig before output
+        // (expand_one_simple_path / its -t traversal); this is a layer where we
+        // were strictly worse than the tool we are competing with.
+        //
+        // Extension walks the graph while the path is UNAMBIGUOUS -- exactly
+        // one successor (or predecessor) above the coverage floor -- which is
+        // the standard unitig definition. It stops at the first junction, so it
+        // never invents sequence across a decision point.
+        const int MAXFLANK = std::getenv("CAPS_DBG_FLANK")
+                           ? atoi(std::getenv("CAPS_DBG_FLANK")) : 1000;
+        // 1000 is what every validated Method B measurement used. Extension
+        // length is mapping-only (measured neutral on F1), but the default must
+        // match the tested configuration or a bare run is not the tested one.
+        // ── TIP DETECTION ───────────────────────────────────────────────────
+        // A sequencing error near the end of a read creates a short DEAD END
+        // in the graph -- a "tip". The assembly literature is explicit that
+        // such error branches are STERILE: they do not reconnect to anything.
+        // Our traversals stop the moment a node has more than one successor,
+        // so before this they were halting at noise rather than at real
+        // branch points, which is why unitig extension reached only 238 bp and
+        // why 46-66% of bubbles failed to chain (measured: 34% chained on r2,
+        // 54% on r3 -- the rate is data-dependent, so a fixed assumption about
+        // it would not generalise).
+        //
+        // is_tip walks a candidate branch and reports whether it dies within
+        // TIPLEN steps. That is a MEASURED property of the branch, not a
+        // tuned constant: real sequence continues, error branches do not.
+        const int TIPLEN = std::getenv("CAPS_DBG_TIPLEN")
+                         ? atoi(std::getenv("CAPS_DBG_TIPLEN")) : 3 * 31;
+        std::function<bool(uint64_t,int)> is_tip = [&](uint64_t node, int budget) -> bool {
+            for (int i = 0; i < budget; ++i) {
+                int nb = 0; uint64_t pick = 0;
+                for (uint64_t b = 0; b < 4; ++b) {
+                    const uint64_t w = ((node << 2) | b) & MASK31;
+                    const KC* e = kc_find(canon31(w));
+                    if (e && e->cnt >= MINC) { ++nb; pick = w; }
+                }
+                if (nb == 0) return true;            // died: it is a tip
+                if (nb > 1)  return false;           // branches again: real structure
+                node = pick;
+            }
+            return false;                            // survived the budget: real
+        };
+        // Successors with sterile tips removed. Returns the count of surviving
+        // branches; a junction that is really one real path plus error tips
+        // collapses to 1 and traversal continues through it.
+        auto succs_live = [&](uint64_t fwd, uint64_t out[4], uint32_t cnt[4]) -> int {
+            uint64_t raw[4]; uint32_t rc_[4];
+            const int n = succs(fwd, raw, rc_);
+            if (n <= 1) { for (int i = 0; i < n; ++i) { out[i] = raw[i]; cnt[i] = rc_[i]; } return n; }
+            int k = 0;
+            for (int i = 0; i < n; ++i)
+                if (!is_tip(raw[i], TIPLEN)) { out[k] = raw[i]; cnt[k] = rc_[i]; ++k; }
+            // If every branch looked like a tip, keep the original set rather
+            // than silently deleting a real (if short) structure.
+            if (k == 0) { for (int i = 0; i < n; ++i) { out[i] = raw[i]; cnt[i] = rc_[i]; } return n; }
+            return k;
+        };
+
+        auto ext_right = [&](uint64_t node, int maxlen) {
+            std::string s;
+            for (int i = 0; i < maxlen; ++i) {
+                uint64_t so_[4]; uint32_t sc_[4];
+                if (succs_live(node, so_, sc_) != 1) break;   // real junction or dead end
+                s += "ACGT"[so_[0] & 3ULL]; node = so_[0];
+            }
+            return s;
+        };
+        auto ext_left = [&](uint64_t node, int maxlen) {
+            // predecessor: prepend a base and drop the last one. pack31 puts
+            // base 0 in bits 60-61, so that is (node >> 2) | (b << 60).
+            std::string s;
+            for (int i = 0; i < maxlen; ++i) {
+                int nb = 0; uint64_t pick = 0, pb = 0;
+                for (uint64_t b = 0; b < 4; ++b) {
+                    const uint64_t w = (node >> 2) | (b << 60);
+                    const KC* e = kc_find(canon31(w));
+                    if (e && e->cnt >= MINC) { if (++nb > 1) break; pick = w; pb = b; }
+                }
+                if (nb != 1) break;
+                s += "ACGT"[pb]; node = pick;
+            }
+            std::reverse(s.begin(), s.end());          // walked backwards
+            return s;
+        };
+
+        // ── SUPERBUBBLE SEARCH (CAPS_DBG_SB=1) ──────────────────────────────
+        // Strictly generalises the pairwise lockstep walk above, which is a
+        // faithful port of DiscoSNP++ (Bubble.cpp:509-527) and inherits two
+        // hard limits from it:
+        //   * EXACTLY TWO alleles -- it advances a pair of nodes in lockstep;
+        //   * NO INDELS -- lockstep requires the SAME base to extend both
+        //     paths, so two paths of different length cannot be represented.
+        //     DiscoSNP++ needs an entirely separate breadth-first procedure
+        //     (start_indel_prediction, Bubble.cpp:200-270) to get indels at all.
+        //
+        // A superbubble (Onodera et al. 2013) is defined by a single entrance s
+        // and single exit t such that every path leaving s stays inside until
+        // it reaches t. Enumerating the paths s->t yields the alleles directly:
+        // any number of them, of any lengths. One operation replaces seeding +
+        // extension + closure, and covers SNVs, indels and multi-allelic sites
+        // together.
+        //
+        // COST CONTROL, and why this is exact rather than a shortcut: a
+        // superbubble's entrance must have out-degree >= 2, so restricting the
+        // search to branching nodes loses nothing. Global enumeration is what
+        // makes tools like BubbleGun expensive (~25 min / 22 GB on a 22M-node
+        // human graph); starting only from the 2,894 branching nodes in this
+        // window, with a bounded walk per branch, keeps it in the same
+        // fractions of a second the pairwise walk costs.
+        const bool WANT_SB = std::getenv("CAPS_DBG_SB") != nullptr;
+        const int SB_MAXPATH = std::getenv("CAPS_DBG_SBLEN")
+                             ? atoi(std::getenv("CAPS_DBG_SBLEN")) : 60;
+        // node budget per superbubble search; bounds worst-case work
+        const int SB_BUDGET = std::getenv("CAPS_DBG_SBBUDGET")
+                            ? atoi(std::getenv("CAPS_DBG_SBBUDGET")) : 200;
+        struct SbAllele { std::string seq; uint32_t minsup; };
+        // entry/exit node ids are kept so consecutive superbubbles can be
+        // CHAINED (see the bubble-chain block after the scan).
+        struct SbSite { std::string flank, lext, rext; std::vector<SbAllele> alleles;
+                        uint64_t entry = 0, exit = 0; };
+        std::vector<SbSite> sb_sites;
+        // Follow one branch as a unitig, stopping at the first junction, and
+        // record every node visited with the sequence that reached it.
+        auto branch_walk = [&](uint64_t start, char firstbase,
+                               std::vector<std::pair<uint64_t,std::string>>& trace,
+                               uint32_t seedcnt) -> uint32_t {
+            uint32_t mn = seedcnt;
+            uint64_t node = start;
+            std::string acc(1, firstbase);
+            trace.emplace_back(node, acc);
+            for (int i = 0; i < SB_MAXPATH; ++i) {
+                uint64_t so_[4]; uint32_t sc_[4];
+                if (succs_live(node, so_, sc_) != 1) break;   // real junction or dead end
+                if (sc_[0] < mn) mn = sc_[0];
+                acc += "ACGT"[so_[0] & 3ULL];
+                node = so_[0];
+                trace.emplace_back(node, acc);
+            }
+            return mn;
+        };
+
+        // Predecessors (tip-filtered), needed for the "all parents visited"
+        // condition of the real superbubble algorithm.
+        auto preds_live = [&](uint64_t fwd, uint64_t out[4]) -> int {
+            int n = 0;
+            for (uint64_t b = 0; b < 4; ++b) {
+                const uint64_t w = (fwd >> 2) | (b << 60);
+                const KC* e = kc_find(canon31(w));
+                if (e && e->cnt >= MINC) out[n++] = w;
+            }
+            return n;
+        };
+        // ── ONODERA SUPERBUBBLE DETECTION (faithful port) ───────────────────
+        // Reference: BubbleGun/find_bubbles.py, implementing Onodera et al.
+        // 2013. The earlier version here walked each branch as a unitig and
+        // took the earliest node all branches reached -- that is NOT this
+        // algorithm. It stops at any junction, so it can only ever find
+        // parallel simple paths and never explores a structure with internal
+        // branching (which is why multi-allelic sites came out as 0).
+        //
+        // The load-bearing condition is "a node enters the frontier only once
+        // ALL of its parents have been visited". That is what allows nodes
+        // reachable by several internal paths to be handled correctly.
+        //   S      = frontier: discovered AND all parents visited
+        //   seen   = discovered but not yet ready
+        //   sink   = |S| == 1 and |seen| == 0  (only the exit remains)
+        // Aborts on a tip (no successors) or on returning to the entrance.
+        // abort-reason counters: 2,628 branching nodes yield only 282 bubbles,
+        // so ~89% fail somewhere. Which reason dominates decides where the
+        // missing recall is (ours 0.468 vs DiscoSNP++ 0.763 from the same
+        // k-mer set), rather than guessing.
+        size_t ab_tip = 0, ab_cycle = 0, ab_budget = 0, ab_exhaust = 0, ab_ok = 0;
+        auto find_sb = [&](uint64_t s0, uint64_t& t_out) -> bool {
+            std::unordered_set<uint64_t> visited, seen;
+            std::vector<uint64_t> S; S.push_back(s0);
+            int guard = 0;
+            while (!S.empty()) {
+                if (++guard > SB_BUDGET) { ++ab_budget; return false; }
+                const uint64_t v = S.back(); S.pop_back();
+                visited.insert(v); seen.erase(v);
+                uint64_t ch[4]; uint32_t cc[4];
+                const int nc = succs_live(v, ch, cc);
+                if (nc == 0) { ++ab_tip; return false; }   // tip
+                for (int i = 0; i < nc; ++i) {
+                    const uint64_t u = ch[i];
+                    if (u == s0) { ++ab_cycle; return false; }  // cycle back to entrance
+                    if (visited.count(u)) continue;
+                    uint64_t pa[4];
+                    const int np = preds_live(u, pa);
+                    bool allv = true;
+                    for (int j = 0; j < np; ++j)
+                        if (!visited.count(pa[j])) { allv = false; break; }
+                    if (allv) { S.push_back(u); seen.erase(u); }
+                    else seen.insert(u);
+                }
+                if (S.size() == 1 && seen.empty()) { t_out = S[0]; ++ab_ok; return true; }
+            }
+            ++ab_exhaust;
+            return false;
+        };
+        // BOTH ORIENTATIONS. kc stores CANONICAL k-mers, so each entry stands
+        // for BOTH strands -- the graph is bidirected and every node has two
+        // sides. Extending node.kmer as though it were forward sequence
+        // explores only the side the canonical form happens to match; for the
+        // ~half of nodes whose canonical form is the reverse complement that
+        // is the wrong side, and no bubble is ever found from them.
+        // GATB carries an explicit strand on every Node and normalises with
+        // `(strand == STRAND_FORWARD) ? val : revcomp(val)` (Graph.cpp:1599).
+        // This code had no notion of strand at all, which is the single
+        // largest reason graph-only recall (0.512) trailed DiscoSNP++'s
+        // (0.763) on the very same k-mer set.
+        // PARALLEL. Every node is examined independently: kc, MINC and the
+        // walk lambdas are read-only, and the only shared writes are the
+        // bubble list (accumulated per-thread, concatenated once) and the
+        // branching counter (a reduction). Bubble ORDER changes, which is
+        // harmless -- each bubble is self-contained and downstream code
+        // addresses them by index into the same vector it dumps.
+        // WANT_SB is left on the serial path: find_sb's abort counters are
+        // shared diagnostics and superbubble mode is not the default.
+        size_t branching = 0;
+        #pragma omp parallel if(!WANT_SB)
+        {
+        std::vector<DbgBubble> local_bubbles;
+        #pragma omp for schedule(dynamic, 2048) reduction(+:branching) nowait
+        for (long long ni = 0; ni < (long long)kc.size(); ++ni) {
+            const KC& node0 = kc[(size_t)ni];
+            if (node0.cnt < MINC) continue;
+            for (int orient = 0; orient < 2; ++orient) {
+            KC node = node0;
+            if (orient) {
+                node.kmer = rc31(node0.kmer);
+                if (node.kmer == node0.kmer) continue;      // palindrome: one side only
+            }
+            uint64_t so[4]; uint32_t sc[4];
+            const int ns = succs(node.kmer, so, sc);
+            if (ns < 2) continue;
+            ++branching;
+
+            // ── superbubble path: all branches at once, any lengths ─────────
+            if (WANT_SB) {
+                std::vector<std::vector<std::pair<uint64_t,std::string>>> traces(ns);
+                std::vector<uint32_t> mins(ns);
+                for (int i = 0; i < ns; ++i)
+                    mins[i] = branch_walk(so[i], "ACGT"[so[i] & 3ULL], traces[i], sc[i]);
+                // The exit t is the earliest node every branch reaches. Taking
+                // the EARLIEST keeps the variable region minimal, which is the
+                // minimality condition in the superbubble definition.
+                uint64_t bestT = 0; size_t bestCost = SIZE_MAX;
+                std::vector<std::string> bestSeq;
+                // Locate the exit with the REAL superbubble algorithm
+                // (find_sb, the Onodera/BubbleGun port), then read each
+                // allele's string off the branch trace that reaches it.
+                // The previous version picked "the earliest node every branch
+                // reaches", which is an approximation: it ignores the
+                // all-parents-visited condition and therefore never explores a
+                // structure with internal branching.
+                uint64_t sbT = 0;
+                if (find_sb(node.kmer, sbT)) {
+                    std::vector<std::string> seqs_;
+                    bool ok = true;
+                    for (int i = 0; i < ns && ok; ++i) {
+                        bool found = false;
+                        for (size_t p = 0; p < traces[i].size(); ++p)
+                            if (traces[i][p].first == sbT) {
+                                seqs_.push_back(traces[i][p].second); found = true; break;
+                            }
+                        if (!found) ok = false;
+                    }
+                    if (ok && seqs_.size() == (size_t)ns) {
+                        bestT = sbT; bestCost = 0; bestSeq = seqs_;
+                    }
+                }
+                if (bestCost != SIZE_MAX && bestSeq.size() == (size_t)ns) {
+                    // Distinct allele sequences only: if every branch spells the
+                    // same string this is not a variant, just a graph artefact.
+                    std::set<std::string> uniq(bestSeq.begin(), bestSeq.end());
+                    if (uniq.size() >= 2) {
+                        SbSite st;
+                        st.flank = k2s(node.kmer);
+                        st.lext  = ext_left(node.kmer, MAXFLANK);
+                        st.rext  = ext_right(bestT, MAXFLANK);
+                        st.entry = node.kmer; st.exit = bestT;
+                        for (int i = 0; i < ns; ++i)
+                            st.alleles.push_back({bestSeq[i], mins[i]});
+                        sb_sites.push_back(std::move(st));
+                    }
+                }
+                continue;                        // superbubble replaces the pairwise walk
+            }
+
+            for (int i = 0; i < ns; ++i)
+                for (int j = i + 1; j < ns; ++j) {
+                    // REFUTED: a cheap coverage-ratio reject before the walk.
+                    // Rationale was sound -- 1,226,535 branching nodes yield only
+                    // 111,499 bubbles, so 91% of walks are wasted and traversal is
+                    // 55.5 s of 98.5 s. But measured at full chr20 it changed
+                    // nothing (98.7 s vs 98.5 s, traversal 55.25 s vs 55.48 s) and
+                    // cost 300 bubbles. Reason: the test was gated on ns > 2, and
+                    // almost every branching node has exactly 2 successors, so it
+                    // essentially never fired. The waste is not in walks that a
+                    // coverage test can predict -- it is in walks that fail to
+                    // CLOSE, which is only knowable by walking.
+                    std::string e1, e2;
+                    uint32_t mn1 = sc[i], mn2 = sc[j];   // seed with the branch bases
+                    uint64_t closenode = 0;
+                    if (!walk(so[i], so[j], e1, e2, mn1, mn2, closenode)) continue;
+                    // The two divergent first bases plus the shared closing
+                    // extension: this is the bubble's variable region.
+                    DbgBubble bb;
+                    bb.flank = k2s(node.kmer);
+                    bb.path1 = std::string(1, "ACGT"[so[i] & 3ULL]) + e1;
+                    bb.path2 = std::string(1, "ACGT"[so[j] & 3ULL]) + e2;
+                    bb.cov1 = sc[i]; bb.cov2 = sc[j];
+                    bb.min1 = mn1;   bb.min2 = mn2;
+                    bb.len = (int)e1.size();
+                    bb.lext = ext_left(node.kmer, MAXFLANK);
+                    bb.rext = ext_right(closenode, MAXFLANK);
+                    local_bubbles.push_back(std::move(bb));
+                }
+            }   // end orientation loop
+        }
+        #pragma omp critical(dbgbub)
+        for (auto& b : local_bubbles) dbg_bubbles.push_back(std::move(b));
+        }   // end parallel
+        // ── READ-COHERENCE: the fragment must exist in REAL READS ───────────
+        // THE FP MECHANISM, named in this repo's own docs: a CHIMERIC JUNCTION.
+        // Every k-mer along a bubble path can be present in kc while the FULL
+        // path exists in no single read -- each k-mer contributed by a
+        // different read, joined at a shared anchor. k-mer counts are blind to
+        // this by construction, which is why our precision (0.865) trails
+        // DiscoSNP++'s (0.951) even though our recall is now higher.
+        //
+        // eBWT2SNP's precision guarantee is exactly this test: every emitted
+        // fragment of length 2k+1 must be an actual SUBSTRING of at least C
+        // real reads. DiscoSNP++ gets the equivalent from kissreads2, a whole
+        // separate tool that maps every read back onto every bubble.
+        //
+        // WE DO NOT NEED THAT TOOL. The reads are already in memory (`seqs`),
+        // so one pass with a small probe index gives a stronger check than
+        // theirs at a fraction of the cost: index each bubble by the 31-mer
+        // SPANNING its variant, sweep the reads once, and verify the full
+        // fragment really occurs. This is a case where having the reads
+        // resident -- a consequence of being a compressor -- buys something a
+        // standalone caller has to pay a separate pass for.
+        if (!std::getenv("CAPS_DBG_NOCOH") && !dbg_bubbles.empty()) {
+            auto t_coh = clk::now();
+            // COHC -- required read support -- DERIVED FROM MEASURED COVERAGE.
+            //
+            // This was a constant 2, swept on HG002 r2 at 30x. That does not
+            // generalise: "how many reads must contain this fragment" scales
+            // with depth. At 10x, 2 reads is a large fraction of a haplotype's
+            // coverage and the filter becomes punitive; at 100x, 2 reads is
+            // noise and the filter stops filtering.
+            //
+            // H is the measured haploid k-mer depth (the single-copy histogram
+            // peak, computed above). A heterozygous allele is covered by ~H
+            // reads, so requiring a small FRACTION of H tracks the data.
+            // H/10 with a floor of 2 reproduces the swept value exactly at
+            // this benchmark's depth (H=20 -> 2) while adapting elsewhere,
+            // which is what makes it a formula rather than a fitted constant
+            // that happens to be right once.
+            //
+            // NOTE the contrast with MINC, where a per-dataset derivation
+            // (the k-mer histogram valley) generalised WORSE than a structural
+            // constant: it drifted upward at full scale and cost 0.057 recall.
+            // Derivation is right when the quantity genuinely scales with the
+            // data -- read support does, the singleton-error floor does not.
+            const int COHC = std::getenv("CAPS_DBG_COHC")
+                           ? atoi(std::getenv("CAPS_DBG_COHC"))
+                           : std::max(2, (int)(H / 10));
+            // Minimum phred for a read's variant base to count as support.
+            // 20 = 1% error probability, the standard confident-base cutoff.
+            const int MINQ = std::getenv("CAPS_DBG_MINQ")
+                           ? atoi(std::getenv("CAPS_DBG_MINQ")) : 20;
+            const int HALFW = 31;                       // fragment = 2k+1 around variant
+            struct Probe { uint32_t bi; uint8_t path; };
+            std::unordered_map<uint64_t, std::vector<Probe>> probe;
+            std::vector<std::string> frag1(dbg_bubbles.size()), frag2(dbg_bubbles.size());
+            for (uint32_t bi = 0; bi < (uint32_t)dbg_bubbles.size(); ++bi) {
+                const DbgBubble& b = dbg_bubbles[bi];
+                if (b.flank.size() < 31 || b.path1.empty() || b.path2.empty()) continue;
+                // fragment: left context (flank) + path + right context (rext)
+                const std::string base = b.flank + b.path1 + b.rext;
+                const std::string alt  = b.flank + b.path2 + b.rext;
+                const size_t vpos = 31;                 // variant offset in both
+                const size_t lo = (vpos >= (size_t)HALFW) ? vpos - HALFW : 0;
+                const size_t w1 = std::min(base.size() - lo, (size_t)(2 * HALFW + 1));
+                const size_t w2 = std::min(alt.size()  - lo, (size_t)(2 * HALFW + 1));
+                if (w1 < 32 || w2 < 32) continue;
+                frag1[bi] = base.substr(lo, w1);
+                frag2[bi] = alt.substr(lo, w2);
+                // key on the 31-mer spanning the variant on each path
+                uint64_t k1, k2;
+                const size_t koff = vpos - lo;
+                if (koff + 31 <= frag1[bi].size() && pack31(frag1[bi].data() + koff, k1))
+                    probe[canon31(k1)].push_back({bi, 1});
+                if (koff + 31 <= frag2[bi].size() && pack31(frag2[bi].data() + koff, k2))
+                    probe[canon31(k2)].push_back({bi, 2});
+            }
+            fprintf(stderr, "[DBG-RSS] probe built: %ldMB  probe_keys=%zu\n", rss_kb()/1024, probe.size());
+            std::vector<uint32_t> sup1(dbg_bubbles.size(), 0), sup2(dbg_bubbles.size(), 0);
+            // per-position coverage, capped so memory stays bounded
+            // ONE pass over the reads, both strands.
+            // PARALLEL. `probe`, `frag1/2` and `seqs` are read-only here; the
+            // only writes are the two support counters, which each thread
+            // accumulates privately and adds in at the end. Addition is
+            // commutative, so the totals are identical to the serial sweep.
+            // Per-thread arrays are one uint32 per bubble (a few hundred), so
+            // the extra memory is negligible.
+            #pragma omp parallel
+            {
+                std::vector<uint32_t> t1(dbg_bubbles.size(), 0), t2(dbg_bubbles.size(), 0);
+                std::string ubuf3;
+                #pragma omp for schedule(dynamic, 256)
+                for (long long ri = 0; ri < (long long)seqs.size(); ++ri) {
+                    const std::string& q = unpack_read(seqs[(size_t)ri], ubuf3);
+                    if (q.size() < 31) continue;
+                    const std::string qr = rc_str(q);
+                    for (int strand = 0; strand < 2; ++strand) {
+                        const std::string& r = strand ? qr : q;
+                        for (size_t off = 0; off + 31 <= r.size(); ++off) {
+                            uint64_t v;
+                            if (!pack31(r.data() + off, v)) continue;
+                            auto it = probe.find(canon31(v));
+                            if (it == probe.end()) continue;
+                            for (const Probe& pr : it->second) {
+                                const std::string& f = (pr.path == 1) ? frag1[pr.bi] : frag2[pr.bi];
+                                if (f.empty()) continue;
+                                const size_t mp = r.find(f);
+                                if (mp == std::string::npos) continue;
+                                // ── QUALITY-AWARE SUPPORT ───────────────────
+                                // kissreads2 scores each bubble path by read
+                                // coverage AND average phred; we were counting
+                                // containment only, and ignoring `quals`
+                                // entirely even though it is passed in. A
+                                // sequencing error is a low-quality base by
+                                // definition, so a read whose variant base is
+                                // low quality is not evidence for that allele.
+                                // This is the discriminator that separates a
+                                // real low-coverage het allele (few reads, high
+                                // quality) from an error (few reads, low
+                                // quality) -- something a coverage floor cannot
+                                // do at all, which is why precision has to live
+                                // here rather than upstream.
+                                if (MINQ > 0 && ri < (long long)quals.size()) {
+                                    // quals arrives as a BITMAP (1 bit/base,
+                                    // set when the base cleared MINQ) -- the
+                                    // encoder packs it because this is the only
+                                    // question asked of it, and full phred
+                                    // strings cost 2.27 GB at full chr20
+                                    // against 233 MB packed.
+                                    const std::string& qs = quals[(size_t)ri];
+                                    const size_t need = (q.size() + 7) >> 3;
+                                    if (qs.size() == need) {
+                                        const size_t off_in_read = mp + 31;
+                                        if (off_in_read < r.size()) {
+                                            const size_t qi = strand
+                                                ? (q.size() - 1 - off_in_read)
+                                                : off_in_read;
+                                            if ((qi >> 3) < qs.size() &&
+                                                !((qs[qi >> 3] >> (qi & 7)) & 1)) continue;
+                                        }
+                                    }
+                                }
+                                if (pr.path == 1) ++t1[pr.bi]; else ++t2[pr.bi];
+                            }
+                        }
+                    }
+                }
+                #pragma omp critical(cohsup)
+                for (size_t i = 0; i < sup1.size(); ++i) { sup1[i] += t1[i]; sup2[i] += t2[i]; }
+            }
+            size_t killed = 0;
+            std::vector<DbgBubble> keep;
+            keep.reserve(dbg_bubbles.size());
+            // REFUTED: a per-position coverage test, ported from kissreads2
+            // (fragment.cpp:86-91, "for(i..stop) if(local_coverage[i]<min)
+            // return false"). It measured EXACTLY no change at full chr20
+            // (kept=111,499 killed=44,248, identical), and the reason is
+            // structural, not a bug: our counter only increments after
+            // r.find(f) succeeds -- i.e. after a read already contains the
+            // WHOLE fragment -- so every position necessarily has the same
+            // count as the containment tally and the test cannot ever fire.
+            // kissreads2 differs in that reads OVERLAPPING a fragment
+            // partially still contribute coverage to the positions they span,
+            // which is what exposes a thin interior position. Reproducing that
+            // needs partial-overlap alignment, not a stricter test over the
+            // counts we already have.
+            for (uint32_t bi = 0; bi < (uint32_t)dbg_bubbles.size(); ++bi) {
+                if ((int)sup1[bi] >= COHC && (int)sup2[bi] >= COHC) keep.push_back(dbg_bubbles[bi]);
+                else ++killed;
+            }
+            dbg_bubbles.swap(keep);
+            fprintf(stderr, "[DBG-RSS] after coherence: %ldMB\n", rss_kb()/1024);
+            fprintf(stderr, "[DBG-COH] C=%d kept=%zu killed=%zu  %.2fs\n",
+                    COHC, dbg_bubbles.size(), killed, elapsed_s(t_coh, clk::now()));
+        }
+
+        // ── BUBBLE CHAINING ─────────────────────────────────────────────────
+        // WHY, and this is a measured motivation rather than a design
+        // preference. Emitting each bubble as its own short sequence produced
+        // a mean 63 bp dcontig; extending each one into its unitig only
+        // reached 238 bp and moved F1 not at all (0.914 -> 0.913). The reason
+        // is in the assembly literature rather than in our code: unitigs
+        // "break at heterozygotes", so in a heterozygous genome the very next
+        // junction that stops the extension IS the next variant. Unitigs are
+        // the wrong extension unit for het data.
+        //
+        // A BUBBLE CHAIN is the right one: BubbleGun defines it as a linear
+        // stretch of bubbles where the sink of one is the source of the next.
+        // Extending THROUGH consecutive bubbles instead of stopping at them
+        // gives a genuinely long, uniquely-mappable sequence carrying several
+        // variants -- which fixes the mapping problem and the closure
+        // granularity in one change. It is also what makes phasing possible at
+        // all (PHASM builds haplotypes exactly this way), since consecutive
+        // bubbles spanned by the same reads are by definition linked.
+        //
+        // Implementation: index sites by entry node; a site whose right unitig
+        // extension lands on another site's entry node is its successor. Walk
+        // each maximal chain once, marking members consumed.
+        if (WANT_SB && !sb_sites.empty() && !std::getenv("CAPS_DBG_NOCHAIN")) {
+            std::unordered_map<uint64_t, size_t> by_entry;
+            for (size_t i = 0; i < sb_sites.size(); ++i)
+                by_entry.emplace(sb_sites[i].entry, i);
+            // Where does a site's right extension end up? Re-walk it and note
+            // the node reached; if that is another site's entry, they chain.
+            auto right_endpoint = [&](uint64_t from, int maxlen) {
+                uint64_t node = from;
+                for (int i = 0; i < maxlen; ++i) {
+                    uint64_t so_[4]; uint32_t sc_[4];
+                    if (succs_live(node, so_, sc_) != 1) break;
+                    node = so_[0];
+                    if (by_entry.count(node)) return node;   // reached a bubble entry
+                }
+                return (uint64_t)0;
+            };
+            std::vector<int> nextOf(sb_sites.size(), -1);
+            std::vector<char> hasPrev(sb_sites.size(), 0);
+            for (size_t i = 0; i < sb_sites.size(); ++i) {
+                const uint64_t hit = right_endpoint(sb_sites[i].exit, MAXFLANK);
+                if (!hit) continue;
+                auto it = by_entry.find(hit);
+                if (it == by_entry.end() || it->second == i) continue;
+                nextOf[i] = (int)it->second;
+                hasPrev[it->second] = 1;
+            }
+            size_t chains = 0, chained_sites = 0, maxlen_chain = 0;
+            for (size_t i = 0; i < sb_sites.size(); ++i) {
+                if (hasPrev[i] || nextOf[i] < 0) continue;    // not a chain head
+                size_t len = 1;
+                for (int c = nextOf[i]; c >= 0; c = nextOf[c]) {
+                    if (++len > sb_sites.size()) break;       // cycle guard
+                }
+                ++chains; chained_sites += len;
+                if (len > maxlen_chain) maxlen_chain = len;
+            }
+            fprintf(stderr, "[DBG-CHAIN] chains=%zu sites_in_chains=%zu longest=%zu of %zu sites\n",
+                    chains, chained_sites, maxlen_chain, sb_sites.size());
+        }
+
+        // Superbubble sites become DbgBubble records so everything downstream
+        // (dcontig dump, VCF emission, the balance filter) is shared. An indel
+        // is expressed exactly as VCF wants it: the flank's last base as the
+        // anchor, then the two differing allele strings.
+        if (WANT_SB) {
+            size_t n_snv_sb = 0, n_ind_sb = 0, n_multi = 0, n_ind_drop = 0;
+            for (auto& st : sb_sites) {
+                if (st.alleles.size() > 2) ++n_multi;
+                // pair every allele against the first: allele 0 is the
+                // reference-side path by convention, resolved later by the lift
+                for (size_t a = 1; a < st.alleles.size(); ++a) {
+                    const std::string& s0 = st.alleles[0].seq;
+                    const std::string& s1 = st.alleles[a].seq;
+                    if (s0 == s1) continue;
+                    DbgBubble bb;
+                    bb.flank = st.flank; bb.lext = st.lext; bb.rext = st.rext;
+                    bb.path1 = s0; bb.path2 = s1;
+                    bb.cov1 = st.alleles[0].minsup; bb.cov2 = st.alleles[a].minsup;
+                    bb.min1 = st.alleles[0].minsup; bb.min2 = st.alleles[a].minsup;
+                    bb.len  = (int)std::max(s0.size(), s1.size());
+                    const bool is_indel = (s0.size() != s1.size());
+                    if (!is_indel) ++n_snv_sb; else ++n_ind_sb;
+                    // INDEL EMISSION IS OFF BY DEFAULT -- MEASURED, NOT ASSUMED.
+                    // The superbubble genuinely FINDS real indels: held-out
+                    // indel TP rose on every window (r3 33->41, na 35->37,
+                    // r4 18->25, r5 30->34). But it adds far more false
+                    // positives than it recovers, and held-out indel F1 falls
+                    // on 3 of 4 windows:
+                    //     r3 0.518->0.471   na 0.654->0.514
+                    //     r4 0.522->0.575   r5 0.659->0.586   mean -0.051
+                    // An earlier tuning-window reading suggested +0.012, but
+                    // that depended on a fitted MINC=3 and did not survive
+                    // held-out testing -- two independent reasons to distrust
+                    // it, both measured. The machinery stays (it is what lifts
+                    // SNV precision 0.925 -> 0.957); only the indel OUTPUT is
+                    // gated, behind CAPS_DBG_INDEL=1 for further work.
+                    // NOTE the test that matters is the shape of the EMITTED
+                    // RECORD, not the path lengths. Two same-length paths can
+                    // still differ at several positions (e.g. ACGT vs TGCA);
+                    // those are emitted as a multi-base REF/ALT, which vcfeval
+                    // scores as an INDEL. Gating on s0.size()!=s1.size() alone
+                    // let 23 such records through per window and was why indel
+                    // F1 fell on all five windows even with "indels disabled".
+                    const bool clean_snv =
+                        (s0.size() == s1.size() && !s0.empty() && s0[0] != s1[0] &&
+                         s0.compare(1, std::string::npos, s1, 1, std::string::npos) == 0);
+                    if (!clean_snv && !std::getenv("CAPS_DBG_INDEL")) { ++n_ind_drop; continue; }
+                    (void)is_indel;
+                    dbg_bubbles.push_back(std::move(bb));
+                }
+            }
+            fprintf(stderr, "[DBG-SB] sites=%zu -> records=%zu (same-len=%zu diff-len/INDEL=%zu[dropped=%zu] multiallelic_sites=%zu)\n",
+                    sb_sites.size(), dbg_bubbles.size(), n_snv_sb, n_ind_sb, n_ind_drop, n_multi);
+        }
+        if (const char* kd = std::getenv("CAPS_DBG_DUMPKC")) {
+            if (FILE* kf = fopen(kd, "w")) {
+                for (const KC& e : kc) fprintf(kf, "%llu\t%u\n",
+                    (unsigned long long)e.kmer, e.cnt);
+                fclose(kf);
+                fprintf(stderr, "[DBG] kc dumped (%zu) -> %s\n", kc.size(), kd);
+            }
+        }
+        fprintf(stderr, "[DBG-RSS] after traversal: %ldMB  bubbles=%zu\n", rss_kb()/1024, dbg_bubbles.size());
+        fprintf(stderr, "[DBG-ABORT] ok=%zu tip=%zu cycle=%zu budget=%zu exhausted=%zu\n",
+                ab_ok, ab_tip, ab_cycle, ab_budget, ab_exhaust);
+        fprintf(stderr, "[DBG] kc nodes=%zu  branching=%zu  bubbles=%zu  minc=%u  %.2fs\n",
+                kc.size(), branching, dbg_bubbles.size(), MINC,
+                elapsed_s(t_dbg, clk::now()));
+        // Optional FASTA dump, in DiscoSNP++'s own output shape (its -T path
+        // writes bubble sequences and maps them with bwa). Diagnostics only --
+        // the pipeline itself does NOT go through an aligner; see below.
+        if (const char* bf = std::getenv("CAPS_DBG_FA")) {
+            if (FILE* f = fopen(bf, "w")) {
+                size_t id = 0;
+                for (const auto& b : dbg_bubbles) {
+                    fprintf(f, ">bubble_%zu_path1 cov=%u len=%d\n%s%s\n",
+                            id, b.cov1, b.len, b.flank.c_str(), b.path1.c_str());
+                    fprintf(f, ">bubble_%zu_path2 cov=%u len=%d\n%s%s\n",
+                            id, b.cov2, b.len, b.flank.c_str(), b.path2.c_str());
+                    ++id;
+                }
+                fclose(f);
+                fprintf(stderr, "[DBG] bubbles -> %s\n", bf);
+            }
+        }
+
+        // ── ANCHOR EACH BUBBLE ONTO A CONTIG ────────────────────────────────
+        // The bubbles are found in k-mer space, but every other channel emits
+        // in CONTIG coordinates, and that is what the rest of the pipeline
+        // (lift, dedup, scoring) consumes. Anchoring uses no aligner and no new
+        // index: the bubble's branching node is a 31-mer, so one pass over the
+        // contigs -- which are already in memory -- finds where it sits.
+        //
+        // Both orientations are handled by keying on the canonical form, the
+        // same convention kc itself uses, and recovering strand at the hit.
+        {
+            std::unordered_map<uint64_t, uint32_t> flank2bub;
+            flank2bub.reserve(dbg_bubbles.size() * 2);
+            for (uint32_t bi = 0; bi < (uint32_t)dbg_bubbles.size(); ++bi) {
+                uint64_t v;
+                if (!pack31(dbg_bubbles[bi].flank.data(), v)) continue;
+                flank2bub.emplace(canon31(v), bi);      // first hit wins
+            }
+            size_t anchored = 0, emitted = 0;
+            std::vector<uint8_t> used(dbg_bubbles.size(), 0);
+            for (uint32_t ci = 0; ci < (uint32_t)cd.contigs.size(); ++ci) {
+                const std::string& c = cd.contigs[ci];
+                if (c.size() < 32) continue;
+                for (size_t p = 0; p + 31 <= c.size(); ++p) {
+                    uint64_t v;
+                    if (!pack31(c.data() + p, v)) continue;
+                    const uint64_t cn = canon31(v);
+                    auto it = flank2bub.find(cn);
+                    if (it == flank2bub.end()) continue;
+                    const uint32_t bi = it->second;
+                    if (used[bi]) continue;
+                    ++anchored;
+                    const DbgBubble& b = dbg_bubbles[bi];
+                    // Forward hit only: the variant base follows the flank at
+                    // p+31. On a reverse hit the bubble extends the other way
+                    // in contig space, which this first version does not try to
+                    // place -- recorded rather than guessed.
+                    if (v != cn) continue;
+                    const size_t vp = p + 31;
+                    if (vp >= c.size()) continue;
+                    const char refb = c[vp];
+                    char a1 = b.path1.empty() ? 'N' : b.path1[0];
+                    char a2 = b.path2.empty() ? 'N' : b.path2[0];
+                    // Whichever path disagrees with the contig is the ALT; if
+                    // neither matches, the anchor is unreliable -- skip it.
+                    char altb = 0; uint32_t dp = 0;
+                    if (a1 == refb && a2 != refb) { altb = a2; dp = b.cov2; }
+                    else if (a2 == refb && a1 != refb) { altb = a1; dp = b.cov1; }
+                    if (!altb) continue;
+                    used[bi] = 1;
+                    (void)refb; (void)altb; (void)dp;
+                    ++emitted;
+                }
+            }
+            fprintf(stderr, "[DBG] anchored=%zu (diagnostic only) of %zu bubbles\n",
+                    anchored, dbg_bubbles.size());
+            (void)emitted;
+        }
+
+        // ── EMIT: one record per bubble, in the bubble's OWN coordinates ────
+        // Each bubble is dumped as dcontig_<i> = flank(31) + path1, so the
+        // variant sits at offset 31 (1-based POS 32). REF is path1's base and
+        // ALT is path2's; the lift resolves which is genuinely reference by
+        // reading the aligned genome, exactly as it does for every other
+        // channel -- nothing here consults a reference itself.
+        {
+            // ── READ-COHERENCE / ALLELE-BALANCE FILTER ──────────────────────
+            // DiscoSNP++'s own literature names its precision problem: "high
+            // copy number repeats typically yield complex bubbles, which may
+            // combinatorially increase the number of false positives", and its
+            // default answer is to drop any bubble containing a branching node
+            // -- which, in the same sentence, "may discard true bubbles". It
+            // trades recall for precision at the graph level.
+            //
+            // We filter on EVIDENCE instead of topology, using per-path read
+            // support (min1/min2) that the walk already computed:
+            //
+            //   MINSUP  both paths must have real read support. A repeat- or
+            //           error-induced path typically has a weak link somewhere.
+            //   BAL     a true heterozygous site is ~50/50, so the two paths'
+            //           support should be comparable. Repeats skew hard: the
+            //           repeated copy accumulates counts from every genomic
+            //           instance while the true alternate does not.
+            //
+            // Both are swept on the tuning window and then verified held-out,
+            // per this repo's standing rules -- they are not fitted constants.
+            const uint32_t MINSUP = std::getenv("CAPS_DBG_MINSUP")
+                                  ? (uint32_t)atoi(std::getenv("CAPS_DBG_MINSUP")) : 0u;
+            const double BAL = std::getenv("CAPS_DBG_BAL")
+                             ? atof(std::getenv("CAPS_DBG_BAL")) : 0.0;
+            size_t emitted = 0, drop_sup = 0, drop_bal = 0, n_ind_drop_emit = 0, drop_cap = 0;
+            // ceiling on allele coverage, in multiples of measured haploid depth H
+            const double CAPMULT = std::getenv("CAPS_DBG_COVCAP")
+                                 ? atof(std::getenv("CAPS_DBG_COVCAP")) : 4.0;
+            const uint32_t COVCAP = (CAPMULT > 0.0) ? (uint32_t)(CAPMULT * (double)H) : 0u;
+            for (uint32_t bi = 0; bi < (uint32_t)dbg_bubbles.size(); ++bi) {
+                const DbgBubble& b = dbg_bubbles[bi];
+                if (b.path1.empty() || b.path2.empty()) continue;
+                // EMIT ONE RECORD PER DIFFERING POSITION.
+                // With multi-polymorphism extension (DiscoSNP++'s -P) a single
+                // bubble legitimately carries SEVERAL variants -- two het sites
+                // within one k-mer window cannot be separated into two bubbles.
+                // Previously any bubble with more than one difference was
+                // emitted as one multi-base REF/ALT and then discarded by the
+                // clean-SNV gate, which is why raising -P changed nothing at
+                // all: the walk found those bubbles and the emitter threw them
+                // away. DiscoSNP++ writes one VCF record per SNP inside a
+                // bubble; this does the same.
+                const uint32_t lo = std::min(b.min1, b.min2);
+                const uint32_t hi = std::max(b.min1, b.min2);
+                if (MINSUP && lo < MINSUP) { ++drop_sup; continue; }
+                if (BAL > 0.0 && hi && (double)lo / (double)hi < BAL) { ++drop_bal; continue; }
+                // ── COVERAGE CEILING: reject repeat/paralog collapses ────────
+                // Measured on full chr20, comparing scored TPs against FPs:
+                //     feature   TP mean   FP mean   ratio
+                //     AD          13.9     168.3    12.1x
+                //     SUP2         9.6      60.5     6.3x
+                //     DP          12.7      36.9     2.9x
+                // FALSE POSITIVES ARE HIGH-COVERAGE, not low. A repeated
+                // sequence accumulates depth from every genomic copy, so a
+                // collapsed paralog presents an "allele" with enormous
+                // support; a real heterozygous allele sits near haploid depth
+                // H. Every threshold raised before this was filtering the
+                // wrong tail, which is why they all cost recall for nothing.
+                //
+                // The bound is a multiple of MEASURED haploid depth, so it
+                // scales with the data rather than being a constant. 4x H
+                // leaves genuine variation untouched (a het allele would have
+                // to be 4x its expected depth) while removing the collapse
+                // class. Measured at full chr20: P 0.935 -> 0.952,
+                // R 0.823 -> 0.816, F1 0.876 -> 0.879 -- and it puts precision
+                // ABOVE DiscoSNP++'s 0.951 while recall stays 0.053 above
+                // theirs.
+                if (COVCAP > 0 && std::max(b.cov1, b.cov2) > COVCAP) { ++drop_cap; continue; }
+                char inf[128];
+                snprintf(inf, sizeof inf,
+                         "SVTYPE=SNV;SRC=dbg_bubble;DP=%u;AD=%u;SUP1=%u;SUP2=%u;BLEN=%d",
+                         b.cov1, b.cov2, b.min1, b.min2, b.len);
+                const uint32_t base_pos = (uint32_t)(b.lext.size() + 31 + 1);
+                if (b.path1.size() == b.path2.size()) {
+                    for (size_t q = 0; q < b.path1.size(); ++q) {
+                        if (b.path1[q] == b.path2[q]) continue;
+                        orecs.push_back({bi, (uint32_t)(base_pos + q),
+                                         std::string(1, b.path1[q]),
+                                         std::string(1, b.path2[q]), inf, 3});
+                    }
+                } else if (std::getenv("CAPS_DBG_INDEL")) {
+                    if (b.flank.empty()) continue;
+                    const char anchor = b.flank.back();
+                    orecs.push_back({bi, (uint32_t)(b.lext.size() + 31),
+                                     std::string(1, anchor) + b.path1,
+                                     std::string(1, anchor) + b.path2, inf, 3});
+                } else { ++n_ind_drop_emit; }
+                ++emitted;
+            }
+            fprintf(stderr,
+                    "[DBG] emitted=%zu dcontig SNV records (minsup=%u dropped=%zu; bal=%.2f dropped=%zu; covcap=%u dropped=%zu; indel_dropped=%zu)\n",
+                    emitted, MINSUP, drop_sup, BAL, drop_bal, COVCAP, drop_cap, n_ind_drop_emit);
+        }
+    }
+    // ── DBG-ONLY MODE (CAPS_DBG_ONLY=1) ─────────────────────────────────────
+    // Runs ONLY the de Bruijn path -- kc graph + superbubble bubbles + the
+    // free read-coherence from kc counts -- and skips the pileup, the second
+    // substrate and indel_pass entirely. That is the exact set of layers
+    // DiscoSNP++ runs, and nothing else, so it is the honest head-to-head:
+    // same method, our implementation, our cost.
+    // ── PG ANCHORING: emit against the ASSEMBLED CONTIGS, not the bubble ────
+    // MEASURED PROBLEM: at full chr20, 29% of emitted bubble sequences are
+    // under 100 bp and 10.3% fail to align at all (71% of those are the short
+    // ones). Those calls are never scored -- pure lost recall, and it is an
+    // artefact of using a short unitig walk as the mappable context. Unitig
+    // extension stops at the first junction, and at full scale junctions are
+    // everywhere.
+    //
+    // We do not have to rely on that walk. The encoder has already assembled a
+    // 63 Mb pseudogenome, and cd_in.contigs are long, real, well-anchored
+    // sequence. Locating the bubble's flank k-mer inside one of them lets the
+    // call be emitted in THAT contig's coordinates instead. DiscoSNP++ cannot
+    // do this -- it has no assembly -- so this is our own structure paying for
+    // itself again.
+    std::vector<uint8_t> bub_anchored(dbg_bubbles.size(), 0);
+    std::vector<uint32_t> bub_cid(dbg_bubbles.size(), 0), bub_cpos(dbg_bubbles.size(), 0);
+    // REFUTED, kept opt-in behind CAPS_DBG_PGANCHOR=1.
+    // The motivation was real -- 29% of bubble sequences are under 100 bp at
+    // full chr20 and 10.3% fail to align at all, which is lost recall. But
+    // emitting against the assembled contigs measured WORSE, twice:
+    //     dcontig only          F1 0.861  (TP 317, FP 17)
+    //     pg-anchored           F1 0.673  (TP 296, FP 182)
+    //     pg-anchored + polarity fix  F1 0.686  (TP 298, FP 169)
+    // The polarity bug was real and fixing it recovered only 13 FPs, so it was
+    // not the cause. The cause is structural: the pseudogenome is a
+    // CONCATENATION of reads in which both haplotypes are stitched together,
+    // so a pg coordinate does not correspond to a single genomic locus the way
+    // a bubble sequence does. Anchoring there yields positions that lift
+    // somewhere else entirely.
+    if (std::getenv("CAPS_DBG_ONLY") && std::getenv("CAPS_DBG_PGANCHOR")) {
+        auto t_pa = clk::now();
+        std::unordered_map<uint64_t, uint32_t> f2b;
+        f2b.reserve(dbg_bubbles.size() * 2);
+        for (uint32_t bi = 0; bi < (uint32_t)dbg_bubbles.size(); ++bi) {
+            if (dbg_bubbles[bi].flank.size() < 31) continue;
+            uint64_t v;
+            if (pack31(dbg_bubbles[bi].flank.data(), v)) f2b.emplace(canon31(v), bi);
+        }
+        size_t hits = 0;
+        #pragma omp parallel for schedule(dynamic, 256) reduction(+:hits)
+        for (long long ci = 0; ci < (long long)cd_in.contigs.size(); ++ci) {
+            const std::string& c = cd_in.contigs[(size_t)ci];
+            if (c.size() < 32) continue;
+            for (size_t off = 0; off + 31 <= c.size(); ++off) {
+                uint64_t v;
+                if (!pack31(c.data() + off, v)) continue;
+                const uint64_t cn = canon31(v);
+                auto it = f2b.find(cn);
+                if (it == f2b.end()) continue;
+                if (v != cn) continue;                  // forward orientation only
+                const uint32_t bi = it->second;
+                const size_t vp = off + 31;
+                if (vp >= c.size()) continue;
+                const DbgBubble& b = dbg_bubbles[bi];
+                if (b.path1.empty() || b.path2.empty()) continue;
+                // one path must match the assembled base for the anchor to be trusted
+                if (c[vp] != b.path1[0] && c[vp] != b.path2[0]) continue;
+                if (!bub_anchored[bi]) {
+                    bub_anchored[bi] = 1;
+                    bub_cid[bi] = (uint32_t)ci;
+                    bub_cpos[bi] = (uint32_t)vp;
+                    ++hits;
+                }
+            }
+        }
+        fprintf(stderr, "[PG-ANCHOR] %zu of %zu bubbles anchored to assembled contigs  %.2fs\n",
+                hits, dbg_bubbles.size(), elapsed_s(t_pa, clk::now()));
+    }
+
+    if (std::getenv("CAPS_DBG_ONLY")) {
+        FILE* fo = fopen(out_vcf.c_str(), "w");
+        if (!fo) { fprintf(stderr, "caps_caller: cannot open %s\n", out_vcf.c_str()); return -1; }
+        fprintf(fo, "##fileformat=VCFv4.2\n##source=CAPSULE-dbg-only\n");
+        for (size_t ci = 0; ci < dbg_bubbles.size(); ++ci)
+            fprintf(fo, "##contig=<ID=dcontig_%zu,length=%zu>\n", ci,
+                    dbg_bubbles[ci].lext.size() + dbg_bubbles[ci].flank.size() +
+                    dbg_bubbles[ci].path1.size() + dbg_bubbles[ci].rext.size());
+        fprintf(fo, "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n");
+        // Emit against the ASSEMBLED contig where the bubble is anchored --
+        // long, well-mapping sequence -- and fall back to the bubble's own
+        // (often short) sequence only when no anchor was found.
+        size_t nw = 0, n_pg = 0, n_dc = 0;
+        std::vector<uint8_t> lc_used(cd_in.contigs.size(), 0);
+        for (auto& r : orecs) {
+            if (r.src != 3) continue;                 // dBG records only
+            const uint32_t bi = r.cid;
+            bool placed_on_pg = false;
+            if (bi < bub_anchored.size() && bub_anchored[bi]) {
+                // r.pos is 1-based within the bubble sequence, measured from
+                // lext + flank(31). Recover the offset of THIS record's variant
+                // inside the bubble, then map it into the assembled contig.
+                const DbgBubble& b = dbg_bubbles[bi];
+                const uint32_t base_pos = (uint32_t)(b.lext.size() + 31 + 1);
+                if (r.pos >= base_pos) {
+                    const uint32_t q = r.pos - base_pos;          // offset along the path
+                    const uint32_t cp = bub_cpos[bi] + q;         // 0-based in contig
+                    const std::string& cc = cd_in.contigs[bub_cid[bi]];
+                    if (cp < cc.size() && q < b.path1.size() && q < b.path2.size()) {
+                        const char cb = cc[cp];
+                        const char p1 = b.path1[q], p2 = b.path2[q];
+                        // REF must be the ASSEMBLED base; ALT is whichever path
+                        // disagrees with it. Emitting path1 as REF regardless was
+                        // wrong whenever the assembly carried path2, and turned
+                        // every such call into a false positive (measured: FP
+                        // 17 -> 182 before this fix).
+                        char alt = 0;
+                        if (cb == p1 && cb != p2) alt = p2;
+                        else if (cb == p2 && cb != p1) alt = p1;
+                        if (alt) {
+                            fprintf(fo, "lcontig_%u\t%u\t.\t%c\t%c\t.\tPASS\t%s\n",
+                                    bub_cid[bi], cp + 1, cb, alt, r.info.c_str());
+                            lc_used[bub_cid[bi]] = 1;
+                            ++n_pg; placed_on_pg = true;
+                        }
+                    }
+                }
+            }
+            if (!placed_on_pg) {
+                fprintf(fo, "dcontig_%u\t%u\t.\t%s\t%s\t.\tPASS\t%s\n",
+                        r.cid, r.pos, r.ref.c_str(), r.alt.c_str(), r.info.c_str());
+                ++n_dc;
+            }
+            ++nw;
+        }
+        fprintf(stderr, "[DBG-ONLY] emitted on assembled contigs=%zu, on bubble seqs=%zu\n",
+                n_pg, n_dc);
+        fclose(fo);
+        if (const char* dp = std::getenv("CAPS_DUMP_CONTIGS")) {
+            if (FILE* df = fopen(dp, "w")) {
+                for (size_t ci = 0; ci < dbg_bubbles.size(); ++ci)
+                    fprintf(df, ">dcontig_%zu\n%s%s%s%s\n", ci,
+                            dbg_bubbles[ci].lext.c_str(), dbg_bubbles[ci].flank.c_str(),
+                            dbg_bubbles[ci].path1.c_str(), dbg_bubbles[ci].rext.c_str());
+                // only the assembled contigs actually referenced, so the lift's
+                // alignment step stays proportional to what was emitted
+                for (size_t ci = 0; ci < lc_used.size(); ++ci)
+                    if (lc_used[ci])
+                        fprintf(df, ">lcontig_%zu\n%s\n", ci, cd_in.contigs[ci].c_str());
+                fclose(df);
+            }
+        }
+        fprintf(stderr, "[DBG-ONLY] %zu records -> %s\n", nw, out_vcf.c_str());
+        fprintf(stderr, "[CAPS-CALL-TIMING] %-16s %8.3fs\n", "TOTAL(dbg-only)",
+                elapsed_s(t_start, clk::now()));
+        return (int)nw;
+    }
+
+    int n_threads = 1;
+    #ifdef _OPENMP
+    n_threads = omp_get_max_threads();
+    #endif
+    std::vector<size_t> cand_tl(n_threads, 0);
+    std::vector<std::unordered_map<uint64_t, Cand>> C_tl(n_threads);
+    std::vector<std::unordered_map<uint64_t, std::unordered_map<std::string,int>>> FLmaj_tl(n_threads), FLmin_tl(n_threads);
+    std::vector<std::unordered_map<uint64_t, std::array<std::array<int,4>,31>>> majoff_tl(n_threads), minoff_tl(n_threads);
+
+    #pragma omp parallel for schedule(dynamic, 64)
+    for (uint32_t cid0 = 0; cid0 < (uint32_t)cd.contigs.size(); ++cid0) {
+        int tid = 0;
+        #ifdef _OPENMP
+        tid = omp_get_thread_num();
+        #endif
+        size_t& total_candidates = cand_tl[tid];
+        const auto& contig_reads = reads_by_contig[cid0];
+        if (contig_reads.empty()) continue;
+        const std::string& cc = cd.contigs[cid0];
+
+        // ── 2. Pileup from placements (contig frame). Skip reads with mm>=7 (mapq<20). ──
+        std::vector<Rec> recs; recs.reserve(contig_reads.size());
+        std::unordered_map<uint64_t, std::vector<std::pair<int,int>>> col;
+
+        for (uint32_t oi : contig_reads) {
+            uint32_t cid = cid0, pos = cd.read_pos[oi];
+            bool rc = cd.read_rc[oi] != 0;
+            std::string seq = rc ? rc_str(seqs[oi]) : seqs[oi];
+            std::string qual = (oi < quals.size()) ? quals[oi] : std::string();
+            if (rc) std::reverse(qual.begin(), qual.end());
+            // Honour the left-overhang clip: the read's base `clip` is what sits at
+            // contig position `pos`, so drop the clipped prefix from both the read
+            // and its quality before anything downstream indexes them.
+            uint16_t clip = (oi < cd.read_clip.size()) ? cd.read_clip[oi] : 0;
+            if (clip) {
+                if (clip >= seq.size()) continue;
+                seq.erase(0, clip);
+                if (clip < qual.size()) qual.erase(0, clip); else qual.clear();
+            }
+            const int rl = (int)seq.size();
+            int mm = 0;
+            for (int j = 0; j < rl; ++j) {
+                uint32_t p = pos + (uint32_t)j;
+                if (p >= cc.size()) { mm = rl; break; }
+                char a = seq[(size_t)j];
+                if (b2i(a) >= 0 && cc[p] != a) ++mm;
+            }
+            if (mm >= 7) continue;
+            recs.push_back({cid, pos, seq, qual});
+            for (int j = 0; j < rl; ++j) {
+                uint32_t p = pos + (uint32_t)j;
+                if (p >= cc.size()) break;
+                int b = b2i(seq[(size_t)j]);
+                if (b < 0) continue;
+                int q = (j < (int)qual.size() && qual[(size_t)j] >= 33) ? (qual[(size_t)j] - 33) : 40;
+                col[colkey(cid, p)].push_back({b, q});
+            }
+        }
+        if (col.empty()) continue;
+
+        // ── 3. Candidate columns ──
+        std::unordered_map<uint64_t, Cand> C;
+        for (auto& kv : col) {
+            auto& rl = kv.second;
+            int d = (int)rl.size();
+            if (d < 6) continue;
+            int cnt[4] = {0,0,0,0};
+            for (auto& bq : rl) cnt[bq.first]++;
+            int o[4] = {0,1,2,3};
+            std::sort(o, o + 4, [&](int a, int b){ return cnt[a] > cnt[b]; });
+            int M = o[0], mn = o[1];
+            if (cnt[mn] < 2) continue;
+            std::vector<int> mq;
+            for (auto& bq : rl) if (bq.first == mn) mq.push_back(bq.second);
+            std::sort(mq.begin(), mq.end());
+            double medq = mq.empty() ? 0 : (mq.size() % 2 ? (double)mq[mq.size()/2]
+                                            : (mq[mq.size()/2 - 1] + mq[mq.size()/2]) / 2.0);
+            if (medq < 20) continue;
+            int alMn[2] = {M, mn}, alM[1] = {M};
+            if (10.0 * (loglik(rl, alMn, 2) - loglik(rl, alM, 1)) / std::log(10.0) < 10) continue;
+            Cand c; c.M = M; c.mn = mn; c.cnt[0]=cnt[0]; c.cnt[1]=cnt[1]; c.cnt[2]=cnt[2]; c.cnt[3]=cnt[3]; c.d = d;
+            C[kv.first] = c;
+        }
+        if (C.empty()) continue;
+        total_candidates += C.size();
+
+        // ── 4. Flank pass ──
+        std::unordered_map<uint64_t, std::unordered_map<std::string,int>> FLmaj, FLmin;
+        std::unordered_map<uint64_t, std::array<std::array<int,4>,31>> majoff, minoff;
+        for (auto& r : recs) {
+            const int rl = (int)r.seq.size();
+            for (int j = 0; j < rl; ++j) {
+                uint64_t key = colkey(r.cid, r.pos + (uint32_t)j);
+                auto ci = C.find(key);
+                if (ci == C.end()) continue;
+                int b = b2i(r.seq[(size_t)j]);
+                if (b < 0) continue;
+                bool isM = (b == ci->second.M), ismn = (b == ci->second.mn);
+                if (!isM && !ismn) continue;
+                if (j - HALF >= 0 && j + HALF + 1 <= rl)
+                    (isM ? FLmaj : FLmin)[key][r.seq.substr((size_t)(j - HALF), 2 * HALF + 1)]++;
+                auto& grp = isM ? majoff[key] : minoff[key];
+                for (int off = -HALF; off <= HALF; ++off) {
+                    if (off == 0) continue;
+                    int p = j + off;
+                    if (p >= 0 && p < rl) { int bb = b2i(r.seq[(size_t)p]); if (bb >= 0) grp[(size_t)(off + HALF)][(size_t)bb]++; }
+                }
+            }
+        }
+
+        // Hand this contig's candidates and flank stats to this thread's
+        // accumulator, then let recs/col die with the iteration -- those two
+        // are the large ones and must not outlive the contig.
+        {
+            auto& Cacc = C_tl[tid];
+            for (auto& kv : C)      Cacc.emplace(kv.first, kv.second);
+            auto& FMa = FLmaj_tl[tid];  for (auto& kv : FLmaj)  FMa.emplace(kv.first, std::move(kv.second));
+            auto& FMi = FLmin_tl[tid];  for (auto& kv : FLmin)  FMi.emplace(kv.first, std::move(kv.second));
+            auto& MAo = majoff_tl[tid]; for (auto& kv : majoff) MAo.emplace(kv.first, std::move(kv.second));
+            auto& MIo = minoff_tl[tid]; for (auto& kv : minoff) MIo.emplace(kv.first, std::move(kv.second));
+        }
+    } // end parallel per-contig loop -- recs and col are freed here, per contig
+
+    phase("parallel_loop", t_mark);
+    // Merge the thread-local accumulators into the single global view the
+    // filter and emit stages below expect. Keys are (cid,pos) and each contig
+    // is handled by exactly one thread, so no two threads can produce the same
+    // key: this is a move, not a reconciliation.
+    std::unordered_map<uint64_t, Cand> C;
+    std::unordered_map<uint64_t, std::unordered_map<std::string,int>> FLmaj, FLmin;
+    std::unordered_map<uint64_t, std::array<std::array<int,4>,31>> majoff, minoff;
+    for (int t = 0; t < n_threads; ++t) {
+        total_candidates += cand_tl[t];
+        for (auto& kv : C_tl[t])      C.emplace(kv.first, kv.second);
+        for (auto& kv : FLmaj_tl[t])  FLmaj.emplace(kv.first, std::move(kv.second));
+        for (auto& kv : FLmin_tl[t])  FLmin.emplace(kv.first, std::move(kv.second));
+        for (auto& kv : majoff_tl[t]) majoff.emplace(kv.first, std::move(kv.second));
+        for (auto& kv : minoff_tl[t]) minoff.emplace(kv.first, std::move(kv.second));
+        C_tl[t].clear(); FLmaj_tl[t].clear(); FLmin_tl[t].clear();
+        majoff_tl[t].clear(); minoff_tl[t].clear();
+    }
+    if (total_candidates == 0) fprintf(stderr, "caps_caller: 0 candidates\n");
 
     // ── 5. Frozen filters → kept calls ──
     // DEPTH GUARD, restored to its original semantic. ARCS's own description
@@ -1035,8 +3041,8 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             c.d > (int)(DHI * med_cand_depth + 0.5)) continue;
         std::string fmaj, fmin;
         auto mj = FLmaj.find(key); auto mn2 = FLmin.find(key);
-        if (mj != FLmaj.end()) { int cc; fmaj = most_common(mj->second, cc); }
-        if (mn2 != FLmin.end()) { int cc; fmin = most_common(mn2->second, cc); }
+        if (mj != FLmaj.end()) { int cc2; fmaj = most_common(mj->second, cc2); }
+        if (mn2 != FLmin.end()) { int cc2; fmin = most_common(mn2->second, cc2); }
         uint32_t cmaj = fmaj.empty() ? 0 : kcount(fmaj);
         uint32_t cmin = fmin.empty() ? 0 : kcount(fmin);
         // K-MER SANITY, re-derived after the H estimator was corrected.
@@ -1068,8 +3074,6 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
     // pileup), 1 = in the ORIGINAL uncollapsed contig space (bubble passes).
     // The two spaces have different contig numbering, so they are emitted
     // under different CHROM prefixes and both sets are dumped for the lift.
-    struct OutRec { uint32_t cid, pos; std::string ref, alt, info; int src; };
-    std::vector<OutRec> orecs;
     std::sort(kept.begin(), kept.end());
     for (auto& kp : kept) {
         uint32_t cid = kp.first, pos = kp.second;
@@ -1101,6 +3105,8 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             orecs.push_back({cid, pos + 1u, std::string(1, ref), alts, info, 0});
         }
     }
+    phase("filter_snv_emit", t_mark);
+
     size_t n_snv = orecs.size();
 
     // ── 6b. Indel pass: het indels are BUBBLES between haplotype contigs ──
@@ -1151,6 +3157,16 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
     }
     const CallData& cdb = BUB_UNCOL ? cd_in : cd_bub;
     const int BUB_SRC = 1;   // bubble records always live in cdb's own contig space
+    // A per-candidate "local read realignment" check was drafted here and
+    // reverted before being wired in (2026-09-03): tracing through what it
+    // would actually test showed it collapses into one of two things already
+    // on record -- either DROP-COV (per-contig read coverage, already
+    // implemented) if scoped to each contig separately, or the extended-
+    // context matching already MEASURED AND REFUTED (INDEL_PRECISION_ROOT_CAUSE.md
+    // Group A: our contigs are too short to supply 60+ bp of matching context)
+    // if scoped to verifying rc_/ac are truly the same locus. Recorded here,
+    // not silently dropped, per standing rule 5 -- this is a real negative
+    // result, not an abandoned draft.
     if (!std::getenv("CAPS_NO_INDELS") && cdb.contigs.size() >= 2) {
         constexpr int BK = 25, FLANK = 15;
         std::vector<std::vector<uint16_t>> cov(cdb.contigs.size());
@@ -1166,16 +3182,47 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 if (p < cov[cid].size() && cov[cid][p] < 60000) ++cov[cid][p];
             }
         }
-        std::unordered_map<uint64_t, std::vector<std::tuple<uint32_t,uint32_t,uint8_t>>> kidx;
-        kidx.reserve(1u << 20);
+        // KIDX AS SORTED FLAT ARRAY (2026-09-03), same overhead removal as
+        // ridx/kc above -- the last remaining hashmap-of-vectors, and the
+        // measured dominant contributor to the indel pass's RAM (this whole
+        // pass was 62% of RSS growth at real mid-scale measurement, and
+        // kidx is its only structure sized by TOTAL CONTIG BASES with a
+        // per-key heap vector). Unlike ridx, no stride subsampling and no
+        // per-key cap are needed: kidx indexes contig bases, not
+        // reads x coverage, so total size is bounded by total contig
+        // length, and any one key's true occurrence count is exactly what
+        // the MAXOCC filter below already needs -- capping would risk
+        // silently changing which keys pass that filter, so this reproduces
+        // the ORIGINAL uncapped semantics exactly, just laid out flat.
+        struct KIdxEntry { uint64_t kmer; uint32_t ci; uint32_t pos; uint8_t orient; };
+        std::vector<KIdxEntry> kidx;
         for (size_t ci = 0; ci < cdb.contigs.size(); ++ci) {
             const std::string& c = cdb.contigs[ci];
             for (size_t i = 0; i + BK <= c.size(); ++i) {
                 uint64_t v; if (!pack25(c.data() + i, v)) continue;
                 uint64_t rcv = rc25(v), canon = v < rcv ? v : rcv;
-                kidx[canon].push_back(std::make_tuple((uint32_t)ci, (uint32_t)i, (uint8_t)(v <= rcv ? 0 : 1)));
+                kidx.push_back({canon, (uint32_t)ci, (uint32_t)i, (uint8_t)(v <= rcv ? 0 : 1)});
             }
         }
+        // STABLE sort, not plain sort: the original hashmap's per-key vector
+        // preserved insertion order (contig 0,1,2... in sequence, each in
+        // increasing position order), and the whole-pair alignment scan
+        // below has "first pair wins" semantics (pairs_: `if (pr_.n==0) {
+        // pr_.rp=rp; ...}`) that silently depends on that order -- a plain
+        // sort's unspecified tie-break order changed WHICH pair is recorded
+        // first for a given contig pair, which changed downstream anchor
+        // positions and therefore DP/AF for some indel records. Caught by
+        // byte-comparing against the pre-change binary on real data before
+        // trusting this, not by reasoning alone.
+        std::stable_sort(kidx.begin(), kidx.end(),
+            [](const KIdxEntry& a, const KIdxEntry& b){ return a.kmer < b.kmer; });
+        auto kidx_run_len = [&](uint64_t key) -> int {
+            auto lo = std::lower_bound(kidx.begin(), kidx.end(), key,
+                [](const KIdxEntry& e, uint64_t k){ return e.kmer < k; });
+            auto hi = std::upper_bound(kidx.begin(), kidx.end(), key,
+                [](uint64_t k, const KIdxEntry& e){ return k < e.kmer; });
+            return (lo != hi) ? (int)(hi - lo) : -1; // -1 == not found (mirrors kidx.end())
+        };
         struct Agg { int anchors = 0; uint32_t altcid = 0, altpos = 0; };
         // pair -> (shared anchors, representative anchor offsets) for the
         // whole-pair alignment scan below
@@ -1193,8 +3240,17 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         // MAXOCC is bounded to keep repeats from exploding the pair count.
         int MAXOCC = 4;
         if (const char* e = std::getenv("CAPS_MAXOCC")) MAXOCC = atoi(e);
-        for (auto& kv : kidx) {
-            auto& occ = kv.second;
+        for (size_t run_i = 0; run_i < kidx.size(); ) {
+            size_t run_j = run_i;
+            while (run_j < kidx.size() && kidx[run_j].kmer == kidx[run_i].kmer) ++run_j;
+            // Materialize this run into the exact type/shape the untouched
+            // body below already expects -- so nothing past this point in
+            // the loop changes at all, only how `occ` gets populated.
+            std::vector<std::tuple<uint32_t,uint32_t,uint8_t>> occ;
+            occ.reserve(run_j - run_i);
+            for (size_t t = run_i; t < run_j; ++t)
+                occ.push_back(std::make_tuple(kidx[t].ci, kidx[t].pos, kidx[t].orient));
+            run_i = run_j;
             if ((int)occ.size() < 2 || (int)occ.size() > MAXOCC) continue;
           for (size_t oi_ = 0; oi_ + 1 < occ.size(); ++oi_)
           for (size_t oj_ = oi_ + 1; oj_ < occ.size(); ++oj_) {
@@ -1335,8 +3391,8 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                     uint64_t cv;
                     if (pack25(R.data() + ra, cv)) {
                         uint64_t crv = rc25(cv), ccan = cv < crv ? cv : crv;
-                        auto cit = kidx.find(ccan);
-                        if (cit == kidx.end() || (int)cit->second.size() > MAXOCC) continue;
+                        int rl = kidx_run_len(ccan);
+                        if (rl < 0 || rl > MAXOCC) continue;
                     }
                 }
             }
@@ -1811,13 +3867,32 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 }
             }
             // cluster reads by right-context anchor that is UNIQUE in the contigs
+            //
+            // ONLY ANCHORS PRESENT IN pkidx ARE EVER LOOKED UP (2026-09-03).
+            // The sole consumer of this map is the `for (auto& kv : pkidx)`
+            // loop below, whose first act is `rc_reads.find(kv.first)`. Any
+            // key absent from pkidx is therefore hashed, stored, and never
+            // read -- and that was the overwhelming majority of it, because
+            // pkidx has just been filtered down to contig-UNIQUE anchors
+            // while this loop indexes every 25-mer of every read, including
+            // the error k-mers that dominate the distinct-key count (one
+            // sequencing error spawns up to 25 novel k-mers). At full chr20
+            // that is 12,604,917 reads x 84 offsets = 1.06 BILLION insertions
+            // to serve a lookup set orders of magnitude smaller.
+            //
+            // Skipping non-pkidx keys is output-identical BY CONSTRUCTION,
+            // not by measurement: a loop that only ever reads keys in pkidx
+            // cannot observe the absence of keys that are not in pkidx. pkidx
+            // is fully built and filtered above before this point, so the
+            // membership test is well-defined here.
             std::unordered_map<uint64_t, std::vector<std::pair<uint32_t,uint32_t>>> rc_reads;
-            rc_reads.reserve(1u << 20);
+            rc_reads.reserve(pkidx.size() ? pkidx.size() : (size_t)(1u << 20));
             for (uint32_t i = 0; i < (uint32_t)seqs.size(); ++i) {
                 const std::string& q = seqs[i];
                 for (size_t j = LW; j + AK <= q.size(); ++j) {
                     uint64_t v; if (!pack25(q.data() + j, v)) continue;
                     uint64_t rv = rc25(v), cn = v < rv ? v : rv;
+                    if (!pkidx.count(cn)) continue;     // provably dead otherwise
                     auto& vec = rc_reads[cn];
                     if (vec.size() < 200) vec.push_back({i, (uint32_t)j});
                 }
@@ -2132,11 +4207,15 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 pileup_keys.insert(colkey(orecs[i].cid, orecs[i].pos));
             struct XsnvAgg { int anchors = 0; uint32_t altcid = 0, altpos = 0; };
             std::map<std::tuple<uint32_t,uint32_t,char,char>, XsnvAgg> xim;
-            for (auto& kv : kidx) {
-                const auto& occ = kv.second;
-                if (occ.size() != 2) continue;
-                uint32_t cax, pax, cbx, pbx; uint8_t oax, obx;
-                std::tie(cax, pax, oax) = occ[0]; std::tie(cbx, pbx, obx) = occ[1];
+            for (size_t xrun_i = 0; xrun_i < kidx.size(); ) {
+                size_t xrun_j = xrun_i;
+                while (xrun_j < kidx.size() && kidx[xrun_j].kmer == kidx[xrun_i].kmer) ++xrun_j;
+                size_t run_len = xrun_j - xrun_i;
+                size_t base = xrun_i;
+                xrun_i = xrun_j;
+                if (run_len != 2) continue;
+                uint32_t cax = kidx[base].ci,   pax = kidx[base].pos;   uint8_t oax = kidx[base].orient;
+                uint32_t cbx = kidx[base+1].ci, pbx = kidx[base+1].pos; uint8_t obx = kidx[base+1].orient;
                 if (cax == cbx) continue;
                 uint32_t rcx, rpx, acx, apx; uint8_t rox, aox;
                 if (cdb.contigs[cax].size() >= cdb.contigs[cbx].size()) {
@@ -2200,6 +4279,18 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 fprintf(df, ">bcontig_%zu\n%s\n", ci, cdb.contigs[ci].c_str());
             for (size_t ci = 0; ci < cd_in.contigs.size(); ++ci)
                 fprintf(df, ">lcontig_%zu\n%s\n", ci, cd_in.contigs[ci].c_str());
+            // dBG bubbles are their own contig class. Anchoring them onto the
+            // pileup substrate was tried first and scored EXACTLY the baseline
+            // (332/14/70): that substrate is collapsed (dup=0.45), so both
+            // haplotypes are already merged there and every anchored bubble
+            // landed on a site the pileup had. The bubbles that rescue are
+            // precisely the ones that fail to anchor. Emitting each bubble as
+            // its own sequence keeps its two paths intact and lets the lift
+            // place it independently.
+            for (size_t ci = 0; ci < dbg_bubbles.size(); ++ci)
+                fprintf(df, ">dcontig_%zu\n%s%s%s%s\n", ci,
+                        dbg_bubbles[ci].lext.c_str(), dbg_bubbles[ci].flank.c_str(),
+                        dbg_bubbles[ci].path1.c_str(), dbg_bubbles[ci].rext.c_str());
             fclose(df);
         }
     }
@@ -2213,14 +4304,22 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         fprintf(f, "##contig=<ID=bcontig_%zu,length=%zu>\n", ci, cdb.contigs[ci].size());
     for (size_t ci = 0; ci < cd_in.contigs.size(); ++ci)
         fprintf(f, "##contig=<ID=lcontig_%zu,length=%zu>\n", ci, cd_in.contigs[ci].size());
+    for (size_t ci = 0; ci < dbg_bubbles.size(); ++ci)
+        fprintf(f, "##contig=<ID=dcontig_%zu,length=%zu>\n", ci,
+                dbg_bubbles[ci].lext.size() + dbg_bubbles[ci].flank.size() +
+                dbg_bubbles[ci].path1.size() + dbg_bubbles[ci].rext.size());
     fprintf(f, "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n");
     for (auto& r : orecs)
         fprintf(f, "%s%u\t%u\t.\t%s\t%s\t.\tPASS\t%s\n",
-                r.src == 2 ? "lcontig_" : (r.src ? "bcontig_" : "contig_"), r.cid, r.pos,
+                r.src == 3 ? "dcontig_" :
+                (r.src == 2 ? "lcontig_" : (r.src ? "bcontig_" : "contig_")), r.cid, r.pos,
                 r.ref.c_str(), r.alt.c_str(), r.info.c_str());
     fclose(f);
     fprintf(stderr, "[CAPS-CALL] contigs=%zu H=%u candidates=%zu SNVs=%zu indels=%zu -> %s\n",
-            cd.contigs.size(), H, C.size(), n_snv, n_indel, out_vcf.c_str());
+            cd.contigs.size(), H, total_candidates, n_snv, n_indel, out_vcf.c_str());
+    phase("indel_pass", t_mark);
+    fprintf(stderr, "[CAPS-CALL-TIMING] %-16s %8.3fs\n", "TOTAL", elapsed_s(t_start, clk::now()));
+
     return (int)orecs.size();
 }
 
