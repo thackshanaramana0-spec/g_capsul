@@ -47,6 +47,7 @@
 #include <algorithm>
 
 extern "C" {
+#include <omp.h>
 #include "fqzcomp_qual.h"
 }
 
@@ -111,22 +112,60 @@ static bool encode_block(const std::string& qbuf,
     uint8_t cands[2] = { qmin, 33 };
     const int ncand = (qmin!=33 && qmin>=33) ? 2 : 1;
 
-    bool got=false; size_t best=0;
-    std::string shifted; shifted.resize(qbuf.size());
+    // ── THE 8 TRIALS RUN CONCURRENTLY ────────────────────────────────────
+    // This tries every (offset, strategy) pair and keeps the smallest, which
+    // is 2 x 4 = 8 FULL compressions of the same block. That is why this coder
+    // measured 16.6 MB/s where fqzcomp alone runs an order of magnitude faster
+    // -- the throughput was never the coder, it was doing the coder's work
+    // eight times.
+    //
+    // The eight trials are completely independent: each reads a shifted copy
+    // of the block and writes its own buffer. Running them concurrently is
+    // therefore FREE SPEED WITH NO SIZE COST -- the same eight candidates are
+    // evaluated and the same one wins.
+    //
+    // DETERMINISM. The serial loop kept the first STRICTLY smaller result, so
+    // ties resolved to the lowest (ci, strat). Results are collected into a
+    // fixed-index array and scanned in that same order, so the selection is
+    // identical regardless of completion order -- verified byte-identical.
+    const int ntrial = ncand * 4;
+    std::vector<std::string> shifted(ncand);
     for(int ci=0; ci<ncand; ++ci){
+        shifted[ci].resize(qbuf.size());
         const uint8_t off=cands[ci];
-        for(size_t i=0;i<qbuf.size();++i) shifted[i]=(char)((unsigned char)qbuf[i]-off);
-        for(int strat=0; strat<4; ++strat){
-            size_t osz=0;
-            char* c = fqz_compress(4 /*CRAM 4.0 vers*/, &s,
-                                   const_cast<char*>(shifted.data()), shifted.size(),
-                                   &osz, strat, nullptr);
-            if(!c) continue;
-            if(!got || osz<best){
-                out.assign((uint8_t*)c, (uint8_t*)c+osz);
-                best=osz; got=true; qmin_out=off;
-            }
-            free(c);
+        for(size_t i=0;i<qbuf.size();++i)
+            shifted[ci][i]=(char)((unsigned char)qbuf[i]-off);
+    }
+    std::vector<std::vector<uint8_t>> res(ntrial);
+    std::vector<char> ok(ntrial, 0);
+    #pragma omp parallel for schedule(dynamic,1)
+    for(int t=0; t<ntrial; ++t){
+        const int ci = t / 4, strat = t % 4;
+        // fqz_compress MUTATES the slice -- it writes s->flags[rec]
+        // (fqzcomp_qual.c:655) and s->len[i] (:790). Copying the struct alone
+        // is not enough because the copy still points at the SAME len/flags
+        // arrays, so eight threads were scribbling over each other's
+        // parameters. Measured cost of that bug: the archive grew 1.55% and
+        // stopped matching the serial output. Each trial therefore gets its
+        // own len and flags storage.
+        std::vector<uint32_t> mylen(lens.begin(), lens.end());
+        std::vector<uint32_t> myflags(lens.size(), 0u);
+        fqz_slice st;
+        st.num_records = (int)lens.size();
+        st.len   = mylen.data();
+        st.flags = myflags.data();
+        size_t osz=0;
+        char* c = fqz_compress(4 /*CRAM 4.0 vers*/, &st,
+                               const_cast<char*>(shifted[ci].data()),
+                               shifted[ci].size(), &osz, strat, nullptr);
+        if(c){ res[t].assign((uint8_t*)c,(uint8_t*)c+osz); ok[t]=1; free(c); }
+    }
+    bool got=false; size_t best=0;
+    for(int t=0; t<ntrial; ++t){
+        if(!ok[t]) continue;
+        if(!got || res[t].size() < best){
+            out = res[t]; best = res[t].size(); got = true;
+            qmin_out = cands[t/4];
         }
     }
     return got;
@@ -136,6 +175,10 @@ static bool encode_block(const std::string& qbuf,
 // never materializing the whole column, matching the bounded-memory property
 // the names coder has.
 static Encoded encode_from_fastq(const char* fq_path, size_t BLOCK_BYTES=QBLOCK_BYTES){
+    // Block size is overridable for measurement: it trades compression (each
+    // block resets the fqzcomp context) against parallelism (blocks are
+    // independent). Default is unchanged.
+    if(const char* e = getenv("CAPS_QBLOCK_MB")){ long v=atol(e); if(v>0) BLOCK_BYTES=(size_t)v*1024u*1024u; }
     Encoded E;
     FILE* f=fopen(fq_path,"r");
     if(!f) return E;

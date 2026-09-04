@@ -203,6 +203,15 @@ static const bool CAPS_NAMES = getenv("CAPS_NAMES") != nullptr;
 // with CAPS_QUAL unset the archive is byte-identical to one built without it,
 // so the locked Phase 1 result is untouched.
 static const bool CAPS_QUAL  = getenv("CAPS_QUAL")  != nullptr;
+// ── NAMES AND QUALITY ARE COMPUTED ONCE, BEFORE THE CANDIDATE FORK ─────────
+// Neither column depends on MAXMAP or MINOV: they are functions of the input
+// file alone. They were being encoded inside each candidate, so an 8-point
+// sweep did the identical work eight times -- and quality is by far the most
+// expensive single step in the encoder (measured 7.09 s of a 10.49 s
+// candidate, 68%). Hoisting them above the fork computes them once with the
+// whole machine, and every child inherits the result through copy-on-write.
+static nmc::Encoded g_NM;  static bool g_NM_done = false;
+static qlc::Encoded g_QL;  static bool g_QL_done = false;
 // ---- Claim 2: reference-free variant calling (CAPS_CALL=1) ------------------
 // Captures each chain (round-1/round-2 main pg, and the second-region sweep)
 // as its own discrete contig BEFORE the MEM self-match stage runs -- MEM only
@@ -1303,6 +1312,19 @@ int main(int argc,char** argv){
             // parent's selection is by size, so scheduling cannot alter which
             // archive wins. CAPS_CAND_SEQ=1 restores the serial behaviour for
             // A/B measurement.
+            // Parent-side, before any fork: pay for names and quality ONCE, with
+            // every core available. Inside the sweep each child holds only
+            // NT/K threads, so the parallel trials inside the quality coder
+            // would have no cores to use -- measured as a near-zero gain when
+            // the coder was parallelised but left inside the candidates.
+            if(!gs_child && !child){
+                if(CAPS_NAMES && !g_NM_done && !g_input_path.empty()){
+                    g_NM = nmc::encode_from_fastq(g_input_path.c_str()); g_NM_done = true;
+                }
+                if(CAPS_QUAL && !g_QL_done && !g_input_path.empty()){
+                    g_QL = qlc::encode_from_fastq(g_input_path.c_str()); g_QL_done = true;
+                }
+            }
             if(!gs_child){
                 size_t K = cands.size();
                 if(getenv("CAPS_CAND_SEQ")) K = 1;
@@ -3495,6 +3517,7 @@ int main(int argc,char** argv){
             }
             STR.literal.release();
         }
+        lap("  [t] literal->symbols");
         auto v_tri  = STR.mem_triples.bytes(); STR.mem_triples.release();
         auto v_pos  = STR.pos_abs.bytes();     STR.pos_abs.release();
         auto v_str  = STR.pos_strand.bytes();  STR.pos_strand.release();
@@ -3531,7 +3554,9 @@ int main(int argc,char** argv){
         // exactly the shortcut that left mem_triples undecodable.
         static nmc::Encoded NM;
         if(CAPS_NAMES && !g_input_path.empty()){
-            NM = nmc::encode_from_fastq(g_input_path.c_str());
+            // Reuse what the parent computed before the fork; only recompute
+            // if the hoist did not run (single-candidate / GSEARCH paths).
+            NM = g_NM_done ? g_NM : nmc::encode_from_fastq(g_input_path.c_str());
             fprintf(stderr,"  [names] %llu names in %llu blocks: body %zu B, dict %zu B raw, index %zu B raw\n",
                     (unsigned long long)NM.n_names,(unsigned long long)NM.n_blocks,
                     NM.body.size(), NM.dict.size(), NM.index.size());
@@ -3549,7 +3574,7 @@ int main(int argc,char** argv){
         // archive alone.
         static qlc::Encoded QL;
         if(CAPS_QUAL && !g_input_path.empty()){
-            QL = qlc::encode_from_fastq(g_input_path.c_str());
+            QL = g_QL_done ? g_QL : qlc::encode_from_fastq(g_input_path.c_str());
             fprintf(stderr,"  [qual] %llu reads / %llu quality bytes in %llu blocks: body %zu B, index %zu B raw\n",
                     (unsigned long long)QL.n_reads,(unsigned long long)QL.n_qbytes,
                     (unsigned long long)QL.n_blocks, QL.body.size(), QL.index.size());
@@ -3557,6 +3582,7 @@ int main(int argc,char** argv){
             jobs.push_back({"qual_index", [&]{ return best_encode(QL.index.data(), QL.index.size()); }});
         }
 
+        lap("  [t] .bytes() copies + pre-jobs");
         jobs.push_back({"literal",     [&]{ return seq_encode_mem(litsym, SEQT, SEQT); }});
         jobs.push_back({"mem_triples", [&]{ return refc::encode(v_tri, PGLEN_, MAINEND_); }});
         // Emitted only when a second-region self pass actually produced
@@ -3661,6 +3687,7 @@ int main(int argc,char** argv){
             std::atomic<size_t> next{0};
             unsigned NT = HW; if(NT > jobs.size()) NT = (unsigned)jobs.size();
             std::vector<double> jsec(jobs.size(),0.0);
+            lap("  [t] job list built");
             auto POOL0 = std::chrono::steady_clock::now();
             phase("pre-coding");
             std::vector<std::thread> pool;
@@ -3703,6 +3730,7 @@ int main(int argc,char** argv){
             }
         }
 
+        lap("  [t] pool + archive put");
         ar.finish();
         lap("stream coding");
         phase("CODING");
