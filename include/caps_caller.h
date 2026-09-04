@@ -63,6 +63,15 @@ struct CallData {
     // have to be dropped, and reads near contig starts are a large share of a
     // fragmented substrate.
     std::vector<uint16_t>    read_clip;
+    // GLOBAL pseudogenome offset of each original read (UINT64_MAX = unplaced).
+    // contig id + contig-local offset cannot be compared ACROSS contigs, and
+    // the substrate is fragmented enough that one genomic locus routinely spans
+    // several -- measured: allele placements were "disjoint" for 369 of 486
+    // bubbles at contig granularity, which turned out to carry no signal
+    // (precision 0.952 disjoint vs 0.916 shared, against 0.944 overall). A
+    // single global coordinate is what makes "were these reads near each other"
+    // answerable at all. The encoder already has it as ppos[u].
+    std::vector<uint64_t>    read_ppos;
     bool valid = false;
 };
 
@@ -804,7 +813,29 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
     CallData cd;
     if (DBG_ONLY_MODE) {
         cd.contigs = cd_in.contigs;          // consensus source for the ploidy gate
+        // ── READ PLACEMENTS, CARRIED THROUGH INSTEAD OF DISCARDED ───────────
+        // cd_in already holds, for every original read, which contig it sits
+        // on and at what offset -- the encoder derives it from ppos[u], the
+        // pseudogenome position it computed in order to COMPRESS. Method B
+        // used to copy only `contigs` and drop the rest, so the caller threw
+        // away the one piece of information k-mer counts cannot reconstruct:
+        // where each molecule actually came from.
+        //
+        // This is the same information a linked de Bruijn graph stores.
+        // McCortex builds it in a dedicated threading pass (20 GiB of links on
+        // top of a 50 GiB graph, Turner et al. 2018); LueVari stores read
+        // provenance as colors and spends succinct data structures on it. The
+        // idea of using read provenance to resolve repeats is THEIRS and is
+        // published -- what is different here is only that compression already
+        // paid for it, so carrying it costs three vector copies.
+        cd.read_cid  = cd_in.read_cid;
+        cd.read_pos  = cd_in.read_pos;
+        cd.read_rc   = cd_in.read_rc;
+        cd.read_clip = cd_in.read_clip;
+        cd.read_ppos = cd_in.read_ppos;
         cd.valid = true;
+        fprintf(stderr, "[PLACE] carried %zu read placements from the encoder\n",
+                cd.read_cid.size());
         fprintf(stderr, "[DBG-ONLY] substrate skipped (%zu encoder contigs reused)\n",
                 cd.contigs.size());
     } else {
@@ -2804,6 +2835,43 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             }
             fprintf(stderr, "[DBG-RSS] probe built: %ldMB  probe_keys=%zu\n", rss_kb()/1024, probe.size());
             std::vector<uint32_t> sup1(dbg_bubbles.size(), 0), sup2(dbg_bubbles.size(), 0);
+            // ── PLACEMENT DISPERSION (instrumentation first, filter later) ──
+            // For every bubble, record which CONTIGS its supporting reads were
+            // placed on by the compressor. A genuine heterozygous site draws
+            // both alleles from reads at ONE locus. A repeat/paralog collapse
+            // -- the dominant false-positive mechanism here, measured at 12x
+            // the allele depth of true sites -- draws support from reads the
+            // compressor placed at DIFFERENT loci, because they came from
+            // different genomic copies.
+            //
+            // k-mer counts cannot see this distinction by construction: the
+            // collapsed copies are identical in k-mer space, which is why they
+            // collapsed. Placement is the only signal that separates them, and
+            // it is exactly what a linked/read-coloured graph is built to
+            // supply.
+            //
+            // NOT FILTERED YET. This session has repeatedly shipped filters
+            // justified by mechanism and then measured them negative, so this
+            // pass only COUNTS, and the separation is checked against vcfeval
+            // before any bubble is rejected.
+            const bool PLACE_ON = !cd.read_ppos.empty();
+            // PER-PATH locus sets. Distinct-contig COUNT was the wrong
+            // metric -- the encoder's contigs are fragmented (451,578 at full
+            // chr20), so one locus legitimately spans many of them and the
+            // count measures fragmentation, not collapse. What separates a real
+            // het site from a collapse is whether the TWO ALLELES come from the
+            // SAME contigs: one locus with two haplotypes shares its placements,
+            // two collapsed copies do not. That comparison is immune to
+            // fragmentation because both paths fragment identically.
+            // Global pseudogenome span of the supporting reads. A real
+            // heterozygous site is ONE locus, so every supporting read -- both
+            // alleles -- was placed within about a read length of the same
+            // pseudogenome offset. A repeat/paralog collapse pools reads the
+            // compressor placed at genuinely different offsets, because they
+            // came from different copies. That is a distance, and distance is
+            // only meaningful in a single coordinate system.
+            std::vector<uint64_t> pmin(PLACE_ON ? dbg_bubbles.size() : 0, UINT64_MAX);
+            std::vector<uint64_t> pmax(PLACE_ON ? dbg_bubbles.size() : 0, 0);
             // per-position coverage, capped so memory stays bounded
             // ONE pass over the reads, both strands.
             // PARALLEL. `probe`, `frag1/2` and `seqs` are read-only here; the
@@ -2895,6 +2963,14 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                                         }
                                     }
                                 }
+                                if (PLACE_ON && ri < (long long)cd.read_ppos.size()) {
+                                    const uint64_t gp = cd.read_ppos[(size_t)ri];
+                                    if (gp != UINT64_MAX) {
+                                        #pragma omp critical(bloci)
+                                        { if (gp < pmin[pr.bi]) pmin[pr.bi] = gp;
+                                          if (gp > pmax[pr.bi]) pmax[pr.bi] = gp; }
+                                    }
+                                }
                                 if (!EXCL) {
                                     if (pr.path == 1) ++t1[pr.bi]; else ++t2[pr.bi];
                                 } else {
@@ -2939,7 +3015,22 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             // which is what exposes a thin interior position. Reproducing that
             // needs partial-overlap alignment, not a stricter test over the
             // counts we already have.
+            // DIAGNOSTIC SPLIT, not a shipped filter: 1 = keep only bubbles
+            // whose two alleles share a placement contig, 2 = keep only those
+            // whose placements are disjoint. Running both and comparing TP/FP
+            // measures whether placement discriminates at all, which is the
+            // question that decides whether this signal is worth a filter.
+            const int PLACEMODE = std::getenv("CAPS_DBG_PLACEMODE")
+                                ? atoi(std::getenv("CAPS_DBG_PLACEMODE")) : 0;
             for (uint32_t bi = 0; bi < (uint32_t)dbg_bubbles.size(); ++bi) {
+                if (PLACEMODE && PLACE_ON) {
+                    // PLACEMODE = maximum allowed pseudogenome span, in bp.
+                    // Split the bubbles by locus tightness and score each half.
+                    const bool has = (pmin[bi] != UINT64_MAX);
+                    const uint64_t sp = has ? (pmax[bi] - pmin[bi]) : UINT64_MAX;
+                    if (PLACEMODE > 0  && !(has && sp <= (uint64_t)PLACEMODE))  { ++killed; continue; }
+                    if (PLACEMODE < 0 && !(has && sp >  (uint64_t)(-PLACEMODE))) { ++killed; continue; }
+                }
                 if ((int)sup1[bi] >= COHC && (int)sup2[bi] >= COHC) keep.push_back(dbg_bubbles[bi]);
                 else ++killed;
             }
@@ -2954,6 +3045,18 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 fprintf(stderr, "[DBG-EXCL] bubbles_with_ambiguous_reads=%zu/%zu  ambiguous_reads=%zu"
                                 "  length-changing: %zu/%zu ambiguous\n",
                         nb_amb, ambig.size(), tot_amb, amb_ind, nb_ind);
+            }
+            if (PLACE_ON) {
+                size_t hb[7] = {0,0,0,0,0,0,0};
+                for (uint32_t bi = 0; bi < (uint32_t)dbg_bubbles.size(); ++bi) {
+                    if (pmin[bi] == UINT64_MAX) { ++hb[6]; continue; }
+                    const uint64_t sp = pmax[bi] - pmin[bi];
+                    ++hb[sp <= 200 ? 0 : sp <= 1000 ? 1 : sp <= 10000 ? 2
+                        : sp <= 100000 ? 3 : sp <= 1000000 ? 4 : 5];
+                }
+                fprintf(stderr, "[PLACE-SPAN] pseudogenome span of supporting reads over %zu bubbles: "
+                                "<=200:%zu <=1k:%zu <=10k:%zu <=100k:%zu <=1M:%zu >1M:%zu none:%zu\n",
+                        dbg_bubbles.size(), hb[0], hb[1], hb[2], hb[3], hb[4], hb[5], hb[6]);
             }
             fprintf(stderr, "[DBG-RSS] after coherence: %ldMB\n", rss_kb()/1024);
             fprintf(stderr, "[DBG-COH] C=%d kept=%zu killed=%zu  %.2fs\n",
