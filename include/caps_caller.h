@@ -2510,9 +2510,37 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             // commutative, so the totals are identical to the serial sweep.
             // Per-thread arrays are one uint32 per bubble (a few hundred), so
             // the extra memory is negligible.
+            // ── EXCLUSIVE READ ASSIGNMENT (CAPS_DBG_EXCL=1) ──────────────
+            // The containment test above asks "does this read contain the
+            // fragment", separately for each path, and credits BOTH if both
+            // succeed. For an SNV that is harmless: the two fragments are the
+            // same length and differ at one base, so a read essentially never
+            // contains both, and this flag is inert by construction.
+            //
+            // For a LENGTH-CHANGING bubble it is not harmless. The two
+            // fragments share a flank and a right context and differ by the
+            // indel, so in repetitive or homopolymeric sequence one read can
+            // satisfy both `find`s -- and then a site with no allelic evidence
+            // at all still clears COHC on both paths. That is a plausible
+            // source of the precision asymmetry we actually observe
+            // (SNV 0.950 vs INDEL 0.658, against DiscoSNP++'s indel 0.936):
+            // kissreads2 assigns each read to its BEST path rather than to
+            // every path it contains.
+            //
+            // The rule here has no parameter to tune: a read that matches both
+            // paths distinguishes neither, so it is evidence for neither.
+            // Reads are stamped per-bubble within one read, then resolved once
+            // both strands have been scanned.
+            const bool EXCL = std::getenv("CAPS_DBG_EXCL") != nullptr;
+            std::vector<uint32_t> ambig(dbg_bubbles.size(), 0);
             #pragma omp parallel
             {
                 std::vector<uint32_t> t1(dbg_bubbles.size(), 0), t2(dbg_bubbles.size(), 0);
+                std::vector<uint32_t> tamb(EXCL ? dbg_bubbles.size() : 0, 0);
+                std::vector<uint32_t> s1(EXCL ? dbg_bubbles.size() : 0, 0),
+                                      s2(EXCL ? dbg_bubbles.size() : 0, 0),
+                                      sT(EXCL ? dbg_bubbles.size() : 0, 0);
+                std::vector<uint32_t> touched;
                 std::string ubuf3;
                 #pragma omp for schedule(dynamic, 256)
                 for (long long ri = 0; ri < (long long)seqs.size(); ++ri) {
@@ -2565,13 +2593,33 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                                         }
                                     }
                                 }
-                                if (pr.path == 1) ++t1[pr.bi]; else ++t2[pr.bi];
+                                if (!EXCL) {
+                                    if (pr.path == 1) ++t1[pr.bi]; else ++t2[pr.bi];
+                                } else {
+                                    // stamp, do not count yet -- the same read
+                                    // may still match the other path below
+                                    const uint32_t rid = (uint32_t)ri + 1u;
+                                    if (pr.path == 1) s1[pr.bi] = rid; else s2[pr.bi] = rid;
+                                    if (sT[pr.bi] != rid) { sT[pr.bi] = rid; touched.push_back(pr.bi); }
+                                }
                             }
                         }
                     }
+                    if (EXCL) {
+                        const uint32_t rid = (uint32_t)ri + 1u;
+                        for (uint32_t bi : touched) {
+                            const bool a = (s1[bi] == rid), b = (s2[bi] == rid);
+                            if (a && b) { ++tamb[bi]; continue; }   // distinguishes neither
+                            if (a) ++t1[bi]; else if (b) ++t2[bi];
+                        }
+                        touched.clear();
+                    }
                 }
                 #pragma omp critical(cohsup)
-                for (size_t i = 0; i < sup1.size(); ++i) { sup1[i] += t1[i]; sup2[i] += t2[i]; }
+                {
+                    for (size_t i = 0; i < sup1.size(); ++i) { sup1[i] += t1[i]; sup2[i] += t2[i]; }
+                    for (size_t i = 0; i < tamb.size(); ++i) ambig[i] += tamb[i];
+                }
             }
             size_t killed = 0;
             std::vector<DbgBubble> keep;
@@ -2594,6 +2642,17 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 else ++killed;
             }
             dbg_bubbles.swap(keep);
+            if (EXCL) {
+                size_t nb_amb = 0, tot_amb = 0, nb_ind = 0, amb_ind = 0;
+                for (size_t i = 0; i < ambig.size(); ++i) {
+                    if (ambig[i]) { ++nb_amb; tot_amb += ambig[i]; }
+                    const bool is_len = dbg_bubbles[i].path1.size() != dbg_bubbles[i].path2.size();
+                    if (is_len) { ++nb_ind; if (ambig[i]) ++amb_ind; }
+                }
+                fprintf(stderr, "[DBG-EXCL] bubbles_with_ambiguous_reads=%zu/%zu  ambiguous_reads=%zu"
+                                "  length-changing: %zu/%zu ambiguous\n",
+                        nb_amb, ambig.size(), tot_amb, amb_ind, nb_ind);
+            }
             fprintf(stderr, "[DBG-RSS] after coherence: %ldMB\n", rss_kb()/1024);
             fprintf(stderr, "[DBG-COH] C=%d kept=%zu killed=%zu  %.2fs\n",
                     COHC, dbg_bubbles.size(), killed, elapsed_s(t_coh, clk::now()));
@@ -2667,7 +2726,8 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         // anchor, then the two differing allele strings.
         if (WANT_SB) {
             size_t n_snv_sb = 0, n_ind_sb = 0, n_multi = 0, n_ind_drop = 0, n_multi_emitted = 0;
-            size_t n_multi_overploidy = 0, n_ind_str = 0;
+            size_t n_multi_overploidy = 0, n_ind_str = 0, n_ind_amb = 0, n_ind_shape = 0;
+            std::vector<size_t> amb_hist(64, 0);
             for (auto& st : sb_sites) {
                 if (st.alleles.size() > 2) ++n_multi;
                 // ── T5.2: NATIVE MULTI-ALLELIC EMISSION ─────────────────────
@@ -2744,6 +2804,94 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                     bb.len  = (int)std::max(s0.size(), s1.size());
                     bb.from_sb = 1;                  // came from the superbubble walk
                     const bool is_indel = (s0.size() != s1.size());
+                    // ── INDEL POSITIONAL AMBIGUITY (DiscoSNP++ checkRepeatSize) ──
+                    // The structural gate their closure has and ours did not.
+                    // Ported from kissnp2 Bubble.cpp:952 (`checkRepeatSize`),
+                    // AGPL — reimplemented from the published algorithm, not
+                    // copied.
+                    //
+                    // A clean indel leaves the SHORTER path an internal
+                    // extension of exactly k-1 before the two paths reconverge:
+                    //
+                    //     ACCTGGGA   vs   ACCT[XX]GGGA
+                    //     ACCT->CCTG->CTGG->TGGG->GGGA        ext = GGG  (k-1)
+                    //     ACCT->CCTX->CTXX->TXXG->XXGG->...   ext = XXGGG
+                    //
+                    // When the event sits in a repeat, the paths reconverge
+                    // EARLY and that extension is truncated -- in the limit to
+                    // nothing. The shortfall measures how many equally valid
+                    // placements the indel has:
+                    //
+                    //     size_repeat = k - 2 - min(|ext0|, |ext1|)
+                    //
+                    // THIS IS WHY THE EARLIER FILTERS FAILED. They asked
+                    // whether the REFERENCE context is homopolymeric, and it
+                    // does not separate -- measured over all 5,001 scored
+                    // indels, true positives are MORE homopolymeric than false
+                    // ones (frac run>=4: 0.531 vs 0.427). This asks a different
+                    // question, about the GRAPH: not "is this sequence
+                    // repetitive" but "is this indel's position determined".
+                    // A real indel in a homopolymer still has a determined
+                    // position when the flanks pin it down; a spurious one does
+                    // not.
+                    //
+                    // Threshold is DiscoSNP++'s own published default (20 at
+                    // k=31, i.e. the shorter path must stay distinct for >= 9
+                    // bases), so this is their gate at their setting, not a
+                    // value fitted here.
+                    //
+                    // SNVs are untouched by construction: their code returns
+                    // true immediately for equal-length paths, and so does this.
+                    // ── CLEAN-INDEL SHAPE (DiscoSNP++ expand() geometry) ─────
+                    // The real structural difference between their indel
+                    // closure and ours, found by putting the two side by side.
+                    //
+                    // THEIRS: `start_indel_prediction` extends ONE path until
+                    // it can close, then `expand` walks BOTH paths in LOCKSTEP
+                    // and closes only when `nextNode1 == nextNode2`. So their
+                    // two alleles are identical everywhere except one
+                    // contiguous inserted block -- the geometry is enforced by
+                    // the traversal and a non-indel shape can never be emitted.
+                    //
+                    // OURS: two unitig traces that happen to reach a common
+                    // node via find_sb. Nothing requires them to agree
+                    // anywhere in between, so paths differing at SEVERAL
+                    // positions are emitted as one multi-base REF/ALT -- which
+                    // vcfeval scores as an INDEL. This file already recorded
+                    // the symptom ("two same-length paths can still differ at
+                    // several positions ... those are emitted as a multi-base
+                    // REF/ALT") without connecting it to the cause.
+                    //
+                    // The shape test is exact and parameter-free: s_long is
+                    // s_short with ONE contiguous block inserted iff the common
+                    // prefix and common suffix together already cover the whole
+                    // of s_short.
+                    //
+                    //     LCP + LCS >= |s_short|
+                    //
+                    // Anything failing it differs by more than a single indel
+                    // and is a traversal artefact, not a variant. This asks
+                    // nothing about the sequence being repetitive -- the
+                    // question that was already measured not to separate.
+                    if (is_indel && !std::getenv("CAPS_DBG_NOSHAPE")) {
+                        const std::string& sl = (s0.size() > s1.size()) ? s0 : s1;
+                        const std::string& ss = (s0.size() > s1.size()) ? s1 : s0;
+                        size_t lcp = 0;
+                        while (lcp < ss.size() && ss[lcp] == sl[lcp]) ++lcp;
+                        size_t lcs = 0;
+                        while (lcs < ss.size() - lcp &&
+                               ss[ss.size() - 1 - lcs] == sl[sl.size() - 1 - lcs]) ++lcs;
+                        if (lcp + lcs < ss.size()) { ++n_ind_shape; continue; }
+                    }
+                    if (is_indel && !std::getenv("CAPS_DBG_NOAMB")) {
+                        const int MAXAMB = std::getenv("CAPS_DBG_MAXAMB")
+                                         ? atoi(std::getenv("CAPS_DBG_MAXAMB")) : 20;
+                        const int min_ext = (int)std::min(s0.size(), s1.size());
+                        const int size_repeat = 31 - 2 - min_ext;
+                        if (min_ext < (int)amb_hist.size()) ++amb_hist[min_ext];
+                        else ++amb_hist.back();
+                        if (size_repeat > MAXAMB) { ++n_ind_amb; continue; }
+                    }
                     if (!is_indel) ++n_snv_sb; else ++n_ind_sb;
                     // A superbubble record whose two paths are the SAME length
                     // is a SNV, and the pairwise walk already produced a better
@@ -2885,6 +3033,15 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                     sb_sites.size(), dbg_bubbles.size(), n_snv_sb, n_ind_sb, n_ind_drop, n_multi);
             if (n_ind_str)
                 fprintf(stderr, "[DBG-SB] indels dropped as homopolymer/STR artefacts: %zu\n", n_ind_str);
+            if (n_ind_shape)
+                fprintf(stderr, "[DBG-SB] indels dropped as non-single-indel shape (LCP+LCS): %zu\n", n_ind_shape);
+            if (n_ind_amb) {
+                fprintf(stderr, "[DBG-SB] indels dropped as positionally ambiguous (checkRepeatSize): %zu\n", n_ind_amb);
+                fprintf(stderr, "[DBG-AMB] min_ext histogram (clean event expects ~k-1=30):");
+                for (size_t i = 0; i < amb_hist.size(); ++i)
+                    if (amb_hist[i]) fprintf(stderr, " %zu:%zu", i, amb_hist[i]);
+                fprintf(stderr, "\n");
+            }
             if (n_multi_emitted || n_multi_overploidy)
                 fprintf(stderr, "[DBG-SB] multi-allelic: emitted=%zu rejected_over_ploidy(%d)=%zu\n",
                         n_multi_emitted, PLOIDY, n_multi_overploidy);
