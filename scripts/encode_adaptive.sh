@@ -52,7 +52,31 @@ M2=$(( LMAX * 35 / 100 )); [ "$M2" -lt 16 ] && M2=16
 # result is byte-identical to running them separately (verified on E. coli,
 # H. salinarum and S. acidocaldarius, three different winning candidates).
 # Measured on E. coli: 41.14 s -> 32.46 s, -21.1%, same 7,965,683 B archive.
-CANDS="${C1}:${M1},${C1}:${M2},${C2}:${M1},${C2}:${M2}"
+# ── 8-POINT GRID: 4 x MAXMAP, 2 x MINOV ─────────────────────────────────────
+# WIDER, AND NEARLY FREE. The candidates now run concurrently (see the fork
+# loop in 106_inprocess.cpp), and the per-candidate work is ~83% serial, so
+# wall(N) = S + N*Q/P with S ~= 20Q/P. Doubling N therefore costs
+# (20+8)/(20+4) = 1.17x in theory; measured 1.12x. Two datasets:
+#     SARS-CoV-2    4-grid 11.37 s -> 8-grid 12.73 s   archive IDENTICAL
+#     H. salinarum  4-grid 11.84 s -> 8-grid 13.14 s   15,654,489 -> 15,650,029 B
+# Both are still ~3.1x faster than the ORIGINAL sequential 4-grid (40.89 s),
+# while searching twice the space.
+#
+# IT CANNOT BE WORSE. The 8-point grid CONTAINS the 4-point grid, and the
+# encoder keeps whichever candidate produces the smallest archive, so
+# min(8 points) <= min(4 points) by construction -- a guarantee, not a
+# measurement that might not transfer.
+#
+# WHY THESE FOUR MAXMAP POINTS. This file already recorded the observed optima
+# as spanning L/19 .. L/5.6, but the 2-point grid only covered L/13 .. L/5 and
+# missed the LOW end -- and H. salinarum's optimum is documented right there
+# ("halo ~8 = L/19"). That is exactly the dataset the wider grid improves, and
+# exactly the failure a wider grid should fix.
+C3=$(( LMAX / 19 )); [ "$C3" -lt 6 ] && C3=6
+C4=$(( LMAX / 8  )); [ "$C4" -lt 6 ] && C4=6
+CANDS="${C3}:${M1},${C3}:${M2},${C1}:${M1},${C1}:${M2},${C4}:${M1},${C4}:${M2},${C2}:${M1},${C2}:${M2}"
+# GRID4=1 restores the previous 4-point grid for A/B measurement.
+[ -n "${GRID4:-}" ] && CANDS="${C1}:${M1},${C1}:${M2},${C2}:${M1},${C2}:${M2}"
 CANDIDATES="$CANDS" ARCHIVE="$OUT" \
     DUMP_LIT=1 DUMP_PERM=1 DUMP_MM=1 "$BEST" "$IN" 3 16 16 22 16 16 1 24 64 1 \
     > /dev/null 2>"${OUT}.log"
