@@ -164,6 +164,7 @@ def hapflank_lift(rn,cp1,cref,calt):
             return (p,ref_al,alt_al)
     return None
 
+_feat={}                      # eval-only: genome pos -> caller INFO
 rows=[]
 indel_rows=[]
 indel_rows_rev=0
@@ -196,6 +197,7 @@ for line in open(CALLS):
         if alts:
             gt="/".join(str(i+1) for i in range(len(alts))) if len(alts)>1 else "0/1"
             rows.append((gpos,gR,",".join(alts),gt))
+            _feat[gpos]=_info
         continue
     if len(cref)!=1 or len(calt)!=1:
         # ── indel: the caller labels the LONGER haplotype contig "reference", so its
@@ -302,6 +304,7 @@ for line in open(CALLS):
     else:
         continue                                        # both == ref, not a variant
     rows.append((gpos,gR,alt,gt))
+    _feat[gpos]=_info          # eval-only: carry caller features for TP/FP analysis
 
 # COMMIT TO ONE INDEL CALL PER LOCUS.
 # At an ambiguous repeat the extractor can propose several mutually exclusive
@@ -365,5 +368,8 @@ with open(OUT,'w') as o:
         if key in seen: continue
         seen.add(key)
         o.write("%s\t%d\t.\t%s\t%s\t30\tPASS\t.\tGT\t%s\n"%(CHROM,gpos,gR,alt,gt))
+import os as _os
+with open(_os.path.splitext(OUT)[0]+".feat.tsv","w") as _ff:
+    for _p,_i in sorted(_feat.items()): _ff.write("%d\t%s\n"%(_p,_i))
 print("lifted %d calls (%d SNV, %d indel; both strands) -> %s"
       %(len(seen),len(rows),len(indel_rows),OUT))
