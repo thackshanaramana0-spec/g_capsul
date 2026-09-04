@@ -57,8 +57,8 @@ Benchmarks:
 
 | script | what it runs |
 |---|---|
-| `scripts/run_pipeline_bench.sh` | **all 20 datasets, one pipeline** — 15 Claim 1 + 5 Claim 2 |
-| `scripts/run_claim1_bench.sh` | Claim 1 only, 15 datasets |
+| `scripts/run_pipeline_bench.sh` | **the whole pipeline** — compresses all 20, calls variants on the 4 human sets, then export/coverage/query on those same archives |
+| `scripts/run_claim1_bench.sh` | compression + lossless + SPRING/Genozip, **all 20 datasets** |
 | `scripts/run_fullchr20_bench_capsule.sh` | Claim 2 at full chr20 scale |
 | `scripts/run_fullchr20_bench_disco.sh` | DiscoSNP++ arm, identical methodology |
 | `scripts/run_window_bench_capsule.sh` | Claim 2 on one 400 kb window (fast iteration) |
@@ -92,6 +92,17 @@ from the k-mer histogram valley. That generalised **worse** — it drifted upwar
 the valley with them, costing 0.057 recall. Derive what genuinely scales with
 the data (read support does); keep structural what does not (the singleton
 floor).
+
+### The 20 datasets
+
+15 non-human (`NEW_DATASET_LOCKED.md`) plus the 4 GIAB human chr20 sets. **The
+human sets are not a separate category** — they are FASTQ, they compress
+through the identical code path, and they belong in the Claim 1 table with
+everything else. What distinguishes them is only that they are diploid human,
+so Claim 2 also calls variants on them, from that same compression pass. An
+earlier version of `run_claim1_bench.sh` excluded them purely because it looked
+for `<name>_1.fq` and the GIAB files are `<name>_pooled.fq` — a filename
+artefact, not a property of the data.
 
 ## 4. Results — full chr20, measured
 
