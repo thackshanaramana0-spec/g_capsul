@@ -125,6 +125,10 @@ compression continues after the caller returns. Standalone the caller is ~3.4 GB
 at parity. Method B is also **SNV-only**; superbubble indel emission measured
 -0.051 F1 held-out and is gated off.
 
+**Claim 2 is a het-SNV claim** — see `docs/CLAIM2_FINAL.md` for the final
+verdict, and `docs/ARCHITECTURE_VS_DISCOSNP.md` for the layer-by-layer
+comparison and where the remaining headroom is.
+
 **Indels are a closed loss, not an open task** (`docs/INDEL_BOUND.md`). At
 TP=3,290 against 7,768 truth indels, beating DiscoSNP++'s 0.576 requires
 FP < 366 — a 79% cut with zero TP loss — and *perfect* precision yields only
