@@ -1983,6 +1983,24 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                               ? atoi(std::getenv("CAPS_DBG_WALKBUDGET")) : 0;
         const int MAXPOLY = std::getenv("CAPS_DBG_MAXPOLY")
                           ? atoi(std::getenv("CAPS_DBG_MAXPOLY")) : 1;
+        // MEASURED, NOT JUST ARGUED (2026-09-05). This was justified on
+        // structural grounds alone, which is weaker than it needed to be --
+        // DiscoSNP++ ships P=3, so "1 is right" is a claim that has to be
+        // tested against their default. Swept over the tuning window and four
+        // held-out windows, SNV F1:
+        //     window      MAXPOLY=1   MAXPOLY=2   MAXPOLY=3 (their P=3)
+        //     r2 (tune)     0.886       0.881       0.881
+        //     r3            0.892       0.886       0.879
+        //     na            0.958       0.958       0.956
+        //     r4            0.894       0.895       0.897
+        //     r5            0.937       0.923       0.916
+        //     held-out mean 0.9203      0.9155      0.9120
+        // Monotone, and 1 wins. Relaxing it does buy recall (+6 TP on r2) but
+        // costs roughly double in precision (+12 FP), because a second
+        // polymorphism inside one walk is far more often two error branches
+        // than two real het sites. Our narrower setting beats their default on
+        // this pipeline; it is now evidence rather than an argument.
+        //
         // WHY 1 IS STRUCTURAL, not a fitted value. MAXPOLY caps how many EXTRA
         // differences a single bubble may absorb. At k=31 and human
         // heterozygosity ~1/1000, the chance a second het site falls inside the
