@@ -18,6 +18,10 @@
 set -u
 CAPS="${1:?capsule binary}"; FQDIR="${2:?fastq dir}"; OUT="${3:?output dir}"
 WHAT="${4:-all}"
+# Claim 3 reads the archive Claim 1 wrote, so it needs the decoder. Built here
+# rather than assumed present, so one invocation of this script covers all three
+# claims end to end.
+DEC="${DECODER:-/tmp/capsule_decode}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 mkdir -p "$OUT"
 LOG="$OUT/pipeline.log"
@@ -36,7 +40,7 @@ SRR32429602 SRR39257532 SRR10676752"
 C2_SETS="HG002 HG003 HG004 HG005"
 
 CSV="$OUT/pipeline_results.csv"
-echo "dataset,kind,raw_bytes,archive_bytes,ratio,wall_s,peak_rss_kb,lossless,snv_f1,snv_p,snv_r" > "$CSV"
+echo "dataset,kind,raw_bytes,archive_bytes,ratio,wall_s,peak_rss_kb,lossless,snv_f1,snv_p,snv_r,export_s,coverage_s,query_s" > "$CSV"
 
 parse_time_v(){
     local f="$1" wall hwm
@@ -52,16 +56,38 @@ run_claim1(){
     local acc="$1" fq="$FQDIR/${acc}_1.fq"
     [ -s "$fq" ] || { log "SKIP $acc (no $fq)"; return; }
     local d="$OUT/c1_$acc"; mkdir -p "$d"
-    log "[C1] $acc — archive only"
-    ( cd "$d" && /usr/bin/time -v "$CAPS" "$fq" 3 16 16 22 16 16 1 24 64 1 \
+    log "[C1] $acc — archive (Claim 1), then addressability (Claim 3) on the SAME archive"
+    # Go through encode_adaptive.sh, exactly as run_claim1_bench.sh does.
+    # Calling the binary directly would SKIP the adaptive MAXMAP search
+    # (CANDIDATES=...), which forks four settings and keeps the smallest
+    # archive -- so a direct call produces LARGER archives than every
+    # published Claim 1 number. The pipeline must reproduce the claim, not
+    # approximate it.
+    ( cd "$d" && INPUT="$fq" ARCHIVE="$d/${acc}.capsule" BEST="$CAPS" \
+        /usr/bin/time -v bash "$HERE/scripts/encode_adaptive.sh" \
         >/dev/null 2> run.log ) || true
     local raw arch tv wall hwm
     raw=$(stat -c%s "$fq")
-    arch=$(grep -ao "ARCHIVE_TOTAL=[0-9]*" "$d/run.log" | tail -1 | cut -d= -f2)
+    arch=$(grep -aoh "ARCHIVE_TOTAL=[0-9]*" "$d/run.log" "$d/${acc}.capsule.log" 2>/dev/null | tail -1 | cut -d= -f2)
     tv=$(parse_time_v "$d/run.log"); wall=${tv% *}; hwm=${tv#* }
     [ -n "$arch" ] || { log "  FAIL $acc — no ARCHIVE_TOTAL"; return; }
     log "  $acc: $arch B, ratio $(awk -v r="$raw" -v a="$arch" 'BEGIN{printf "%.1f",r/a}')x, ${wall}s, ${hwm}KB"
-    echo "$acc,claim1,$raw,$arch,$(awk -v r=$raw -v a=$arch 'BEGIN{printf "%.2f",r/a}'),$wall,$hwm,,,," >> "$CSV"
+
+    # ── CLAIM 3 on the archive this run just wrote ──────────────────────────
+    # Not a separate benchmark on separate data: export/coverage/query are
+    # served from the same .capsule file Claim 1 was measured on, which is the
+    # whole addressability claim.
+    local ex_s="" cv_s="" qy_s="" arcf="$d/${acc}.capsule"
+    if [ -x "$DEC" ] && [ -s "$arcf" ]; then
+        local t0
+        t0=$(date +%s.%N); "$DEC" export   "$arcf" "$d/contigs.fa"  >/dev/null 2>"$d/c3_export.log"   && ex_s=$(awk -v a="$t0" -v b="$(date +%s.%N)" 'BEGIN{printf "%.2f",b-a}')
+        t0=$(date +%s.%N); "$DEC" coverage "$arcf" "$d/coverage.tsv" >/dev/null 2>"$d/c3_coverage.log" && cv_s=$(awk -v a="$t0" -v b="$(date +%s.%N)" 'BEGIN{printf "%.2f",b-a}')
+        t0=$(date +%s.%N); "$DEC" query    "$arcf" "$d/region.fq" 0-100000 >/dev/null 2>"$d/c3_query.log" && qy_s=$(awk -v a="$t0" -v b="$(date +%s.%N)" 'BEGIN{printf "%.2f",b-a}')
+        log "  $acc claim3: export=${ex_s:-FAIL}s coverage=${cv_s:-FAIL}s query=${qy_s:-FAIL}s"
+    else
+        log "  $acc claim3: SKIP (decoder $DEC missing or no archive)"
+    fi
+    echo "$acc,claim1+3,$raw,$arch,$(awk -v r=$raw -v a=$arch 'BEGIN{printf "%.2f",r/a}'),$wall,$hwm,,,,,${ex_s},${cv_s},${qy_s}" >> "$CSV"
 }
 
 # ── Claim 2 arm: SAME binary, CAPS_CALL=1 — archive AND calls in one pass ───
@@ -81,11 +107,15 @@ run_claim2(){
     r=$(echo  "$line" | grep -oE ' R=[0-9.]+' | cut -d= -f2)
     tv=$(parse_time_v "$d.log"); wall=${tv% *}; hwm=${tv#* }
     log "  $ind: SNV F1=${f1:-NA} P=${p:-NA} R=${r:-NA}, ${wall}s, ${hwm}KB"
-    echo "$ind,claim2,$(stat -c%s "$fq"),,,$wall,$hwm,,${f1:-},${p:-},${r:-}" >> "$CSV"
+    echo "$ind,claim2,$(stat -c%s "$fq"),,,$wall,$hwm,,${f1:-},${p:-},${r:-},,," >> "$CSV"
 }
 
 log "=== G_CAPSUL pipeline benchmark — $WHAT ==="
 log "binary: $CAPS"
+if [ ! -x "$DEC" ]; then
+    log "building decoder for Claim 3 -> $DEC"
+    bash "$HERE/scripts/build_decode.sh" "$DEC" >>"$LOG" 2>&1 || log "  decoder build FAILED — Claim 3 will be skipped"
+fi
 if [ "$WHAT" = all ] || [ "$WHAT" = claim1 ]; then
     for a in $C1_SETS; do run_claim1 "$a"; done
 fi
