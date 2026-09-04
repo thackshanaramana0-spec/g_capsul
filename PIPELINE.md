@@ -57,8 +57,8 @@ Benchmarks:
 
 | script | what it runs |
 |---|---|
-| `scripts/run_pipeline_bench.sh` | **the whole pipeline** — compresses all 20, calls variants on the 4 human sets, then export/coverage/query on those same archives |
-| `scripts/run_claim1_bench.sh` | compression + lossless + SPRING/Genozip, **all 20 datasets** |
+| `scripts/run_pipeline_bench.sh` | **the whole pipeline** — compresses all 19, calls variants on the 4 human sets, then export/coverage/query on those same archives |
+| `scripts/run_claim1_bench.sh` | compression + lossless + SPRING/Genozip, **all 19 datasets** |
 | `scripts/run_fullchr20_bench_capsule.sh` | Claim 2 at full chr20 scale |
 | `scripts/run_fullchr20_bench_disco.sh` | DiscoSNP++ arm, identical methodology |
 | `scripts/run_window_bench_capsule.sh` | Claim 2 on one 400 kb window (fast iteration) |
@@ -93,9 +93,10 @@ the valley with them, costing 0.057 recall. Derive what genuinely scales with
 the data (read support does); keep structural what does not (the singleton
 floor).
 
-### The 20 datasets
+### The 19 datasets
 
-15 non-human (`NEW_DATASET_LOCKED.md`) plus the 4 GIAB human chr20 sets. **The
+15 non-human (`NEW_DATASET_LOCKED.md`) plus the 4 GIAB human chr20 sets
+(HG002, HG003, HG004, HG005) = **19**. **The
 human sets are not a separate category** — they are FASTQ, they compress
 through the identical code path, and they belong in the Claim 1 table with
 everything else. What distinguishes them is only that they are diploid human,
