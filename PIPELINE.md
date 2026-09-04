@@ -66,10 +66,17 @@ Benchmarks:
 
 ## 3. The graph caller (Method B) — what it is
 
-`kc`, the canonical 31-mer table, was already built by the caller and used for
-a single scalar (the coverage threshold `H`). It **is** a de Bruijn graph: a
-k-mer set plus `kc_find` as the membership oracle. Method B runs bubble calling
-on it directly, so the graph costs nothing extra.
+`kc`, the canonical 31-mer table, is built **by the caller** (`kc_H_build`) and
+was previously used for a single scalar (the coverage threshold `H`). It **is**
+a de Bruijn graph: a k-mer set plus `kc_find` as the membership oracle, so
+bubble calling reuses a table that already had to exist for `H` — but the table
+is a CALLER cost, not a compressor byproduct. Do not write "the graph is free
+because the compressor built it"; it is not true and `106_inprocess.cpp`
+contains no k-mer table.
+
+What the compressor genuinely hands over is the **assembly**: Method B reuses
+the encoder's contigs and skips `build_substrate`, which re-places all 12.6M
+reads at a measured 738 s serial on full chr20.
 
 Stages: `kc` build -> branching nodes, both strand orientations -> lockstep
 bubble walk with bounded multi-polymorphism -> read-coherence filter (containment
