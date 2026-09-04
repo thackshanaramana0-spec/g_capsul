@@ -28,7 +28,11 @@ log() { echo "[window] $(date '+%H:%M:%S') $*"; }
 
 CAPS="$1"; SC="$2"; REF="$3"; IND="${4:-HG002}"; WIN="${5:-r2}"
 OUT="${6:-$HOME/caps_win/${IND}_${WIN}}"
-CHROM=20
+# Chromosome is overridable so the same benchmark can test a repeat-rich
+# chromosome. Everything here is chr20 by default (63 Mb, comparatively
+# unrepetitive); chr1 (249 Mb, heavy segmental duplication) is where a
+# bubble caller's repeat-driven false positives are most likely to show.
+CHROM="${CHROM:-20}"
 TARGET_COV="${TARGET_COV:-30}"     # standardized depth (source BAMs are 300x)
 
 # ── the five windows: r2 is the tuning window, the rest are held out ────────
@@ -97,8 +101,9 @@ log "[4/6] done"
 # ── 5. Truth for this window: het-only (reference-free sees only het), inside
 #       the GIAB confident regions, split SNV / INDEL ───────────────────────
 log "[5/6] fetching GIAB truth for $REGION, restricting to confident regions..."
-tabix -h "$TRUTH" "$REGION" 2>/dev/null | awk -v OFS='\t' '
-  /^##contig/{next} /^#CHROM/{print "##contig=<ID=20,length=63025520>"; print; next}
+CLEN=$(awk -v c="$CHROM" '$1==c{print $2}' "${REF}.fai" 2>/dev/null); CLEN="${CLEN:-63025520}"
+tabix -h "$TRUTH" "$REGION" 2>/dev/null | awk -v OFS='\t' -v C="$CHROM" -v CLEN="$CLEN" '
+  /^##contig/{next} /^#CHROM/{printf "##contig=<ID=%s,length=%s>\n", C, CLEN; print; next}
   /^#/{print; next} {print}' > truth.vcf
 awk -v c=$CHROM -v lo=$LO -v hi=$HI '$1==c && $3>lo && $2<hi{
   s=($2>lo?$2:lo); e=($3<hi?$3:hi); if(e>s) print c"\t"s"\t"e}' "$BED" > regions.bed
@@ -143,7 +148,10 @@ prep lifted.vcf c_ind indel
 
 # ── 6. Score with rtg vcfeval ──────────────────────────────────────────────
 log "[6/6] normalising, classifying, and scoring SNV+INDEL with rtg vcfeval..."
-[ -d "$HOME/refs/chr20.sdf" ] && SDF="$HOME/refs/chr20.sdf" || { rm -rf sdf; rtg format -o sdf "$REF" >/dev/null 2>&1; SDF=sdf; }
+# SDF must match the REFERENCE actually in use, not always chr20 -- pointing
+# vcfeval at the wrong one fails with "no sequence names in common".
+_SDFCAND="${REF%.fa}.sdf"
+[ -d "$_SDFCAND" ] && SDF="$_SDFCAND" || { rm -rf sdf; rtg format -o sdf "$REF" >/dev/null 2>&1; SDF=sdf; }
 score(){ rm -rf "e_$1"
   rtg vcfeval -b "$2" -c "$3" -t "$SDF" --squash-ploidy --bed-regions regions.bed \
       -o "e_$1" >/dev/null 2>&1 || true
