@@ -81,7 +81,13 @@ log "[4/7] done -- $(grep -vc '^#' tetra_truth_v2_win.vcf) truth sites in window
 
 # ── 5. CAPSULE reference-free call at the mixed sample's ploidy ─────────────
 log "[5/7] running CAPSULE caller at ploidy=$PLOIDY on the mixed sample..."
+# CAPS_DBG* are honoured if the caller sets them, so this script can run either
+# the original caller or Method B (the graph caller) without being edited.
+# Previously this `export` line silently replaced the whole environment, so a
+# Method B invocation ran the OLD caller and the result was not what it claimed
+# to be -- worth stating because one full tetraploid run was wasted that way.
 export CAPS_CALL=1 CAPS_PLOIDY="$PLOIDY" CALL_VCF="$OUT/calls.vcf" CAPS_DUMP_CONTIGS="$OUT/contigs.tsv"
+log "[5/7]   mode: ${CAPS_DBG_ONLY:+Method B (graph caller)}${CAPS_DBG_ONLY:-original caller}, ploidy=$PLOIDY"
 "$CAPS" reads.fq 3 16 16 22 16 16 1 24 64 1 >/dev/null 2>capsule_call.log
 grep -E "CAPS-CALL" capsule_call.log || true
 cp contigs.tsv contigs.fa

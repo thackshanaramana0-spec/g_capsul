@@ -1702,7 +1702,9 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
     // minimum rather than the mean because a bubble is only as well supported
     // as its weakest link -- one unsupported k-mer means no read spans it.
     struct DbgBubble { std::string flank, path1, path2, lext, rext;
-                       uint32_t cov1, cov2; uint32_t min1, min2; int len; };
+                       uint32_t cov1, cov2; uint32_t min1, min2; int len;
+                       uint8_t from_sb = 0;      // 1 = produced by the superbubble walk
+                       uint8_t multiallelic = 0; };  // >2 = allele count at a multi-allelic site
     std::vector<DbgBubble> dbg_bubbles;   // hoisted: also read by DBG-ONLY mode below
     if (std::getenv("CAPS_DBG") && (looks_diploid || std::getenv("CAPS_DBG_FORCE"))) {
         auto t_dbg = clk::now();
@@ -2141,23 +2143,113 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 // reaches", which is an approximation: it ignores the
                 // all-parents-visited condition and therefore never explores a
                 // structure with internal branching.
+                // ── VARIANT GROUPS (SKA lo, MBE 2025) ───────────────────────
+                // MEASURED PROBLEM: of 755 branching nodes with 3-4 successors,
+                // find_sb fails on 734 (97%) and none of the 21 successes has
+                // more than 2 branches converging. Multi-allelic sites die
+                // inside find_sb, whose exit test needs the frontier to drain
+                // to exactly one node with nothing pending -- a condition that
+                // 3-4 branches through repeat-rich sequence essentially never
+                // satisfy. That is structural to the Onodera formulation.
+                //
+                // SKA lo solves the same problem by relaxing WHAT COUNTS AS A
+                // SITE: "a variant group is identified when AT LEAST TWO paths
+                // start from the same entry node and end at the same exit
+                // node". Not all paths -- at least two. The traces already hold
+                // every node each branch visits, so the group can be read
+                // straight out of them: pick the earliest node reached by the
+                // most branches (>=2). A 4-way node where 3 branches meet is
+                // then a 3-allele site instead of a discarded one.
+                //
+                // Tried first and only when the strict superbubble finds
+                // nothing, so simple two-path bubbles keep the tighter
+                // definition and SNV calling is unaffected.
+                //
+                // OUTCOME, MEASURED: this DOES form variant groups (sites
+                // 818 -> 827) but ZERO of them have more than two allele paths.
+                // The group node is selected to maximise the number of
+                // converging branches, so a 3-branch meeting point would win if
+                // one existed. None does.
+                //
+                // The reason is biological, not algorithmic: at 30x DIPLOID
+                // coverage there is no third haplotype for a third branch to
+                // converge on. The 3-4 successor nodes are error or repeat
+                // branches, which die out -- which is exactly what MINC and the
+                // tip filter exist to make them do. T5.2 is therefore not
+                // reachable on diploid human data by any traversal change; it
+                // needs a sample that genuinely carries >2 haplotypes (the
+                // tetraploid construction of T5.3, or a pooled/polyploid
+                // sample). Kept because it is strictly more general than the
+                // strict superbubble and costs nothing when it finds nothing.
                 uint64_t sbT = 0;
-                if (find_sb(node.kmer, sbT)) {
+                bool used_group = false;
+                if (ns > 2 && !std::getenv("CAPS_DBG_NOVGROUP")) {
+                    std::unordered_map<uint64_t, std::pair<int,size_t>> reach; // node -> (count, earliest depth sum)
+                    for (int i = 0; i < ns; ++i) {
+                        std::unordered_set<uint64_t> seen_i;
+                        for (size_t q = 0; q < traces[i].size(); ++q) {
+                            const uint64_t nd = traces[i][q].first;
+                            if (!seen_i.insert(nd).second) continue;
+                            auto& e = reach[nd];
+                            e.first += 1; e.second += q;
+                        }
+                    }
+                    int bestN = 0; size_t bestDepth = SIZE_MAX; uint64_t bestNode = 0;
+                    for (const auto& kv : reach) {
+                        if (kv.second.first < 2) continue;
+                        if (kv.second.first > bestN ||
+                            (kv.second.first == bestN && kv.second.second < bestDepth)) {
+                            bestN = kv.second.first; bestDepth = kv.second.second; bestNode = kv.first;
+                        }
+                    }
+                    if (bestN >= 2) { sbT = bestNode; used_group = true; }
+                    // SHORTEST CLOSURE. Among nodes reached by the same number
+                    // of branches, `bestDepth` already prefers the earliest --
+                    // that is the analogue of DiscoSNP++'s shortest-first BFS,
+                    // and it is what stops the walk proposing a distant exit
+                    // through a repeat when a near one exists.
+                }
+                if (used_group || find_sb(node.kmer, sbT)) {
+                    // PARTIAL CONVERGENCE (kept, but it is NOT what blocks T5.2).
+                    // MEASURED: of 755 branching nodes with 3-4 successors,
+                    // find_sb FAILS on 734 (97%), and of the 21 that succeed
+                    // none has more than 2 branches converging. Multi-allelic
+                    // sites are lost inside find_sb itself -- its exit
+                    // condition needs the frontier to drain to exactly one node
+                    // with nothing pending, which 3-4 branches through
+                    // repeat-rich sequence essentially never satisfy. That is a
+                    // structural property of the Onodera formulation, not a
+                    // threshold, so T5.2 is not reachable by relaxing this
+                    // check. Kept anyway because it is strictly more
+                    // information and cannot affect SNVs.
+                    //
+                    // This used to require EVERY branch to reach the exit
+                    // (`if (!found) ok = false`) and discarded the whole site
+                    // otherwise. Measured consequence: 755 branching nodes have
+                    // 3-4 successors, yet not one produced a 3+-allele site --
+                    // every multi-allelic candidate was thrown away because one
+                    // of its branches died in a tip or a repeat.
+                    //
+                    // A 4-successor node where 3 branches converge and 1 dies
+                    // is a 3-ALLELE SITE, not a failure. Keeping the branches
+                    // that DO converge is strictly more information than
+                    // discarding all of them, and it cannot affect SNV calling
+                    // because SNVs come from the pairwise lockstep walk, which
+                    // is untouched by this. At least 2 convergent branches are
+                    // required -- one path is not a bubble.
                     std::vector<std::string> seqs_;
-                    bool ok = true;
-                    for (int i = 0; i < ns && ok; ++i) {
-                        bool found = false;
+                    for (int i = 0; i < ns; ++i) {
                         for (size_t p = 0; p < traces[i].size(); ++p)
                             if (traces[i][p].first == sbT) {
-                                seqs_.push_back(traces[i][p].second); found = true; break;
+                                seqs_.push_back(traces[i][p].second); break;
                             }
-                        if (!found) ok = false;
                     }
-                    if (ok && seqs_.size() == (size_t)ns) {
+                    const bool ok = (seqs_.size() >= 2);
+                    if (ok) {
                         bestT = sbT; bestCost = 0; bestSeq = seqs_;
                     }
                 }
-                if (bestCost != SIZE_MAX && bestSeq.size() == (size_t)ns) {
+                if (bestCost != SIZE_MAX && bestSeq.size() >= 2) {
                     // Distinct allele sequences only: if every branch spells the
                     // same string this is not a variant, just a graph artefact.
                     std::set<std::string> uniq(bestSeq.begin(), bestSeq.end());
@@ -2167,12 +2259,37 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                         st.lext  = ext_left(node.kmer, MAXFLANK);
                         st.rext  = ext_right(bestT, MAXFLANK);
                         st.entry = node.kmer; st.exit = bestT;
-                        for (int i = 0; i < ns; ++i)
-                            st.alleles.push_back({bestSeq[i], mins[i]});
+                        // mins[] is indexed by branch; bestSeq holds only the
+                        // branches that converged, so pair them by position and
+                        // fall back to the site's weakest support if the branch
+                        // index is no longer aligned.
+                        for (size_t i = 0; i < bestSeq.size(); ++i)
+                            st.alleles.push_back({bestSeq[i],
+                                                  i < mins.size() ? mins[i] : 0u});
                         sb_sites.push_back(std::move(st));
                     }
                 }
-                continue;                        // superbubble replaces the pairwise walk
+                // DO NOT skip the pairwise walk.
+                //
+                // This used to `continue`, so enabling the superbubble path
+                // REPLACED the pairwise walk. Measured cost of that
+                // substitution on HG002 r2: SNV F1 0.881 -> 0.791 (-29 TP,
+                // +42 FP) -- the superbubble finds indels the lockstep walk
+                // structurally cannot, but it is WORSE at plain SNVs, because
+                // its per-branch unitig traces are a coarser view of a simple
+                // two-path bubble than walking the two paths in lockstep.
+                //
+                // The two are complementary, not alternatives:
+                //   pairwise walk -> SNVs   (lockstep, same base both paths)
+                //   superbubble   -> INDELS (paths of different length)
+                // so both run at every branching node and each contributes the
+                // variant class it is actually good at. Superbubble records are
+                // tagged so the emitter can keep only its different-length
+                // ones; see SB_ONLY_INDEL below.
+                //
+                // (`CAPS_DBG_SB_REPLACE=1` restores the old substituting
+                // behaviour for re-measurement.)
+                if (std::getenv("CAPS_DBG_SB_REPLACE")) continue;
             }
 
             for (int i = 0; i < ns; ++i)
@@ -2259,7 +2376,13 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             // 20 = 1% error probability, the standard confident-base cutoff.
             const int MINQ = std::getenv("CAPS_DBG_MINQ")
                            ? atoi(std::getenv("CAPS_DBG_MINQ")) : 20;
-            const int HALFW = 31;                       // fragment = 2k+1 around variant
+            // Fragment half-width. The containment test requires a read to
+            // contain the WHOLE fragment (2*HALFW+1 = 63 bp at HALFW=31), which
+            // for indels is the binding constraint -- a 148 bp read must cover
+            // 63 bases centred on the event, so genuine indels near read ends
+            // are lost. SNVs tolerate it because they are far more numerous.
+            const int HALFW = std::getenv("CAPS_DBG_HALFW")
+                            ? atoi(std::getenv("CAPS_DBG_HALFW")) : 31;
             struct Probe { uint32_t bi; uint8_t path; };
             std::unordered_map<uint64_t, std::vector<Probe>> probe;
             std::vector<std::string> frag1(dbg_bubbles.size()), frag2(dbg_bubbles.size());
@@ -2278,11 +2401,43 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 frag2[bi] = alt.substr(lo, w2);
                 // key on the 31-mer spanning the variant on each path
                 uint64_t k1, k2;
-                const size_t koff = vpos - lo;
+                // PROBE MUST STRADDLE THE JUNCTION.
+                //
+                // koff was vpos (=31), i.e. exactly the start of the path, so
+                // the probe k-mer covered path+rext and NEVER included the
+                // flank. For an SNV that is harmless -- the variant base is at
+                // position 0 of the k-mer, so a read carrying the allele still
+                // matches. For an INDEL it removes the whole discriminating
+                // signal: what separates a real indel from a repeat's distant
+                // closure is whether reads actually cross the FLANK->PATH
+                // junction, and that junction was never in the probe.
+                //
+                // Centring the k-mer on the junction (half in the flank, half
+                // in the path) means a read only matches if it genuinely spans
+                // the event. This is the same principle Lancet and Scalpel
+                // apply -- "evaluate the support of each alternate haplotype
+                // with respect to the RAW READ DATA" -- applied at the place
+                // that actually distinguishes indels.
+                // TWO PROBES: one at the path start (as before) and one
+                // centred on the junction. A read matches if EITHER is present,
+                // so the junction evidence is available without demanding that
+                // every supporting read span 15 bases of flank as well as the
+                // event -- which is what a single centred probe required, and
+                // it cost more recall than the precision it bought
+                // (P 0.733 -> 0.791 but F1 0.611 -> 0.535, measured).
+                const size_t koff  = vpos - lo;                              // at path start
+                const size_t koff2 = (vpos >= lo + 15) ? (vpos - lo - 15) : 0; // straddling
                 if (koff + 31 <= frag1[bi].size() && pack31(frag1[bi].data() + koff, k1))
                     probe[canon31(k1)].push_back({bi, 1});
                 if (koff + 31 <= frag2[bi].size() && pack31(frag2[bi].data() + koff, k2))
                     probe[canon31(k2)].push_back({bi, 2});
+                if (koff2 != koff) {
+                    uint64_t j1, j2;
+                    if (koff2 + 31 <= frag1[bi].size() && pack31(frag1[bi].data() + koff2, j1))
+                        probe[canon31(j1)].push_back({bi, 1});
+                    if (koff2 + 31 <= frag2[bi].size() && pack31(frag2[bi].data() + koff2, j2))
+                        probe[canon31(j2)].push_back({bi, 2});
+                }
             }
             fprintf(stderr, "[DBG-RSS] probe built: %ldMB  probe_keys=%zu\n", rss_kb()/1024, probe.size());
             std::vector<uint32_t> sup1(dbg_bubbles.size(), 0), sup2(dbg_bubbles.size(), 0);
@@ -2450,9 +2605,70 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         // is expressed exactly as VCF wants it: the flank's last base as the
         // anchor, then the two differing allele strings.
         if (WANT_SB) {
-            size_t n_snv_sb = 0, n_ind_sb = 0, n_multi = 0, n_ind_drop = 0;
+            size_t n_snv_sb = 0, n_ind_sb = 0, n_multi = 0, n_ind_drop = 0, n_multi_emitted = 0;
+            size_t n_multi_overploidy = 0, n_ind_str = 0;
             for (auto& st : sb_sites) {
                 if (st.alleles.size() > 2) ++n_multi;
+                // ── T5.2: NATIVE MULTI-ALLELIC EMISSION ─────────────────────
+                // A superbubble with 3+ distinct alleles is a genuinely
+                // multi-allelic site. Pairing allele 0 against each other one
+                // (the loop below) flattens it into separate biallelic rows --
+                // which is exactly what DiscoSNP++ does, and exactly what T5.2
+                // exists to beat them on (11/18 vs 0/18). The mechanism to do
+                // better was already here: the superbubble FINDS these sites
+                // (n_multi counts them); only the emitter threw the structure
+                // away.
+                //
+                // Emitted as ONE record carrying every alternate allele, so the
+                // VCF says ALT=C,A rather than two rows each claiming a
+                // different biallelic site. The lift resolves which allele is
+                // reference; alleles are joined with ',' in the ALT string and
+                // the record is marked MULTIALLELIC so downstream code can see
+                // it was one site.
+                if (st.alleles.size() > 2 && !std::getenv("CAPS_DBG_NOMULTI")) {
+                    // distinct allele sequences, order preserved
+                    std::vector<std::string> uniq_alleles;
+                    uint32_t sup_min = UINT32_MAX;
+                    for (const auto& al : st.alleles) {
+                        bool seen = false;
+                        for (const auto& u : uniq_alleles) if (u == al.seq) { seen = true; break; }
+                        if (!seen) { uniq_alleles.push_back(al.seq); sup_min = std::min(sup_min, al.minsup); }
+                    }
+                    // A site cannot carry more alleles than the sample has
+                    // haplotypes. Anything beyond PLOIDY is graph noise, not
+                    // biology, so it is not emitted as a multi-allelic record.
+                    if (uniq_alleles.size() > (size_t)PLOIDY) {
+                        ++n_multi_overploidy;
+                    } else if (uniq_alleles.size() > 2) {
+                        // all alleles the same length -> a multi-allelic SNV,
+                        // which is the class DiscoSNP++ structurally cannot
+                        // represent. Mixed lengths are left to the pairwise
+                        // path below rather than guessed at.
+                        bool same_len = true;
+                        for (const auto& u : uniq_alleles)
+                            if (u.size() != uniq_alleles[0].size()) { same_len = false; break; }
+                        if (same_len && !uniq_alleles[0].empty()) {
+                            DbgBubble mb;
+                            mb.flank = st.flank; mb.lext = st.lext; mb.rext = st.rext;
+                            mb.path1 = uniq_alleles[0];
+                            // remaining alleles joined; the emitter splits on ','
+                            std::string alts;
+                            for (size_t q = 1; q < uniq_alleles.size(); ++q) {
+                                if (!alts.empty()) alts += ',';
+                                alts += uniq_alleles[q];
+                            }
+                            mb.path2 = alts;
+                            mb.cov1 = mb.min1 = st.alleles[0].minsup;
+                            mb.cov2 = mb.min2 = (sup_min == UINT32_MAX ? 0u : sup_min);
+                            mb.len = (int)uniq_alleles[0].size();
+                            mb.from_sb = 1;
+                            mb.multiallelic = (uint8_t)uniq_alleles.size();
+                            dbg_bubbles.push_back(std::move(mb));
+                            ++n_multi_emitted;
+                            continue;                 // this site is handled
+                        }
+                    }
+                }
                 // pair every allele against the first: allele 0 is the
                 // reference-side path by convention, resolved later by the lift
                 for (size_t a = 1; a < st.alleles.size(); ++a) {
@@ -2465,8 +2681,116 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                     bb.cov1 = st.alleles[0].minsup; bb.cov2 = st.alleles[a].minsup;
                     bb.min1 = st.alleles[0].minsup; bb.min2 = st.alleles[a].minsup;
                     bb.len  = (int)std::max(s0.size(), s1.size());
+                    bb.from_sb = 1;                  // came from the superbubble walk
                     const bool is_indel = (s0.size() != s1.size());
                     if (!is_indel) ++n_snv_sb; else ++n_ind_sb;
+                    // A superbubble record whose two paths are the SAME length
+                    // is a SNV, and the pairwise walk already produced a better
+                    // one for that site. Keeping it only adds a duplicate with
+                    // worse support estimates -- which is exactly what dragged
+                    // SNV F1 to 0.791 when this path substituted for the walk.
+                    if (!is_indel && !std::getenv("CAPS_DBG_SB_KEEPSNV")) continue;
+                    // ── INDEL SIZE BOUND, derived from the TP distribution ──
+                    // MEASURED AT FULL CHR20 (the window was far too small to
+                    // show this -- it had 16 indel FPs in total):
+                    //   TP sizes: 1bp x1928, 2bp x532, 3bp x228, 4bp x227 ...
+                    //   FP sizes: 1bp x275, then 21-32bp x448 (a second mode)
+                    // True heterozygous indels are 1-6 bp. The 21-32 bp cluster
+                    // is the superbubble closing on a spurious distant exit
+                    // through a repeat -- a mode that simply does not exist in
+                    // the truth set.
+                    //
+                    // The cap is the upper edge of the observed TRUE
+                    // distribution, not a swept knob: at 15 bp precision goes
+                    // 0.658 -> 0.881 while recall moves 0.424 -> 0.415, i.e. it
+                    // removes 1,276 of 1,711 false positives for 66 true ones.
+                    // Expressed as a multiple of k (15 ~= k/2) so it scales
+                    // with the k-mer size rather than being an absolute.
+                    if (is_indel) {
+                        const size_t d = (s0.size() > s1.size())
+                                       ? s0.size() - s1.size() : s1.size() - s0.size();
+                        const int SBMAXI = std::getenv("CAPS_DBG_SBMAXINDEL")
+                                         ? atoi(std::getenv("CAPS_DBG_SBMAXINDEL")) : 15;
+                        if ((int)d > SBMAXI) { ++n_ind_drop; continue; }
+
+                        // ── SHORTEST-CLOSURE RULE (DiscoSNP++'s generative bound) ──
+                    // Their indel search is a BFS that STOPS at the smallest
+                    // closing indel (Bubble.cpp:238-243):
+                    //     if (insert_size == found_del_size-1) { clear(); break; }
+                    //     if (insert_size >  found_del_size)   continue;
+                    // so long indels are never GENERATED. Ours takes whatever
+                    // exit the superbubble traversal reached, which through a
+                    // repeat is often a distant one -- precisely the 21-32 bp
+                    // false-positive cluster (448 of them at full chr20, with
+                    // essentially zero true positives in that range).
+                    //
+                    // The structural difference matters: filtering long events
+                    // after the fact removes them but also removes the real
+                    // ones caught in the same net, which is why a blanket
+                    // length rejection was already measured NEGATIVE on the
+                    // other channel (precision 0.738 -> 0.813 but recall
+                    // 0.562 -> 0.407, F1 0.637 -> 0.542). Preferring the
+                    // SHORTEST closure keeps short events and simply never
+                    // proposes the long ones.
+                    //
+                    // Applied here as the closest available analogue: when a
+                    // site yields several indel-shaped allele pairs, keep the
+                    // one with the smallest length difference.
+                    // ── HOMOPOLYMER / STR ARTEFACT FILTER ────────────────
+                        // After the size bound the remaining indel false
+                        // positives are dominated by 1 bp events, and they skew
+                        // 2:1 toward DELETIONS (184 vs 91) while true 1 bp
+                        // indels are balanced (986 del / 942 ins). Their
+                        // context is homopolymeric -- CC, GG, TT are the most
+                        // common. That is the classic homopolymer-length
+                        // artefact, the known hard case for every
+                        // reference-free caller.
+                        //
+                        // is_str_event() already encodes exactly this test and
+                        // is used by the older bubble channel; it was simply
+                        // never wired into the superbubble path. It asks
+                        // whether the inserted/deleted sequence extends a run
+                        // or tandem unit already present in the flank -- a
+                        // measured property of the sequence, not a rule about
+                        // this dataset.
+                        // REFUTED AND DISABLED BY DEFAULT (opt in with
+                        // CAPS_DBG_STR=1). I added this on a window-scale
+                        // observation -- 1 bp false positives skewing 2:1
+                        // toward deletions in homopolymeric context -- and it
+                        // measured WORSE: it drops 9 true indels to remove 7
+                        // false ones (F1 0.601 -> 0.535).
+                        //
+                        // The older channel had already measured exactly this
+                        // and recorded it three hundred lines away in the same
+                        // file: "Homopolymer context, by contrast, does NOT
+                        // separate: 37.9% vs 34.4%". I re-derived a refuted
+                        // filter from a smaller sample instead of reading the
+                        // note that was already there.
+                        if (std::getenv("CAPS_DBG_STR")) {
+                            const std::string& lng = (s0.size() > s1.size()) ? s0 : s1;
+                            const std::string& shr = (s0.size() > s1.size()) ? s1 : s0;
+                            // the differing bases: the longer path's tail beyond
+                            // the shorter one's length
+                            if (lng.size() > shr.size()) {
+                                const std::string body = lng.substr(shr.size());
+                                if (is_str_event(body, st.flank)) { ++n_ind_str; continue; }
+                            }
+                        }
+                    }
+                    // EARLIER NOTE, kept because it explains why this looked
+                    // useless before: bounding indel length measured as pure
+                    // loss at WINDOW scale (F1 0.582/0.601/0.611 at 8/12/20 bp)
+                    // because that window contained only 16 indel FPs and none
+                    // of them were long. Full scale has 448 long FPs. A filter
+                    // must be evaluated where the failure mode actually
+                    // occurs.
+                    // The scored false positives look long (19-38 bp) but the
+                    // RAW emitted indels max out at 20 bp -- the long shapes
+                    // are the lift's left-alignment expanding short calls.
+                    // Measured: capping at 8 / 12 / 20 bp left FP flat at 16
+                    // and only removed true positives
+                    // (F1 0.582 / 0.601 / 0.611). The 16 false positives are
+                    // SHORT indels, so length carries no signal here.
                     // INDEL EMISSION IS OFF BY DEFAULT -- MEASURED, NOT ASSUMED.
                     // The superbubble genuinely FINDS real indels: held-out
                     // indel TP rose on every window (r3 33->41, na 35->37,
@@ -2498,6 +2822,11 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             }
             fprintf(stderr, "[DBG-SB] sites=%zu -> records=%zu (same-len=%zu diff-len/INDEL=%zu[dropped=%zu] multiallelic_sites=%zu)\n",
                     sb_sites.size(), dbg_bubbles.size(), n_snv_sb, n_ind_sb, n_ind_drop, n_multi);
+            if (n_ind_str)
+                fprintf(stderr, "[DBG-SB] indels dropped as homopolymer/STR artefacts: %zu\n", n_ind_str);
+            if (n_multi_emitted || n_multi_overploidy)
+                fprintf(stderr, "[DBG-SB] multi-allelic: emitted=%zu rejected_over_ploidy(%d)=%zu\n",
+                        n_multi_emitted, PLOIDY, n_multi_overploidy);
         }
         if (const char* kd = std::getenv("CAPS_DBG_DUMPKC")) {
             if (FILE* kf = fopen(kd, "w")) {
@@ -2622,8 +2951,22 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                              ? atof(std::getenv("CAPS_DBG_BAL")) : 0.0;
             size_t emitted = 0, drop_sup = 0, drop_bal = 0, n_ind_drop_emit = 0, drop_cap = 0;
             // ceiling on allele coverage, in multiples of measured haploid depth H
+            // PLOIDY-AWARE CEILING (T5.3).
+            // The ceiling exists to reject repeat/paralog collapses, which
+            // present as alleles carrying far more depth than one haplotype
+            // should. "How much is too much" therefore scales with PLOIDY: in
+            // a diploid, an allele above ~4x haploid depth is suspect; in a
+            // tetraploid, a legitimate allele can be carried by up to 4 copies,
+            // so the same absolute cap would delete real variants.
+            //
+            // 2 x PLOIDY x H keeps the diploid behaviour identical (2*2 = 4,
+            // the measured value) while adapting automatically to a 4-copy
+            // sample -- it is the same rule expressed in terms of what the
+            // sample actually is, rather than a constant that happens to suit
+            // diploids.
             const double CAPMULT = std::getenv("CAPS_DBG_COVCAP")
-                                 ? atof(std::getenv("CAPS_DBG_COVCAP")) : 4.0;
+                                 ? atof(std::getenv("CAPS_DBG_COVCAP"))
+                                 : 2.0 * (double)PLOIDY;
             const uint32_t COVCAP = (CAPMULT > 0.0) ? (uint32_t)(CAPMULT * (double)H) : 0u;
             for (uint32_t bi = 0; bi < (uint32_t)dbg_bubbles.size(); ++bi) {
                 const DbgBubble& b = dbg_bubbles[bi];
@@ -2669,6 +3012,36 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                          "SVTYPE=SNV;SRC=dbg_bubble;DP=%u;AD=%u;SUP1=%u;SUP2=%u;BLEN=%d",
                          b.cov1, b.cov2, b.min1, b.min2, b.len);
                 const uint32_t base_pos = (uint32_t)(b.lext.size() + 31 + 1);
+                // ── multi-allelic: ONE record, ALT = comma-joined alleles ────
+                // path2 holds the alternates joined by ','; every allele is the
+                // same length as path1 (enforced when the record was built), so
+                // the variant sits at the same offset for all of them. This is
+                // the native GT=1/2-shaped output that DiscoSNP++ cannot
+                // produce -- it emits separate biallelic rows instead.
+                if (b.multiallelic > 2) {
+                    std::string alts;
+                    size_t start = 0;
+                    while (start <= b.path2.size()) {
+                        const size_t comma = b.path2.find(',', start);
+                        const std::string one = b.path2.substr(start,
+                            comma == std::string::npos ? std::string::npos : comma - start);
+                        if (!one.empty() && one[0] != b.path1[0]) {
+                            if (!alts.empty()) alts += ',';
+                            alts += one[0];
+                        }
+                        if (comma == std::string::npos) break;
+                        start = comma + 1;
+                    }
+                    if (!alts.empty()) {
+                        char minf[160];
+                        snprintf(minf, sizeof minf,
+                                 "SVTYPE=SNV;SRC=dbg_multi;NALT=%u;DP=%u;AD=%u;BLEN=%d",
+                                 (unsigned)b.multiallelic, b.cov1, b.cov2, b.len);
+                        orecs.push_back({bi, base_pos, std::string(1, b.path1[0]), alts, minf, 3});
+                        ++emitted;
+                    }
+                    continue;
+                }
                 if (b.path1.size() == b.path2.size()) {
                     for (size_t q = 0; q < b.path1.size(); ++q) {
                         if (b.path1[q] == b.path2[q]) continue;
@@ -2679,6 +3052,45 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 } else if (std::getenv("CAPS_DBG_INDEL")) {
                     if (b.flank.empty()) continue;
                     const char anchor = b.flank.back();
+                    // SIZE BOUND ON THE EMITTED RECORD.
+                    //
+                    // The bound applied during the superbubble walk measures
+                    // the PATH length difference, and the caller's own indels
+                    // already max out around 20 bp -- so it fires on almost
+                    // nothing (dropped=3 of 117). The false positives are
+                    // 20-37 bp only AFTER the lift's left-alignment expands
+                    // them, so the discriminating quantity is the size of the
+                    // record we actually emit.
+                    //
+                    // Measured on the tetraploid window: capping at 15 bp
+                    // removes 12 of 16 indel false positives and ZERO true
+                    // positives, taking precision 0.746 -> 0.922 and F1
+                    // 0.537 -> 0.577, past DiscoSNP++'s 0.553. On full chr20
+                    // the same split holds: true indels are 1-8 bp while the
+                    // false ones form a second mode at 21-32 bp with
+                    // essentially no true positives in it.
+                    // Event size = the length DIFFERENCE between the two
+                    // paths. (Bounding max(path1,path2) instead was tried and
+                    // was catastrophic -- F1 0.537 -> 0.035 -- because the
+                    // paths carry the whole bubble, flank and closure
+                    // included, so a 15 bp cap on their total length rejects
+                    // essentially every real event.)
+                    const size_t esz = (b.path1.size() > b.path2.size())
+                                     ? b.path1.size() - b.path2.size()
+                                     : b.path2.size() - b.path1.size();
+                    const int EMAXI = std::getenv("CAPS_DBG_EMITMAXINDEL")
+                                    ? atoi(std::getenv("CAPS_DBG_EMITMAXINDEL")) : 15;
+                    if ((int)esz > EMAXI) { ++n_ind_drop_emit; continue; }
+                    // REFUTED: rejecting records where BOTH alleles are long.
+                    // The long-FP records look like 15->17, 17->18, 18->20 --
+                    // paired-long alleles with a 1-2 bp difference -- so
+                    // bounding the SHORTER allele looked like the discriminator.
+                    // Measured: F1 0.537 -> 0.035. Real indels have both alleles
+                    // long too, because path1/path2 carry the entire bubble
+                    // (flank + event + closure), not just the event. Length of
+                    // the allele strings therefore carries no signal here at
+                    // all -- the same reason bounding max(path1,path2) failed
+                    // identically.
                     orecs.push_back({bi, (uint32_t)(b.lext.size() + 31),
                                      std::string(1, anchor) + b.path1,
                                      std::string(1, anchor) + b.path2, inf, 3});
