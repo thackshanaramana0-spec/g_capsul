@@ -87,10 +87,93 @@ degrades gracefully instead of inverting.
 Same winning candidate in every case. Sub-GB inputs gain little because round 2
 is a small share of their runtime; the win scales with round-2 dominance.
 
-## What this does NOT fix
+## RETRACTED: "mapping is genuinely per-candidate"
 
-Pigeonhole mapping is genuinely per-candidate: all eight times differ, because
-MAXMAP is the acceptance ceiling and the mapping loop is greedy — a read
-accepted under a looser ceiling is removed from the pool and changes what every
-later read sees. The placements are not separable into "search once, filter per
-candidate". After this change pigeonhole becomes the dominant stage.
+This document originally ended with the claim below, written the same day:
+
+> Pigeonhole mapping is genuinely per-candidate: all eight times differ, because
+> MAXMAP is the acceptance ceiling and the mapping loop is greedy -- a read
+> accepted under a looser ceiling is removed from the pool and changes what every
+> later read sees. The placements are not separable into "search once, filter per
+> candidate".
+
+**That is wrong, and it was refuted by the log I already had.** The mapping loop
+is not greedy over a shrinking pool: the pseudogenome is fixed for the whole
+stage, so each read's placement is independent of every other read's. And the
+search keeps the *minimum*-mismatch placement --
+`lim = (cur==255) ? MAXMAP : cur-1`, updated only on strict improvement -- so
+MAXMAP is the initial cap that decides whether a read is placed at all, never
+which placement wins.
+
+The proof was sitting in the production log. The `[MM] hist:` lines for the four
+candidates of one MINOV group are bit-identical in every bin below the smaller
+ceiling:
+
+```
+MAXMAP=7    0:207172 1:928067 2:239064 3:117518 4:76881 5:57665 6:45931 7:38044   8+:0
+MAXMAP=11   ...identical bins 0-7...                       8:32688 9:28422 10:25114 11:22563
+MAXMAP=18   ...identical bins 0-11...                                    >=12:109346
+MAXMAP=29   ...identical bins 0-11...                                    >=12:195906
+```
+
+and the cumulative sums reproduce every candidate's mapped count exactly:
+
+| ceiling | cumulative sum | reported `mapped=` |
+|---|---|---|
+| 7 | 1,710,342 | 1,710,342 |
+| 11 | 1,710,342 + 108,787 = 1,819,129 | 1,819,129 |
+| 18 | 1,819,129 + 109,346 = 1,928,475 | 1,928,475 |
+| 29 | 1,819,129 + 195,906 = 2,015,035 | 2,015,035 |
+
+A larger ceiling only **adds** reads in higher bins. So one search at the group's
+ceiling answers every member by thresholding `readMM`, and the level-2 fork moves
+again -- from after `emit chains` to after `lap("pigeonhole mapping")`.
+
+Un-placing a read restores exactly the never-searched state, because the arrays
+the search writes are initialised to precisely those values: `readMM` 255,
+`matched` 0, `prc.assign(n,0)`, `ppos.assign(n,UINT64_MAX)` -- and the
+second-region chain emission sets `ppos` for every admitted read afterwards.
+`MAXMAP` itself is never read after the mapping stage.
+
+| dataset | committed (round 2 shared) | + mapping shared | verdict |
+|---|---|---|---|
+| H. salinarum | 15,650,029 / 7.16 s | 15,650,029 / 6.86 s | BYTE-IDENTICAL |
+| S. acidocaldarius | 15,159,145 / 10.52 s | 15,159,145 / 9.22 s | BYTE-IDENTICAL |
+| E. coli | 68,669,925 / 21.59 s | 68,669,925 / 19.51 s | BYTE-IDENTICAL |
+| **P. falciparum** | 67,382,606 / **94.81 s** | 67,382,606 / **64.54 s** | BYTE-IDENTICAL, **-32%** |
+
+**The lesson, which is the same one this project keeps paying for.** I asserted a
+structural property of the code ("greedy over a shrinking pool") from a plausible
+reading rather than from the loop, and used it to close off the largest remaining
+opportunity. The refuting evidence was already in a log on disk. Read the loop,
+then check the histogram, before writing "not separable".
+
+## Result at full scale
+
+| | total | round 2 | pigeonhole |
+|---|---|---|---|
+| original | 914.80 s | 8 runs, max 478.30 s | 8 runs, 182-218 s |
+| + huge pages | 885.14 s | 8 runs, max 478.30 s | 8 runs, 182-218 s |
+| + round 2 shared | 812.79 s | **2 runs**, 62.4 / 66.9 s | 8 runs, 189-565 s |
+| + mapping shared | **513.16 s** | **2 runs**, 62.3 / 66.2 s | **2 runs**, 112.1 / 112.9 s |
+
+**1.78x faster, archive byte-identical (574,014,786 B), peak RSS +0.6%.**
+
+Correctness is exact, not approximate: all eight `mapped=` / `appended=` counts
+reproduce the baseline read for read.
+
+```
+leftovers=2112037  mapped=1660493 1767491 1873738 1954531
+leftovers=2187048  mapped=1710342 1819129 1928475 2015035
+```
+
+## What is left
+
+The shared prefix is now 235 s of the 513 s (load 14, round 1 35, round 2 66,
+emit chains 7, mapping 113). The remaining ~278 s is the genuinely per-candidate
+tail: the second-region sweep, MEM matching (102-114 s per candidate) and stream
+coding, run for 8 candidates at concurrency 4. MEM matching is the largest piece
+and is genuinely per-candidate -- it runs over a pseudogenome whose second region
+depends on which reads this candidate appended, and those counts differ
+(157,506 to 476,706). That is the next place to look, and it should be looked at
+by reading the loop and checking a histogram, not by asserting a property.
