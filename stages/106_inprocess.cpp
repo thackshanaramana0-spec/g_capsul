@@ -33,6 +33,7 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
+#include <sys/mman.h>
 #include <map>
 #include <dirent.h>
 #if defined(__GLIBC__)
@@ -90,6 +91,52 @@ static inline bool pack(const char* p,uint64_t& out){
 #include "quality_coder.h"
 #include "caps_pack.h"
 #include "caps_caller.h"
+
+
+// ── HUGE-PAGE HINT FOR THE BIG ARRAYS ──────────────────────────────────────
+// MEASURED: the encoder runs at a 52.25% dTLB load-miss rate -- 6.7 BILLION
+// misses out of 12.9 billion loads, against 1.6 trillion total cycles. A
+// healthy program is under 1%.
+//
+// The cause is page size, not algorithm. One candidate's working set is
+// ~1142 MB on HG002 (rpk 445 MB, seed/pent/ptab 96 MB each, nxt/prv/ovl/ch_h/
+// ch_t 48 MB each). In 4 KB pages that is ~292,000 pages competing for a
+// ~1500-entry TLB, so essentially every random access pays a page-table walk
+// on top of its cache miss. At K=8 candidates the pressure is eightfold, which
+// is precisely the 4x penalty over perfect scaling that round 2 shows
+// (503.8 s measured against 126 s predicted).
+//
+// This machine has transparent huge pages set to [madvise]: they are available
+// but only to callers that ASK. std::vector never asks. One madvise per big
+// array raises TLB reach from ~6 MB to ~3 GB.
+//
+// PURELY A MEMORY-LAYOUT HINT: it changes no value the program computes, so
+// the archive is identical by construction. If the kernel declines the hint
+// the code is unaffected.
+// Allocate-then-hint-then-fill. Calling madvise AFTER a vector is filled does
+// nothing: the pages are already faulted in at 4 KB and MADV_HUGEPAGE will not
+// retroactively collapse them (khugepaged may, far too slowly to matter).
+// Measured proof that the naive version was inert: AnonHugePages stayed at
+// 0.0 MB with hints on 16 arrays. reserve() takes the mapping without touching
+// it, the hint lands on untouched memory, and assign() then faults it in as
+// 2 MB pages.
+static inline void hugehint(void* p, size_t bytes);
+template<class V, class T>
+static inline void hugefill(V& v, size_t n, const T& val){
+    v.clear(); v.shrink_to_fit(); v.reserve(n);
+    hugehint((void*)v.data(), n*sizeof(T));
+    v.assign(n, val);
+}
+static inline void hugehint(void* p, size_t bytes){
+#ifdef MADV_HUGEPAGE
+    if(!p || bytes < (4u<<20)) return;                 // not worth it below 4 MB
+    const uintptr_t HP = 2u<<20;
+    uintptr_t a=(uintptr_t)p, st=(a+HP-1)&~(HP-1), en=(a+bytes)&~(HP-1);
+    if(en>st) madvise((void*)st, (size_t)(en-st), MADV_HUGEPAGE);
+#else
+    (void)p; (void)bytes;
+#endif
+}
 
 struct MemStream {
     FILE*  f    = nullptr;
@@ -544,6 +591,9 @@ int main(int argc,char** argv){
             }
         }
         rpk.shrink_to_fit(); woff.shrink_to_fit(); rlen.shrink_to_fit();
+        hugehint(rpk.data(), rpk.size()*sizeof(rpk[0]));
+        hugehint(woff.data(), woff.size()*sizeof(woff[0]));
+        hugehint(rlen.data(), rlen.size()*sizeof(rlen[0]));
         // INVARIANT: read_lengths is indexed by ORIGINAL read, always.
         // It used to be indexed by unique id, which silently breaks whenever a
         // read's uid is later rewritten -- containment aliasing folds a shorter
@@ -739,7 +789,8 @@ int main(int argc,char** argv){
     auto pmix=[](uint64_t x){ x^=x>>33; x*=0xff51afd7ed558ccdULL; x^=x>>33; return x; };
     std::vector<uint16_t> pext;
     auto buildPref=[&](bool useAdmit){
-        pent.clear(); pent.reserve(n);
+        pent.clear(); pent.shrink_to_fit(); pent.reserve(n);
+        hugehint((void*)pent.data(), n*sizeof(uint64_t));
         for(uint32_t i=0;i<n;++i){
             if(useAdmit && !admit[i]) continue;
             if(rlen[i]<SW) continue;
@@ -769,7 +820,7 @@ int main(int argc,char** argv){
             if(rlen[b] >= SW+8) pext[i]=(uint16_t)(rseed(b,SW,8)&0xFFFFu);
         }
         size_t sz=1; while(sz<pent.size()*2+1) sz<<=1;
-        pmask=sz-1; ptab.assign(sz,UINT32_MAX);
+        pmask=sz-1; hugefill(ptab,sz,UINT32_MAX);
         for(size_t i=0;i<pent.size();++i){
             const uint32_t k=(uint32_t)(pent[i]>>32);
             if(i && (uint32_t)(pent[i-1]>>32)==k) continue;
@@ -777,6 +828,8 @@ int main(int argc,char** argv){
             while(ptab[h]!=UINT32_MAX) h=(h+1)&pmask;
             ptab[h]=(uint32_t)i;
         }
+        hugehint(pent.data(), pent.size()*sizeof(pent[0]));
+        hugehint(ptab.data(), ptab.size()*sizeof(ptab[0]));
     };
     auto pfind=[&](uint64_t key)->uint32_t{
         const uint32_t k=(uint32_t)key;
@@ -883,8 +936,16 @@ int main(int argc,char** argv){
     // collision. Overridable so the threshold can be swept, not guessed.
     uint32_t nm_minL=Lmax/2;
     if(const char* e=getenv("CAPS_NM_MINL")) nm_minL=(uint32_t)atoi(e);
-    std::vector<uint32_t> nxt(n,NONE),prv(n,NONE),ovl(n,0),ch_h(n),ch_t(n);
-    std::vector<uint64_t> seed(n,0);
+    std::vector<uint32_t> nxt,prv,ovl,ch_h,ch_t;
+    hugefill(nxt,n,(uint32_t)NONE); hugefill(prv,n,(uint32_t)NONE);
+    hugefill(ovl,n,(uint32_t)0);    hugefill(ch_h,n,(uint32_t)0);
+    hugefill(ch_t,n,(uint32_t)0);
+        hugehint(nxt.data(), nxt.size()*sizeof(nxt[0]));
+        hugehint(prv.data(), prv.size()*sizeof(prv[0]));
+        hugehint(ovl.data(), ovl.size()*sizeof(ovl[0]));
+        hugehint(ch_h.data(), ch_h.size()*sizeof(ch_h[0]));
+        hugehint(ch_t.data(), ch_t.size()*sizeof(ch_t[0]));
+    std::vector<uint64_t> seed; hugefill(seed,n,(uint64_t)0);
     std::vector<uint8_t>  ok(n,0);
     std::vector<uint32_t> tails;
     std::vector<uint32_t> open_tails;   // still-open tails, independent of level
@@ -1774,7 +1835,8 @@ int main(int argc,char** argv){
 
     // ── Stage C: pigeonhole mapping into the pg, forward then RC ─────────────
     std::vector<uint8_t> matched(n,0);
-    readMM.assign(n,255);
+    hugefill(readMM,n,(uint8_t)255);
+    hugehint(readMM.data(), readMM.size());
     size_t n_matched=0;
     {
         // Part width must SCALE with the tolerance, not stay pinned at 32.
@@ -1958,6 +2020,7 @@ int main(int argc,char** argv){
             // cost more peak than the packing saved: mapping RSS went 232 -> 240
             // MB on the first attempt.
             ment.reserve((size_t)leftovers.size()*NPARTS);
+            hugehint((void*)ment.data(), (size_t)leftovers.size()*NPARTS*sizeof(uint64_t));
             for(uint32_t rid:leftovers){
                 if(rlen[rid]<SEEDW) continue;
                 for(uint32_t p=0;p<NPARTS;++p){
@@ -1974,7 +2037,11 @@ int main(int argc,char** argv){
         auto MPART=[&](size_t i)->uint32_t{ return (uint32_t)(ment[i]&7ULL); };
         size_t msize=1; while(msize < ment.size()*2+1) msize<<=1;
         const uint64_t MMASK=msize-1;
-        std::vector<uint32_t> mtab(msize,UINT32_MAX);
+        std::vector<uint32_t> mtab; hugefill(mtab,msize,UINT32_MAX);
+        // ment and mtab are the pigeonhole index -- the two largest random-access
+        // structures in the stage perf attributes 32.4% of cycles to.
+        hugehint(ment.data(), ment.size()*8);
+        hugehint(mtab.data(), mtab.size()*4);
         fprintf(stderr,"[MEMRPT] ment %zu entries = %zu MB   mtab %zu slots = %zu MB\n",
                 ment.size(), ment.size()*8/1000000, msize, msize*4/1000000);
         auto mmix=[](uint64_t x){ x^=x>>33; x*=0xff51afd7ed558ccdULL; x^=x>>33; return x; };
@@ -2737,11 +2804,16 @@ int main(int argc,char** argv){
                 uint64_t k; if(packM(T+p,k)) tmp.push_back({k,(uint32_t)p});
             }
             std::sort(tmp.begin(),tmp.end());
-            skey.resize(tmp.size()); spos.resize(tmp.size());
+            skey.clear(); skey.shrink_to_fit(); skey.reserve(tmp.size());
+            hugehint((void*)skey.data(), tmp.size()*8); skey.resize(tmp.size());
+            spos.clear(); spos.shrink_to_fit(); spos.reserve(tmp.size());
+            hugehint((void*)spos.data(), tmp.size()*4); spos.resize(tmp.size());
+            hugehint(skey.data(), skey.size()*8); hugehint(spos.data(), spos.size()*4);
             for(size_t i=0;i<tmp.size();++i){ skey[i]=tmp[i].first; spos[i]=tmp[i].second; }
             tsize=1; while(tsize < skey.size()*2+1) tsize<<=1;
             TMASK=tsize-1;
-            htab.assign(tsize,UINT32_MAX);
+            hugefill(htab,tsize,UINT32_MAX);
+            hugehint(htab.data(), htab.size()*4);
             for(size_t i=0;i<skey.size();++i){
                 if(i && skey[i]==skey[i-1]) continue;   // first occurrence only
                 size_t h=hmix(skey[i])&TMASK;
