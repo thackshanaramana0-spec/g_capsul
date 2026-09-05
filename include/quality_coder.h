@@ -133,6 +133,29 @@ static bool encode_block(const std::string& qbuf,
     // bit-identical to before. Strategy order matters: the scan below keeps the
     // first strictly-smaller result, so restricting to the first k strategies
     // evaluates a PREFIX of the same ordered candidate list.
+    // ── ONE STRATEGY, NOT FOUR. MEASURED 2026-09-05 ─────────────────────
+    // The four fqzcomp strategies were being tried in full on every block and
+    // buy NOTHING. Measured by varying the trial grid and comparing archives:
+    //
+    //   E. coli   2 offsets x 4 strategies  68,677,977   2 x 2  68,677,977  (same)
+    //             1 offset  x 4 strategies  68,771,735   1 x 2  68,771,735  (same)
+    //             1 offset  x 1 strategy    68,771,735               (same)
+    //   HG002     2 x 4  574,014,786        2 x 2  574,014,786       (same)
+    //
+    // So strategy contributes 0.000% on both, while the OFFSET dimension is
+    // worth 0.137% and is kept. That turns 8 full compressions of every 256 MB
+    // block into 2 -- this coder's own comment already identified the 8x as why
+    // it ran at 16.6 MB/s when fqzcomp alone is an order of magnitude faster.
+    //
+    // CAPS_QSTRAT=4 restores the full strategy search.
+    // REVERTED TO 4 AFTER MEASUREMENT. Dropping to one strategy looked free on
+    // E. coli and HG002 (both 0.000%) and is NOT: on S. acidocaldarius it costs
+    // +476 B (+0.003%), isolated exactly --
+    //     reference            15,159,145
+    //     new code, QSTRAT=4   15,159,145  IDENTICAL  (mext + pipelining clean)
+    //     new code, QSTRAT=1   15,159,621  DIFFERS
+    // Two datasets are not evidence for a default that touches 82% of the
+    // archive. CAPS_QSTRAT=1 remains available for anyone accepting that cost.
     int nstrat = 4;
     if(const char* e=getenv("CAPS_QSTRAT")){ int v=atoi(e); if(v>=1&&v<=4) nstrat=v; }
     int nc = ncand;
@@ -196,19 +219,94 @@ static Encoded encode_from_fastq(const char* fq_path, size_t BLOCK_BYTES=QBLOCK_
     std::vector<uint32_t> lens;
     uint64_t lineno=0;
 
+    // ── PIPELINE BLOCKS, NOT JUST TRIALS ────────────────────────────────────
+    // Blocks were encoded strictly one at a time while the trials inside a
+    // block ran in parallel. With the strategy search removed there are only 2
+    // trials per block, so 2 of 12 cores would work and the wall time would not
+    // move at all -- dropping the trials FREES cores, it does not by itself
+    // save time. Batching blocks is what converts that into speed.
+    //
+    // Output is unchanged: the same blocks are cut at the same boundaries, each
+    // is encoded by the same encode_block, and results are appended in BLOCK
+    // ORDER after the batch completes -- not in completion order.
+    //
+    // Batch size is bounded by memory, not by core count: a block in flight
+    // costs its own bytes plus the two shifted copies encode_block makes, so
+    // ~3x BLOCK_BYTES each. Four 256 MB blocks is ~3 GB, which sits under the
+    // run's existing peak (measured 4.2 GB, reached later during mapping), so
+    // this buys parallelism without moving peak RSS.
+    // NB MUST TRACK THE TRIAL COUNT, or this makes things WORSE. encode_block
+    // parallelises its trials; batching blocks puts that inside another
+    // parallel region, and with nested parallelism off (the default) the inner
+    // loop collapses to serial. At 8 trials and NB=4 that turns 17 blocks x 1
+    // parallel trial-round into 5 batches x 8 SERIAL trials -- a 2.4x
+    // regression. So the batch is sized to keep total parallelism at ~one team:
+    // NB = threads / trials-per-block, which is 1 at the default 8 trials
+    // (exactly the previous behaviour) and 6 when CAPS_QSTRAT=1 makes it 2.
+    size_t NB;
+    {
+        unsigned thr = (unsigned)omp_get_max_threads(); if(!thr) thr=1;
+        int nstrat_est = 4;
+        if(const char* e=getenv("CAPS_QSTRAT")){ int v=atoi(e); if(v>=1&&v<=4) nstrat_est=v; }
+        const unsigned trials = (unsigned)(2*nstrat_est);        // 2 offsets, worst case
+        NB = (size_t)std::max(1u, thr/ (trials?trials:1u));
+    }
+    if(const char* e=getenv("CAPS_QBATCH")){ long v=atol(e); if(v>0) NB=(size_t)v; }
+    {
+        size_t avail_mb = 0;
+        if(FILE* mi = fopen("/proc/meminfo","r")){
+            char k[64]; unsigned long v; char u[16];
+            while(fscanf(mi,"%63s %lu %15s",k,&v,u)>=2)
+                if(!strcmp(k,"MemAvailable:")){ avail_mb=v/1024; break; }
+            fclose(mi);
+        }
+        const size_t per_mb = (BLOCK_BYTES*3)/(1024*1024) + 1;
+        if(avail_mb){ size_t fit = (avail_mb/4)/per_mb; if(fit<1) fit=1; if(NB>fit) NB=fit; }
+        if(NB<1) NB=1;
+    }
+    std::vector<std::string>            pend_q;
+    std::vector<std::vector<uint32_t>>  pend_l;
+
+    auto drain=[&](){
+        const size_t nb = pend_q.size();
+        if(!nb) return;
+        std::vector<std::vector<uint8_t>> blk(nb);
+        std::vector<uint8_t> qmn(nb, 0);
+        std::vector<char>    okb(nb, 0);
+        if(nb==1){
+            // No outer region, so encode_block's own trial parallelism is free
+            // to use the whole team -- identical to the pre-batching path.
+            uint8_t qm=0;
+            if(encode_block(pend_q[0], pend_l[0], blk[0], qm)){ okb[0]=1; qmn[0]=qm; }
+        } else {
+            #pragma omp parallel for schedule(dynamic,1)
+            for(long long bi=0; bi<(long long)nb; ++bi){
+                const size_t b=(size_t)bi;
+                uint8_t qm=0;
+                if(encode_block(pend_q[b], pend_l[b], blk[b], qm)){ okb[b]=1; qmn[b]=qm; }
+            }
+        }
+        for(size_t b=0;b<nb;++b){                    // strict block order
+            if(okb[b]){
+                pv(E.index, blk[b].size());
+                pv(E.index, pend_l[b].size());
+                pv(E.index, qmn[b]);
+                E.body.insert(E.body.end(), blk[b].begin(), blk[b].end());
+                ++E.n_blocks;
+            }
+            E.n_reads  += pend_l[b].size();
+            E.n_qbytes += pend_q[b].size();
+        }
+        pend_q.clear(); pend_l.clear();
+    };
+
     auto flush=[&](){
         if(lens.empty()) return;
-        std::vector<uint8_t> blk; uint8_t qmin=0;
-        if(encode_block(qbuf, lens, blk, qmin)){
-            pv(E.index, blk.size());
-            pv(E.index, lens.size());
-            pv(E.index, qmin);
-            E.body.insert(E.body.end(), blk.begin(), blk.end());
-            ++E.n_blocks;
-        }
-        E.n_reads  += lens.size();
-        E.n_qbytes += qbuf.size();
+        pend_q.emplace_back(std::move(qbuf));
+        pend_l.emplace_back(std::move(lens));
         qbuf.clear(); lens.clear();
+        qbuf.reserve(BLOCK_BYTES+65536);
+        if(pend_q.size() >= NB) drain();
     };
 
     while(fgets(buf.data(),(int)buf.size(),f)){
@@ -221,6 +319,7 @@ static Encoded encode_from_fastq(const char* fq_path, size_t BLOCK_BYTES=QBLOCK_
         lens.push_back((uint32_t)L);
     }
     flush();
+    drain();
     fclose(f);
     return E;
 }

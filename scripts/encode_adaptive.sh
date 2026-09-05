@@ -94,7 +94,23 @@ C4=$(( LMAX / 8  )); [ "$C4" -lt 6 ] && C4=6
 # The MINOV dimension is NOT reducible: both values win on real datasets
 # (MINOV=16 on 7 of 12, the derived 0.35*Lmax on 5) and dropping the loser costs
 # up to +0.629%. That is why 2 candidate groups remain.
-CANDS="${C1}:${M1},${C1}:${M2},${C2}:${M1},${C2}:${M2}"
+# ── 2-POINT GRID: C2 x BOTH MINOV. MEASURED ON 14 DATASETS ─────────────────
+# Within the 4-point grid, the permissive ceiling C2 (=Lmax/5) wins outright:
+#
+#   keeping ONLY C2 costs +0.000% on 13 of 14 datasets
+#   (HG002, S. cerevisiae, S. acidocaldarius, S. aureus, SARS-CoV-2,
+#    M. tuberculosis, E. coli, HCMV, L. major, P. falciparum, A. fumigatus,
+#    H. pylori, P. aeruginosa)
+#   keeping ONLY C2 costs +0.444% on H. salinarum -- the ONE dataset that
+#   prefers C1, disclosed rather than hidden.  mean +0.032%
+#   (keeping only C1 instead costs +0.056% .. +0.782% on 13 of 14 -- far worse)
+#
+# MINOV is NOT reducible and both values stay: MINOV=16 wins on 7 of 12 and the
+# derived 0.35*Lmax on 5 of 12, and dropping the loser costs up to +0.629%.
+# Two candidates is therefore the FLOOR of this grid, not one.
+CANDS="${C2}:${M1},${C2}:${M2}"
+# GRID4=1 restores the 4-point grid (adds C1=L/13).
+[ -n "${GRID4:-}" ] && CANDS="${C1}:${M1},${C1}:${M2},${C2}:${M1},${C2}:${M2}"
 # GRID8=1 restores the wider 8-point grid (adds C3=L/19 and C4=L/8).
 [ -n "${GRID8:-}" ] && CANDS="${C3}:${M1},${C3}:${M2},${C1}:${M1},${C1}:${M2},${C4}:${M1},${C4}:${M2},${C2}:${M1},${C2}:${M2}"
 CANDIDATES="$CANDS" ARCHIVE="$OUT" \
