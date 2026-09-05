@@ -1,0 +1,110 @@
+╔══════════════════════════════════════════════════════════════════════╗
+║  BENCHMARK 0 — PRE-RUN STATUS                                        ║
+╚══════════════════════════════════════════════════════════════════════╝
+generated : 2026-09-05 05:59:06 IST
+host      : e2e-147-20  |  user: root
+repo      : /root/arcs-clean/c_star_pg_advance
+branch    : c_star_pg_advance  commit: 0ee1d28
+tree      : DIRTY (uncommitted changes present)
+
+════════════════════════════════════════════════════════════════════════
+ 1. SYSTEM RESOURCES
+════════════════════════════════════════════════════════════════════════
+  cores                                12
+  RAM total                            82 GB
+  RAM available                        78 GB
+  disk free                            127 GB
+  [ OK ]   cores >= 8                         12
+  [ OK ]   RAM >= 32 GB                       82 GB
+  [ OK ]   disk >= 60 GB free                 127 GB
+
+════════════════════════════════════════════════════════════════════════
+ 2. TOOLS — state of the art we benchmark against
+════════════════════════════════════════════════════════════════════════
+  -- Claim 1 (compression) --
+  [ OK ]   SPRING                             /usr/local/bin/spring
+  [ OK ]   Genozip                            /usr/local/bin/genozip
+  [ OK ]   Genounzip                          /usr/local/bin/genounzip
+  -- Claim 2 (variant calling) --
+  [ OK ]   DiscoSNP++                         /root/DiscoSnp/run_discoSnp++.sh
+  [ OK ]   rtg (vcfeval)                      /usr/local/bin/rtg
+  [ OK ]   Kmer2SNP (conda env)               /root/miniconda3/envs/kmer2snp_r
+  -- Claim 3 (archive analysis) --
+  [ OK ]   SPAdes                             /root/SPAdes-4.0.0-Linux/bin/spades.py
+  [ OK ]   bwa                                /usr/bin/bwa
+  [ OK ]   samtools                           /usr/bin/samtools
+  [ OK ]   mosdepth                           /usr/bin/mosdepth
+  -- build toolchain --
+  [ OK ]   g++                                /usr/bin/g++
+  [ OK ]   /usr/bin/time                      /usr/bin/time
+
+════════════════════════════════════════════════════════════════════════
+ 3. OUR BINARIES
+════════════════════════════════════════════════════════════════════════
+  CAPSULE_BIN_DIR                      /tmp/capsule_bin
+
+  building encoder (best106) ...
+  [ OK ]   encoder builds                     /tmp/capsule_bin/best106 (0.9 MB)
+  building decoder (capsule_decode) ...
+  [ OK ]   decoder builds                     /tmp/capsule_bin/capsule_decode (0.3 MB)
+
+════════════════════════════════════════════════════════════════════════
+ 4. DATASETS — 19 total (15 non-human + 4 GIAB human)
+════════════════════════════════════════════════════════════════════════
+  data dir                             /data/fastq
+
+  #    accession        organism                           size  path
+  ----------------------------------------------------------------------------------------
+  1    SRR2584863       E. coli B REL606                0.65 GB  /data/fastq/SRR2584863_1.fq
+  2    ERR552797        M. tuberculosis H37Rv           0.40 GB  /data/fastq/ERR552797_1.fq
+  3    SRR554369        P. aeruginosa PAO1              0.43 GB  /data/fastq/SRR554369_1.fq
+  4    ERR5181310       SARS-CoV-2                      0.44 GB  /data/fastq/ERR5181310_1.fq
+  5    ERR17740259      S. aureus                       1.25 GB  /data/fastq/ERR17740259_1.fq
+  6    DRR976266        S. cerevisiae                   2.09 GB  /data/fastq/DRR976266_1.fq
+  7    SRR36741279      Leishmania major                1.55 GB  /data/fastq/SRR36741279_1.fq
+  8    SRR37283774      P. falciparum                   0.95 GB  /data/fastq/SRR37283774_1.fq
+  9    SRR32429602      HCMV                            1.74 GB  /data/fastq/SRR32429602_1.fq
+  10   SRR39257532      Aspergillus fumigatus           1.64 GB  /data/fastq/SRR39257532_1.fq
+  11   SRR29296997      Halobacterium salinarum         0.20 GB  /data/fastq/SRR29296997_1.fq
+  12   ERR12954017      Sulfolobus acidocaldarius       0.31 GB  /data/fastq/ERR12954017_1.fq
+  13   SRR40271341      Helicobacter pylori             0.27 GB  /data/fastq/SRR40271341_1.fq
+  14   SRR065390        C. elegans N2                  10.51 GB  /data/fastq/SRR065390_1.fq
+  15   SRR10676752      Utricularia gibba              14.32 GB  /data/fastq/SRR10676752_1.fq
+  16   HG002            GIAB Ashkenazi son              3.99 GB  /data/fastq/HG002_pooled.fq
+  17   HG003            GIAB Ashkenazi father           3.99 GB  /data/fastq/HG003_pooled.fq
+  18   HG004            GIAB Ashkenazi mother           3.99 GB  /data/fastq/HG004_pooled.fq
+  19   HG005            GIAB Han Chinese son            6.34 GB  /data/fastq/HG005_pooled.fq
+  ----------------------------------------------------------------------------------------
+  datasets present                     19 / 19
+  datasets missing                     0
+  total input size                     55.03 GB
+  [ OK ]   all 19 datasets present            
+
+════════════════════════════════════════════════════════════════════════
+ 5. REFERENCES AND TRUTH SETS
+════════════════════════════════════════════════════════════════════════
+  refs dir                             /root/refs
+  truth dir                            /root/giab_truth
+
+  -- Claim 2 --
+  [ OK ]   chr20.fa                           62M
+  [ OK ]   chr20.sdf                          23M
+  [ OK ]   chr1.fa                            242M
+  [ OK ]   chr1.sdf                           90M
+  [ OK ]   GIAB truth VCFs                    4 found
+  -- Claim 3 baselines (6 datasets, one per kingdom) --
+  [ OK ]   c3_ecoli.fa (+bwa index)           4.5M
+  [ OK ]   c3_sarscov2.fa (+bwa index)        32K
+  [ OK ]   c3_halobacterium.fa (+bwa index)   2.5M
+  [ OK ]   c3_pfalciparum.fa (+bwa index)     23M
+  [ OK ]   c3_scerevisiae.fa (+bwa index)     12M
+  [ OK ]   chr20 bwa index                    present
+
+════════════════════════════════════════════════════════════════════════
+ 6. CODE HEALTH — does it still reproduce its validated numbers?
+════════════════════════════════════════════════════════════════════════
+  Gate: the k-mer multiset AND the SNV F1 must both be unchanged.
+  k-mer identity is the real gate -- a change can pass an F1 check while
+  silently altering kc (it has happened twice in this project).
+
+  running sanity window (HG002 r2, ~1 min) ...
