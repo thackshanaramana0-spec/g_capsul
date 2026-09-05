@@ -86,6 +86,79 @@ static const size_t QBLOCK_BYTES = 256u*1024u*1024u;
 // phred for the same reason; subtracting the observed minimum is strictly
 // tighter than a fixed -33 and is a pure bijection, so it cannot lose
 // information. The offset rides in the index, one varint per block.
+// ── ONE POOL FOR (BLOCK x TRIAL), NOT A POOL PER BLOCK ──────────────────────
+// encode_block parallelises its own trials, so with 8 trials on a 12-core box
+// four cores sat idle for the whole quality stage and blocks were still
+// processed one at a time. Splitting the block into prep / trial / select lets
+// the caller schedule trials from SEVERAL blocks in one flat parallel loop,
+// which fills the machine.
+//
+// Output is unchanged: the same blocks, the same trial set per block, the same
+// fixed-index scan for the smallest result, and results appended in block
+// order -- never completion order.
+struct BlockJob {
+    std::vector<std::string>          shifted;   // one per offset candidate
+    std::vector<uint32_t>             lens;
+    uint8_t                           cands[2] = {0,0};
+    int                               nstrat = 4, nc = 1, ntrial = 4;
+    std::vector<std::vector<uint8_t>> res;
+    std::vector<char>                 ok;
+    size_t                            qbytes = 0;
+};
+
+static void prep_block(const std::string& qbuf, const std::vector<uint32_t>& lens,
+                       BlockJob& J){
+    J.lens = lens; J.qbytes = qbuf.size();
+    uint8_t qmin = 255;
+    for(size_t i=0;i<qbuf.size();++i){ const uint8_t c=(uint8_t)qbuf[i]; if(c<qmin) qmin=c; }
+    if(qbuf.empty()) qmin = 33;
+    J.cands[0]=qmin; J.cands[1]=33;
+    J.nc = (qmin!=33 && qmin>=33) ? 2 : 1;
+    J.nstrat = 4;
+    if(const char* e=getenv("CAPS_QSTRAT")){ int v=atoi(e); if(v>=1&&v<=4) J.nstrat=v; }
+    if(const char* e=getenv("CAPS_QOFF")){ int v=atoi(e); if(v>=1&&v<=J.nc) J.nc=v; }
+    J.ntrial = J.nc * J.nstrat;
+    J.shifted.assign(J.nc, std::string());
+    for(int ci=0; ci<J.nc; ++ci){
+        J.shifted[ci].resize(qbuf.size());
+        const uint8_t off=J.cands[ci];
+        for(size_t i=0;i<qbuf.size();++i)
+            J.shifted[ci][i]=(char)((unsigned char)qbuf[i]-off);
+    }
+    J.res.assign(J.ntrial, std::vector<uint8_t>());
+    J.ok.assign(J.ntrial, 0);
+}
+
+static void run_trial(BlockJob& J, int t){
+    const int ci = t / J.nstrat, strat = t % J.nstrat;
+    // fqz_compress MUTATES the slice (flags at fqzcomp_qual.c:655, len at :790),
+    // and copying the struct still shares those arrays -- eight threads
+    // scribbling on each other's parameters grew the archive 1.55% once. Each
+    // trial therefore owns its len/flags storage.
+    std::vector<uint32_t> mylen(J.lens.begin(), J.lens.end());
+    std::vector<uint32_t> myflags(J.lens.size(), 0u);
+    fqz_slice st;
+    st.num_records = (int)J.lens.size();
+    st.len   = mylen.data();
+    st.flags = myflags.data();
+    size_t osz=0;
+    char* c = fqz_compress(4, &st, const_cast<char*>(J.shifted[ci].data()),
+                           J.shifted[ci].size(), &osz, strat, nullptr);
+    if(c){ J.res[t].assign((uint8_t*)c,(uint8_t*)c+osz); J.ok[t]=1; free(c); }
+}
+
+static bool select_block(BlockJob& J, std::vector<uint8_t>& out, uint8_t& qmin_out){
+    bool got=false; size_t best=0;
+    for(int t=0; t<J.ntrial; ++t){
+        if(!J.ok[t]) continue;
+        if(!got || J.res[t].size() < best){
+            out = J.res[t]; best = J.res[t].size(); got = true;
+            qmin_out = J.cands[t/J.nstrat];
+        }
+    }
+    return got;
+}
+
 static bool encode_block(const std::string& qbuf,
                          const std::vector<uint32_t>& lens,
                          std::vector<uint8_t>& out,
@@ -249,7 +322,17 @@ static Encoded encode_from_fastq(const char* fq_path, size_t BLOCK_BYTES=QBLOCK_
         int nstrat_est = 4;
         if(const char* e=getenv("CAPS_QSTRAT")){ int v=atoi(e); if(v>=1&&v<=4) nstrat_est=v; }
         const unsigned trials = (unsigned)(2*nstrat_est);        // 2 offsets, worst case
-        NB = (size_t)std::max(1u, thr/ (trials?trials:1u));
+        // ONE BLOCK. MEASURED AND REVERTED 2026-09-06. Filling the idle cores
+        // with a second block looked obviously right and LOSES once quality is
+        // overlapped with the assembly (which it now is): the worker already
+        // shares the machine with round 1, so a second block only doubles its
+        // footprint and oversubscribes. HG002, same archive every time:
+        //     overlap, 1 block   279.37 s   peak 4870 MB
+        //     overlap, 2 blocks  282.73 s   peak 6190 MB
+        //                        280.54 s   peak 6271 MB
+        // 1-3 s slower for +1.3 GB. CAPS_QBATCH>1 re-enables it for measurement.
+        (void)thr; (void)trials;
+        NB = 1;
     }
     if(const char* e=getenv("CAPS_QBATCH")){ long v=atol(e); if(v>0) NB=(size_t)v; }
     {
@@ -273,18 +356,17 @@ static Encoded encode_from_fastq(const char* fq_path, size_t BLOCK_BYTES=QBLOCK_
         std::vector<std::vector<uint8_t>> blk(nb);
         std::vector<uint8_t> qmn(nb, 0);
         std::vector<char>    okb(nb, 0);
-        if(nb==1){
-            // No outer region, so encode_block's own trial parallelism is free
-            // to use the whole team -- identical to the pre-batching path.
+        std::vector<BlockJob> jobs(nb);
+        for(size_t b=0;b<nb;++b) prep_block(pend_q[b], pend_l[b], jobs[b]);
+        std::vector<std::pair<size_t,int>> tasks;          // (block, trial)
+        for(size_t b=0;b<nb;++b)
+            for(int t=0;t<jobs[b].ntrial;++t) tasks.push_back({b,t});
+        #pragma omp parallel for schedule(dynamic,1)
+        for(long long ti=0; ti<(long long)tasks.size(); ++ti)
+            run_trial(jobs[tasks[(size_t)ti].first], tasks[(size_t)ti].second);
+        for(size_t b=0;b<nb;++b){
             uint8_t qm=0;
-            if(encode_block(pend_q[0], pend_l[0], blk[0], qm)){ okb[0]=1; qmn[0]=qm; }
-        } else {
-            #pragma omp parallel for schedule(dynamic,1)
-            for(long long bi=0; bi<(long long)nb; ++bi){
-                const size_t b=(size_t)bi;
-                uint8_t qm=0;
-                if(encode_block(pend_q[b], pend_l[b], blk[b], qm)){ okb[b]=1; qmn[b]=qm; }
-            }
+            if(select_block(jobs[b], blk[b], qm)){ okb[b]=1; qmn[b]=qm; }
         }
         for(size_t b=0;b<nb;++b){                    // strict block order
             if(okb[b]){

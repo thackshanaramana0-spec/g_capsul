@@ -347,6 +347,43 @@ int main(int argc,char** argv){
         char cwdbuf[4096];
         if(getcwd(cwdbuf,sizeof cwdbuf)) g_input_path = std::string(cwdbuf) + "/" + g_input_path;
     }
+
+    // ── QUALITY AND NAMES OVERLAP THE ASSEMBLY ──────────────────────────────
+    // Measured on HG002 (2-point grid, 304.48 s total): the parent phase is
+    // 89.4 s of which quality+names is 40.1 s, and that phase runs at only 59%
+    // core utilisation -- ~435 idle core-seconds -- while the group phase that
+    // follows is 98% saturated. The 40.1 s sits on the critical path for no
+    // reason: nmc/qlc::encode_from_fastq re-open the FASTQ and read only the
+    // name and quality columns. They depend on NOTHING the assembly computes --
+    // not the load, not round 1, not the pseudogenome.
+    //
+    // So start them here, the instant the input path is known, and join just
+    // before the candidate fork. They then run alongside load + round 1 and
+    // consume the idle capacity instead of extending the timeline.
+    //
+    // WHY A THREAD AND NOT A FORK. The results must land in g_NM / g_QL of THIS
+    // process so every candidate child inherits them copy-on-write, exactly as
+    // before. A forked worker would have to serialise both structures back.
+    //
+    // The join happens BEFORE omp_pause_resource_all and before any fork, so
+    // the process is genuinely single-threaded at the fork -- the libgomp
+    // deadlock this file documents twice is not reachable from here.
+    //
+    // CAPS_NO_QOVERLAP=1 restores the serial hoist for A/B measurement, and
+    // CAPS_QTHREADS caps the worker's OpenMP width if the two teams contend.
+    std::thread q_thread; bool q_started=false;
+    // Collect the worker. MUST be called before any fork (a child would inherit
+    // the flag but not the thread, and forking mid-OpenMP-region is the libgomp
+    // deadlock documented at both fork sites) and before g_NM / g_QL are read.
+    auto q_collect = [&]{ if(q_started){ q_thread.join(); q_started=false; } };
+    if((CAPS_NAMES||CAPS_QUAL) && !g_input_path.empty() && !getenv("CAPS_NO_QOVERLAP")){
+        q_thread = std::thread([&]{
+            if(const char* e=getenv("CAPS_QTHREADS")){ int v=atoi(e); if(v>0) omp_set_num_threads(v); }
+            if(CAPS_NAMES && !g_NM_done){ g_NM = nmc::encode_from_fastq(g_input_path.c_str()); g_NM_done = true; }
+            if(CAPS_QUAL  && !g_QL_done){ g_QL = qlc::encode_from_fastq(g_input_path.c_str()); g_QL_done = true; }
+        });
+        q_started = true;
+    }
     // RAM FIX -- confirmed real driver of the C. elegans-scale RSS gap
     // after three application-level hypotheses were measured and ruled
     // out (allrefs/cleanRefs double-holding, c/cr scope overlap, res[]
@@ -1432,6 +1469,7 @@ int main(int argc,char** argv){
             // hung at 0.0% CPU. Tearing the runtime down first makes the process
             // genuinely single-threaded, so the snapshot is safe; the team is
             // rebuilt on demand inside each child.
+            q_collect();          // before ANY fork: GSEARCH's and the candidates'
             omp_pause_resource_all(omp_pause_hard);
             const std::string base = getenv("ARCHIVE") ? getenv("ARCHIVE") : "out.arcs2";
             bool child=false; size_t mine=0;
@@ -1542,6 +1580,11 @@ int main(int argc,char** argv){
             // would have no cores to use -- measured as a near-zero gain when
             // the coder was parallelised but left inside the candidates.
             if(!gs_child && !child){
+                // Collect the overlapped worker started at the top of main. It
+                // has had load + round 1 to finish in; anything it did not do
+                // (or the whole job when CAPS_NO_QOVERLAP is set) falls through
+                // to the serial path below unchanged.
+                q_collect();
                 if(CAPS_NAMES && !g_NM_done && !g_input_path.empty()){
                     g_NM = nmc::encode_from_fastq(g_input_path.c_str()); g_NM_done = true;
                 }
@@ -2182,6 +2225,130 @@ int main(int argc,char** argv){
                 }
             }
             std::sort(ment.begin(),ment.end());
+        }
+        // ── REPEAT-SEED CAP (CAPS_SEEDCAP=N, 0/unset = off) ─────────────────
+        // MEASURED, not assumed. perf puts 52% of ALL cycles in the mapping
+        // scan, and the funnel is ~32M seed hits -> 1.93e9 candidate
+        // examinations. The bucket histogram shows why: mean bucket is 1.25 and
+        // 73% of entries sit in buckets of ONE, but the largest bucket holds
+        // 35,388 entries, and sum(b^2) -- the work proxy -- is 2.24e9, i.e. the
+        // whole cost comes from a tiny tail of repeats.
+        //
+        //     cap=256   keeps 98.013% of entries,  10.294% of work
+        //     cap=1024  keeps 99.172% of entries,  20.304% of work
+        //     cap=4096  keeps 99.689% of entries,  37.789% of work
+        //
+        // Masking over-frequent seeds is the standard remedy (minimap2 and BWA
+        // both do it) and it is NOT free: a masked seed can no longer anchor a
+        // placement. But each read contributes NPARTS seeds and is only lost if
+        // EVERY part is capped, so the read-level loss is far below the
+        // entry-level loss. A lost read is not dropped -- it falls through to
+        // the second region and is assembled there, so the cost is archive
+        // bytes, not correctness.
+        //
+        // Applied index-side (entries removed) rather than scan-side (stop
+        // after N) so the index shrinks too. ment is already sorted by key, so
+        // this is one linear compaction.
+        // THE CAP IS DERIVED, NOT FITTED. A constant would be a per-dataset
+        // tuning: a bucket of 1024 in HG002's 15.3M-entry index is a completely
+        // different object from 1024 in E. coli's ~2.5M-entry index, and this
+        // project's standing rule is that fixes are formulas over a measured
+        // input property, never fitted constants (three cost models were
+        // discarded here for exactly that reason).
+        //
+        // So the index picks its own cap in ONE linear pass over the already
+        // sorted ment: take the SMALLEST cap that still retains KEEPFRAC of all
+        // seed entries. That is self-scaling -- on a low-repeat genome the
+        // distribution is tight, the rule lands on a small cap and discards
+        // almost nothing, and on a repeat-rich genome it lands where the fat
+        // tail begins. Measured on HG002 it selects 1024 (99.172% of entries,
+        // 20.3% of the work); a tight bacterial distribution selects far lower
+        // and costs nothing because there is nothing out there to drop.
+        //
+        // Cost: two linear scans of a 122 MB array, ~0.05 s against a 108 s
+        // stage. CAPS_SEEDCAP=N forces a cap, CAPS_SEEDCAP=0 disables entirely,
+        // CAPS_SEEDKEEP overrides the retained fraction.
+        {
+            double KEEPFRAC = 0.99;
+            if(const char* e=getenv("CAPS_SEEDKEEP")){ double v=atof(e); if(v>0&&v<=1) KEEPFRAC=v; }
+            size_t CAP = 0;
+            const char* forced = getenv("CAPS_SEEDCAP");
+            if(forced) CAP = (size_t)atoll(forced);
+            else {
+                static const size_t CANDS[]={8,16,32,64,128,256,512,1024,2048,4096,16384};
+                const int NCAND=11;
+                size_t kept[11]={0}; size_t total=0;
+                size_t i=0;
+                while(i<ment.size()){
+                    const uint32_t k=(uint32_t)(ment[i]>>32); size_t j=i;
+                    while(j<ment.size() && (uint32_t)(ment[j]>>32)==k) ++j;
+                    const size_t b=j-i; total+=b;
+                    for(int c=0;c<NCAND;++c) kept[c]+= (b<CANDS[c]?b:CANDS[c]);
+                    i=j;
+                }
+                for(int c=0;c<NCAND;++c)
+                    if(total && (double)kept[c] >= KEEPFRAC*(double)total){ CAP=CANDS[c]; break; }
+                fprintf(stderr,"  [seedcap] derived cap=%zu (keep>=%.3f of %zu entries)\n",
+                        CAP, KEEPFRAC, total);
+            }
+            if(CAP > 0){
+                size_t w=0, i=0, dropped=0, capped_keys=0;
+                while(i<ment.size()){
+                    const uint32_t k=(uint32_t)(ment[i]>>32); size_t j=i;
+                    while(j<ment.size() && (uint32_t)(ment[j]>>32)==k) ++j;
+                    const size_t b=j-i, keep=(b<CAP?b:CAP);
+                    if(b>CAP){ ++capped_keys; dropped+=b-keep; }
+                    for(size_t t=0;t<keep;++t) ment[w++]=ment[i+t];
+                    i=j;
+                }
+                fprintf(stderr,"  [seedcap] cap=%zu dropped %zu of %zu entries (%.3f%%) "
+                               "across %zu over-frequent keys -> index %zu\n",
+                        CAP, dropped, ment.size(),
+                        ment.size()?100.0*dropped/ment.size():0.0, capped_keys, w);
+                ment.resize(w);
+            }
+        }
+        // ── SEED-BUCKET SKEW (CAPS_BUCKET_HIST=1) ───────────────────────────
+        // perf attributes 52% of ALL cycles to the mapping scan, and the funnel
+        // is ~32M seed hits producing 1.93e9 candidate examinations -- 60 per
+        // hit, where a 32-bit key over 15.3M entries would give ~1 if the
+        // distribution were uniform. So a few repetitive seeds are suspected of
+        // generating most of the work. This measures that instead of assuming
+        // it: for each distinct key with bucket size b, the examinations it can
+        // cause scale as b x (text occurrences), and text occurrences track b
+        // for a repeat, so sum(b^2) is the work proxy and sum(b) the index size.
+        // Diagnostic only -- one linear pass, gated, no behaviour change.
+        if(getenv("CAPS_BUCKET_HIST")){
+            const uint32_t CAPS[]={8,16,32,64,128,256,1024,4096};
+            const int NC=8;
+            long double work=0; uint64_t ents=0, nkeys=0, bmax=0;
+            long double wcap[NC]={0}; uint64_t ecap[NC]={0};
+            std::vector<uint64_t> lg(34,0);
+            size_t i=0;
+            while(i<ment.size()){
+                const uint32_t k=(uint32_t)(ment[i]>>32); size_t j=i;
+                while(j<ment.size() && (uint32_t)(ment[j]>>32)==k) ++j;
+                const uint64_t b=(uint64_t)(j-i);
+                ++nkeys; ents+=b; work+=(long double)b*(long double)b;
+                if(b>bmax) bmax=b;
+                { int l=0; uint64_t t=b; while(t>>=1) ++l; if(l>33) l=33; lg[l]+=b; }
+                for(int c=0;c<NC;++c){
+                    const uint64_t kept = b<CAPS[c]? b : CAPS[c];
+                    ecap[c]+=kept; wcap[c]+=(long double)b*(long double)kept;
+                }
+                i=j;
+            }
+            fprintf(stderr,"[BUCKET] keys=%llu entries=%llu maxbucket=%llu "
+                           "work(sum b^2)=%.0Lf  mean_bucket=%.2f\n",
+                    (unsigned long long)nkeys,(unsigned long long)ents,
+                    (unsigned long long)bmax, work, ents?(double)ents/nkeys:0.0);
+            fprintf(stderr,"[BUCKET] entries by bucket size 2^k:");
+            for(int l=0;l<34;++l) if(lg[l]) fprintf(stderr," 2^%d:%llu",l,(unsigned long long)lg[l]);
+            fprintf(stderr,"\n");
+            for(int c=0;c<NC;++c)
+                fprintf(stderr,"[BUCKET] cap=%-5u keeps %.3f%% of entries, %.3f%% of work\n",
+                        CAPS[c], ents?100.0*(double)ecap[c]/ents:0.0,
+                        work>0?(double)(100.0L*wcap[c]/work):0.0);
         }
         auto MKEY =[&](size_t i)->uint32_t{ return (uint32_t)(ment[i]>>32); };
         auto MRID =[&](size_t i)->uint32_t{ return (uint32_t)((ment[i]>>3)&0x1FFFFFFFULL); };
@@ -4001,6 +4168,7 @@ int main(int argc,char** argv){
         if(CAPS_NAMES && !g_input_path.empty()){
             // Reuse what the parent computed before the fork; only recompute
             // if the hoist did not run (single-candidate / GSEARCH paths).
+            q_collect();   // no-CANDIDATES path never reaches a fork site
             NM = g_NM_done ? g_NM : nmc::encode_from_fastq(g_input_path.c_str());
             fprintf(stderr,"  [names] %llu names in %llu blocks: body %zu B, dict %zu B raw, index %zu B raw\n",
                     (unsigned long long)NM.n_names,(unsigned long long)NM.n_blocks,
@@ -4019,6 +4187,7 @@ int main(int argc,char** argv){
         // archive alone.
         static qlc::Encoded QL;
         if(CAPS_QUAL && !g_input_path.empty()){
+            q_collect();
             QL = g_QL_done ? g_QL : qlc::encode_from_fastq(g_input_path.c_str());
             fprintf(stderr,"  [qual] %llu reads / %llu quality bytes in %llu blocks: body %zu B, index %zu B raw\n",
                     (unsigned long long)QL.n_reads,(unsigned long long)QL.n_qbytes,
