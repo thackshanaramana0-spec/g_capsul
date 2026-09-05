@@ -29,6 +29,7 @@
 #include <unordered_map>
 #include <algorithm>
 #include <thread>
+#include <atomic>
 #include <omp.h>
 #include <unistd.h>
 #include <sys/wait.h>
@@ -120,12 +121,53 @@ static inline bool pack(const char* p,uint64_t& out){
 // 0.0 MB with hints on 16 arrays. reserve() takes the mapping without touching
 // it, the hint lands on untouched memory, and assign() then faults it in as
 // 2 MB pages.
+// ── RAW-THREAD BUDGET ───────────────────────────────────────────────────────
+// omp_set_num_threads() bounds OpenMP regions ONLY. Three stages fan out with
+// raw std::threads sized by hardware_concurrency(), which ignores it entirely,
+// so every candidate spawned 12 threads no matter how many candidates were
+// running: the pigeonhole scan at 2 concurrent group children was 24 threads on
+// 12 cores, and MEM run() at 4 concurrent candidates was 48 on 12.
+//
+// Set once at each fork point to that process's share of the machine.
+static unsigned g_thr_budget = 0;                  // 0 = not forked: take the box
+static inline unsigned thr_budget(){
+    if(g_thr_budget) return g_thr_budget;
+    unsigned h=std::thread::hardware_concurrency(); return h?h:1u;
+}
 static inline void hugehint(void* p, size_t bytes);
 template<class V, class T>
 static inline void hugefill(V& v, size_t n, const T& val){
     v.clear(); v.shrink_to_fit(); v.reserve(n);
     hugehint((void*)v.data(), n*sizeof(T));
     v.assign(n, val);
+}
+// REHOME a vector that was built incrementally. rpk/woff/rlen cannot use
+// hugefill: their final size is not known until the FASTQ has been read, so
+// they are grown with push_back/insert. They were therefore given a bare
+// hugehint() after the fill -- which is precisely the inert pattern the comment
+// above warns about, and it went unnoticed on the single largest array in the
+// program. rpk is 445 MB on HG002, 39% of a candidate's working set, and it is
+// one of the three arrays the pigeonhole loop dereferences at a random index
+// 1.93 billion times (see the prefetch note there); it had no huge pages at
+// all, and shrink_to_fit() re-faulted every page at 4 KB immediately before the
+// hint that was supposed to help.
+//
+// Copying into a freshly reserved, hinted buffer is the only way to fix this
+// after the fact: reserve() takes the mapping untouched, the hint lands on
+// untouched memory, and the copy faults it in as 2 MB pages. Costs one pass
+// over the array and holds both copies briefly -- rpk peaks at 706 MB RSS here
+// against a 4.2 GB run peak, so the transient is affordable. Below the
+// threshold it degrades to the plain shrink_to_fit() it replaces.
+//
+// PURELY A MEMORY-LAYOUT CHANGE: same bytes, same order, same values.
+template<class V>
+static inline void hugerehome(V& v){
+    const size_t bytes = v.size()*sizeof(v[0]);
+    if(bytes < (8u<<20) || v.empty()){ v.shrink_to_fit(); return; }
+    V nv; nv.reserve(v.size());
+    hugehint((void*)nv.data(), bytes);
+    nv.insert(nv.end(), v.begin(), v.end());
+    v.swap(nv);
 }
 static inline void hugehint(void* p, size_t bytes){
 #ifdef MADV_HUGEPAGE
@@ -590,10 +632,29 @@ int main(int argc,char** argv){
                 rlen.push_back((uint16_t)b.size());
             }
         }
-        rpk.shrink_to_fit(); woff.shrink_to_fit(); rlen.shrink_to_fit();
-        hugehint(rpk.data(), rpk.size()*sizeof(rpk[0]));
-        hugehint(woff.data(), woff.size()*sizeof(woff[0]));
-        hugehint(rlen.data(), rlen.size()*sizeof(rlen[0]));
+        // These three were the hole in the huge-page work: built by push_back,
+        // shrink_to_fit()ed (which re-faults every page at 4 KB) and only THEN
+        // hinted -- inert. rpk alone is 445 MB. See hugerehome().
+        hugerehome(rpk); hugerehome(woff); hugerehome(rlen);
+        // VERIFY THE HINT ACTUALLY TOOK. The first version of this work shipped
+        // completely inert and was only caught by reading smaps -- a madvise()
+        // call in the source proves nothing. Print what the kernel actually gave
+        // us so a regression is visible in every log rather than inferred.
+        if(FILE* sm=fopen("/proc/self/smaps_rollup","r")){
+            char ln[256]; unsigned long hp=0, rss=0;
+            while(fgets(ln,sizeof ln,sm)){
+                unsigned long v;
+                if(sscanf(ln,"AnonHugePages: %lu kB",&v)==1) hp=v;
+                else if(sscanf(ln,"Rss: %lu kB",&v)==1) rss=v;
+            }
+            fclose(sm);
+            fprintf(stderr,"[HP] AnonHugePages=%lu MB of Rss=%lu MB after load "
+                           "(rpk=%zu MB woff=%zu MB rlen=%zu MB)\n",
+                    hp/1024, rss/1024,
+                    rpk.size()*sizeof(rpk[0])/1048576,
+                    woff.size()*sizeof(woff[0])/1048576,
+                    rlen.size()*sizeof(rlen[0])/1048576);
+        }
         // INVARIANT: read_lengths is indexed by ORIGINAL read, always.
         // It used to be indexed by unique id, which silently breaks whenever a
         // read's uid is later rewritten -- containment aliasing folds a shorter
@@ -1601,6 +1662,7 @@ int main(int argc,char** argv){
                         // Child's share of the machine. Set before any parallel
                         // region in the child runs.
                         omp_set_num_threads((int)per_child_threads);
+                        g_thr_budget = per_child_threads;   // bounds raw threads too
                         { char b[16]; snprintf(b,sizeof b,"%u",per_child_threads);
                           setenv("OMP_NUM_THREADS", b, 1); }
                         break;
@@ -2199,13 +2261,25 @@ int main(int argc,char** argv){
             if(text.size()<(1u<<20)) T=1;
             std::vector<std::vector<std::pair<uint32_t,uint32_t>>> hit(T);
             std::vector<std::vector<uint32_t>> hmm(T);
-            std::vector<std::thread> th; th.reserve(T);
+            std::vector<std::thread> th;
             const size_t chunk=(text.size()+T-1)/T;
-            for(unsigned t=0;t<T;++t){
-                const size_t lo=(size_t)t*chunk;
-                size_t hi=std::min(text.size(),lo+chunk);
-                if(lo>=hi) break;
-                th.emplace_back([&,t,lo,hi]{
+            // SAME T CHUNKS, FEWER WORKERS. T and the chunk partition are left
+            // exactly as they were, so hit[t]/hmm[t] hold the same hits and the
+            // serial merge below applies them in the same (thread, insertion)
+            // order -- which matters, because that merge takes only strict
+            // improvements, so a different enumeration order could pick a
+            // different equal-mismatch placement. Only the number of chunks in
+            // flight is bounded. That also drops the per-chunk `slot` array
+            // (one uint32 per read) from T resident copies to W.
+            const unsigned Wk = std::min<unsigned>(T, thr_budget());
+            std::atomic<unsigned> nextc{0};
+            th.reserve(Wk);
+            for(unsigned w=0; w<Wk; ++w){
+                th.emplace_back([&]{
+                  for(unsigned t=nextc.fetch_add(1); t<T; t=nextc.fetch_add(1)){
+                    const size_t lo=(size_t)t*chunk;
+                    size_t hi=std::min(text.size(),lo+chunk);
+                    if(lo>=hi) continue;
                     // A4. Keep only this thread's BEST placement per read instead
                     // of every accepted one. Measured on S. aureus: 59,187,817
                     // accepted hits for 1,705,714 reads -- 34.7 per read -- held
@@ -2315,6 +2389,7 @@ int main(int argc,char** argv){
                             }
                         }
                     }
+                  }
                 });
             }
             for(auto& x:th) x.join();
@@ -2403,6 +2478,7 @@ int main(int argc,char** argv){
                 if(pid==0){
                     gchild=true; mine2=j;
                     omp_set_num_threads((int)g_l2_threads);
+                    g_thr_budget = g_l2_threads;            // bounds raw threads too
                     { char bb[16]; snprintf(bb,sizeof bb,"%u",g_l2_threads);
                       setenv("OMP_NUM_THREADS", bb, 1); }
                     break;
@@ -3271,10 +3347,21 @@ int main(int argc,char** argv){
             std::vector<std::vector<Ref>> res(T);
             std::vector<std::thread> th;
             const size_t chunk=(qlen+T-1)/T;
-            for(unsigned t=0;t<T;++t){
-                const size_t lo=(size_t)t*chunk, hi=std::min(qlen,lo+chunk);
-                if(lo>=hi) break;
-                th.emplace_back([&,t,lo,hi]{ parse_range(Q,qlen,mode,lo,hi,res[t],S,slen,MAXMM); });
+            // SAME T CHUNKS, FEWER WORKERS. T is left exactly as it was, so the
+            // partition, the res[t] buckets and the merge order below are
+            // unchanged -- the output is identical by construction. Only how
+            // many chunks are in flight at once is bounded, which is what stops
+            // 4 concurrent candidates putting 48 threads on 12 cores.
+            const unsigned W = std::min<unsigned>(T, thr_budget());
+            std::atomic<unsigned> nextc{0};
+            for(unsigned w=0; w<W; ++w){
+                th.emplace_back([&]{
+                    for(unsigned t=nextc.fetch_add(1); t<T; t=nextc.fetch_add(1)){
+                        const size_t lo=(size_t)t*chunk, hi=std::min(qlen,lo+chunk);
+                        if(lo>=hi) continue;
+                        parse_range(Q,qlen,mode,lo,hi,res[t],S,slen,MAXMM);
+                    }
+                });
             }
             for(auto& x:th) x.join();
             size_t nm=0;
