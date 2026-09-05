@@ -117,14 +117,17 @@ for T in SPRING Genozip; do
     XS=$(stat -c%s "$S")
     ok "$T archive $(mb $XS)  ratio $(awk -v a=$XS -v r=$RAW 'BEGIN{printf "%.3f%%",100*a/r}')  wall ${XW}s  RAM $(rg $XR)"
     keep "claim1" "$S" "$T archive -- the competitor number in T1"
+    # The competitor's time and RAM were measured; write them, or T2 has a
+    # CAPSULE row and two blanks and is not a comparison at all.
+    printf "%s,%s,%s,%s,%.4f,%s,,%s,\n" "$DS" "$T" "$RAW" "$XS" \
+      "$(awk -v a=$XS -v r=$RAW 'BEGIN{print 100*a/r}')" "$XW" "$XR" >> "$OUT/_rows_comp"
   else err "$T produced no archive"; fi
 done
 
 CSV1="$OUT/claim1_t1_t2.csv"
 { echo "dataset,tool,raw_bytes,archive_bytes,ratio_pct,compress_s,decompress_s,peak_ram_kb,lossless"
   echo "$DS,CAPSULE,$RAW,${ARCH:-},$(awk -v a=${ARCH:-0} -v r=$RAW 'BEGIN{printf "%.4f",100*a/r}'),$CW,$DW,$CR,$LL"
-  [ -s "$OUT/$DS.spring" ]  && echo "$DS,SPRING,$RAW,$(stat -c%s "$OUT/$DS.spring"),,,,,"
-  [ -s "$OUT/$DS.genozip" ] && echo "$DS,Genozip,$RAW,$(stat -c%s "$OUT/$DS.genozip"),,,,,"
+  cat "$OUT/_rows_comp" 2>/dev/null
 } > "$CSV1"
 keep "claim1" "$CSV1" "T1 + T2 table rows for this dataset"
 
@@ -143,8 +146,28 @@ if [ -s "$DATA_DIR/${DS}_pooled.fq" ] && [ -s "$REFS/chr20.fa" ]; then
     keep "claim2" "$C2/lifted.vcf"  "calls lifted to chr20 coordinates (what vcfeval scores)"
     keep "claim2" "$C2/contigs.fa"  "assembled contigs the calls came from"
     keep "claim2" "$OUT/claim2.log" "full Claim 2 log incl. rtg vcfeval summary"
-    { echo "individual,tool,snv_line"; echo "$DS,CAPSULE,\"$LN\""; } > "$OUT/claim2_t3.csv"
-    keep "claim2" "$OUT/claim2_t3.csv" "T3 row for this individual"
+    parse_snv(){ echo "$1" | grep -oP "$2=\\K[0-9.]+" | head -1; }
+    echo "individual,tool,tp,fp,fn,precision,recall,f1" > "$OUT/claim2_t3.csv"
+    printf "%s,CAPSULE,%s,%s,%s,%s,%s,%s\n" "$DS" \
+      "$(parse_snv "$LN" 'TP')" "$(parse_snv "$LN" 'FP')" "$(parse_snv "$LN" 'FN')" \
+      "$(parse_snv "$LN" ' P')" "$(parse_snv "$LN" ' R')" "$(parse_snv "$LN" 'F1')" >> "$OUT/claim2_t3.csv"
+
+    # DiscoSNP++ on the SAME reads, SAME truth, SAME scoring. Without it T3 is
+    # a single number, not a head-to-head, and the claim is a comparison.
+    step "DiscoSNP++ (identical reads, identical truth, identical scoring)"
+    if [ -f "$HERE/scripts/run_fullchr20_bench_disco.sh" ]; then
+      bash "$HERE/scripts/run_fullchr20_bench_disco.sh" \
+           "$REFS/chr20.fa" "$SRC" "$DS" "$OUT/claim2_disco" > "$OUT/claim2_disco.log" 2>&1
+      DL=$(grep -aE '^SNV ' "$OUT/claim2_disco.log" | tail -1)
+      if [ -n "$DL" ]; then
+        ok "DISCO $DL"
+        printf "%s,DiscoSNP++,%s,%s,%s,%s,%s,%s\n" "$DS" \
+          "$(parse_snv "$DL" 'TP')" "$(parse_snv "$DL" 'FP')" "$(parse_snv "$DL" 'FN')" \
+          "$(parse_snv "$DL" ' P')" "$(parse_snv "$DL" ' R')" "$(parse_snv "$DL" 'F1')" >> "$OUT/claim2_t3.csv"
+        keep "claim2" "$OUT/claim2_disco.log" "DiscoSNP++ arm -- the competitor number in T3"
+      else err "DiscoSNP++ produced no SNV line -- see $OUT/claim2_disco.log"; fi
+    else err "run_fullchr20_bench_disco.sh missing -- T3 will have only our arm"; fi
+    keep "claim2" "$OUT/claim2_t3.csv" "T3 table: het-SNV TP/FP/FN/P/R/F1, ours vs DiscoSNP++"
   else err "no SNV line -- see $OUT/claim2.log"; FAILED=1; fi
 else
   inf "SKIP Claim 2: $DS is not one of the 4 GIAB human sets (needs a truth VCF)"
@@ -172,6 +195,16 @@ run3 query    "$C3/region.fq" 0-100000
 keep "claim3" "$CSV3" "T6 rows for this dataset"
 
 # ── MANIFEST ───────────────────────────────────────────────────────────────
+banner "THE TABLES THIS RUN PRODUCED"
+for t in "$CSV1:T1 + T2  (archive size, time, RAM -- ours vs SPRING vs Genozip)" \
+         "$OUT/claim2_t3.csv:T3  (het-SNV F1 -- ours vs DiscoSNP++)" \
+         "$CSV3:T6  (export / coverage / query from the archive)"; do
+  f="${t%%:*}"; ttl="${t#*:}"
+  [ -s "$f" ] || continue
+  say ""; say "  $ttl"; say "  ${f#$OUT/}"
+  column -s, -t "$f" 2>/dev/null | sed 's/^/    /' | tee -a "$LOG"
+done
+
 banner "FILE MANIFEST — every artefact, where it is, how big, what it is for"
 say ""
 printf "%-8s %12s  %-46s %s\n" "CLAIM" "SIZE" "PATH" "WHAT IT IS" | tee -a "$LOG"
