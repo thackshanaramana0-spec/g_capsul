@@ -74,3 +74,31 @@ but an algorithmic change: replacing the level-sweep overlap search with an
 FM-index (the all-pairs suffix-prefix problem, as SGA solves it). That changes
 which chaining decisions are made, and therefore every Claim 1 archive size, so
 it is a post-paper project rather than a tuning pass.
+
+## Verified at full scale (HG002, 12.6M reads, production 8-candidate config)
+
+The 3M-read subset was useful for iteration but understates the win, because at
+that size the working set fits in L3 and the cache effects the optimisations
+target do not appear. Measured on the real dataset, same configuration as the
+sanity run:
+
+| | before | after | gain |
+|---|---|---|---|
+| total | 1502.41 s (25:02) | **914.80 s (15:15)** | **-39%** |
+| round 2 | 794.06 s | 503.83 s | -37% |
+| pigeonhole | 405.24 s | 225.36 s | -44% |
+| archive | 574,014,786 B | 574,014,786 B | **byte-identical** |
+
+A parse note worth keeping: `sort -u | tail -1` on the stage lines sorts
+LEXICOGRAPHICALLY, so "94.76" ranks above "781.53" and the largest value is
+missed. Every stage figure here uses `sort -g`.
+
+## Also refuted at full scale
+
+Rewriting the serial per-level compaction -- carrying rlen beside the tail id so
+the eligibility test reads sequentially, and replacing the random `nxt[]` probe
+(50 MB) with a 1-bit alive bitmap (1.6 MB, cache-resident) -- measured 918.64 s
+against 914.80 s, i.e. neutral, with identical archives. The `omp single` block
+IS 46% of round 2 at 3M reads and does 271 million tail-visits, but the arrays
+it chases are evidently not the miss source at either scale. Reverted: it costs
+two extra arrays for nothing.
