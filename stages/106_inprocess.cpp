@@ -1716,6 +1716,11 @@ int main(int argc,char** argv){
             for(size_t ci : gidx[mine]) g_l2_maxmaps.push_back(cands[ci].first);
             g_l2_active  = true;
             setenv("MINOV",  std::to_string(gmin[mine]).c_str(), 1);
+            // THE MAPPING SEARCH RUNS ONCE, AT THE GROUP'S CEILING. See the
+            // level-2 block for why one search at max(MAXMAP) answers every
+            // member of the group.
+            { uint32_t cap=0; for(uint32_t m : g_l2_maxmaps) if(m>cap) cap=m;
+              setenv("MAXMAP", std::to_string(cap).c_str(), 1); }
             sweep_minov = gmin[mine];
             }
         }
@@ -1808,88 +1813,6 @@ int main(int argc,char** argv){
             links,multi,leftovers.size(),pg.size());
     lap("emit chains");
 
-    // ── LEVEL-2 CANDIDATE FORK: split the MINOV group by MAXMAP ─────────────
-    //
-    // Everything above this line is a function of (input, MINOV) only -- round
-    // 2 and chain emission -- and has now been computed ONCE for this group
-    // instead of once per member. MAXMAP becomes live in the mapping stage
-    // below, so this is the first point at which the members genuinely differ,
-    // and therefore the correct fork depth.
-    if(g_l2_active){
-        // TEAR THE OPENMP RUNTIME DOWN BEFORE FORKING. Round 2 ran parallel
-        // regions in this process, so forking without this is exactly the
-        // libgomp deadlock the level-1 fork already documents -- the child's
-        // first parallel region waits forever on threads it did not inherit.
-        // This project has already paid for that bug once, with a 13-minute
-        // hang that showed up only after two clean runs.
-        omp_pause_resource_all(omp_pause_hard);
-        bool gchild=false; size_t mine2=0;
-        if(g_l2_members.size()==1){ gchild=true; mine2=0; }   // nothing to split
-        else {
-            std::vector<pid_t> run2;
-            auto reap=[&](size_t keep){
-                while(run2.size() >= keep && !run2.empty()){
-                    int st=0; pid_t d=wait(&st);
-                    if(d<=0) break;
-                    run2.erase(std::remove(run2.begin(),run2.end(),d),run2.end());
-                    if(!WIFEXITED(st)||WEXITSTATUS(st)!=0)
-                        fprintf(stderr,"  [a3] a candidate failed (status %d)\n",st);
-                }
-            };
-            for(size_t j=0;j<g_l2_members.size() && !gchild;++j){
-                pid_t pid=fork();
-                if(pid<0){ perror("fork"); return 1; }
-                if(pid==0){
-                    gchild=true; mine2=j;
-                    omp_set_num_threads((int)g_l2_threads);
-                    { char bb[16]; snprintf(bb,sizeof bb,"%u",g_l2_threads);
-                      setenv("OMP_NUM_THREADS", bb, 1); }
-                    break;
-                }
-                run2.push_back(pid);
-                reap(g_l2_conc);
-            }
-            if(!gchild){
-                reap(1);
-                // This group child produced no archive of its own -- its
-                // members did. _exit, not exit: it shares the parent's stdio
-                // buffers and must neither flush them nor run destructors.
-                fflush(stderr); _exit(0);
-            }
-        }
-        // grandchild: adopt one candidate. Everything per-candidate that the
-        // level-1 fork used to set is set HERE instead, including the chdir --
-        // which is why level 1 must not chdir, and why it was verified that
-        // nothing is written to the cwd between the two fork points.
-        const size_t ci = g_l2_members[mine2];
-        const std::string ddir = g_l2_base + ".cand" + std::to_string(ci) + ".d";
-        mkdir(ddir.c_str(), 0755);
-        setenv("MAXMAP",  std::to_string(g_l2_maxmaps[mine2]).c_str(), 1);
-        setenv("ARCHIVE", (g_l2_base + ".cand" + std::to_string(ci)).c_str(), 1);
-        // CAPS_CALL outputs have the SAME hazard the dump files had: every
-        // candidate writes the caller's VCF (and contig dump) to one shared
-        // path, so what survives belongs to whichever ran LAST, not to the
-        // winner -- and which that is depends on scheduling, so the result was
-        // not even reproducible run to run. Each candidate therefore writes its
-        // own file at an absolute path resolved from the cwd captured BEFORE
-        // any chdir (so a relative path the caller passed still refers to the
-        // directory they meant), and the parent promotes the winner's.
-        if(CAPS_CALL){
-            auto abso=[&](const char* q)->std::string{
-                std::string t(q);
-                return (!t.empty() && t[0]=='/') ? t : (g_l2_cwd + "/" + t);
-            };
-            if(const char* cv = getenv("CALL_VCF"))
-                setenv("CALL_VCF", (abso(cv) + ".cand" + std::to_string(ci)).c_str(), 1);
-            else
-                setenv("CALL_VCF", (g_l2_cwd + "/out.vcf.cand" + std::to_string(ci)).c_str(), 1);
-            if(const char* dc = getenv("CAPS_DUMP_CONTIGS"))
-                setenv("CAPS_DUMP_CONTIGS", (abso(dc) + ".cand" + std::to_string(ci)).c_str(), 1);
-        }
-        if(chdir(ddir.c_str())!=0) perror("chdir");
-        fprintf(stderr,"  [a3] cand %zu: MAXMAP=%u MINOV=%s (round 2 shared)\n",
-                ci, g_l2_maxmaps[mine2], getenv("MINOV")?getenv("MINOV"):"?");
-    }
     // ── NEAR-MISS: translate to pg coordinates and cluster ──────────────────
     // Each observation is (tail read a, offset of the differing base within a).
     // ppos[a] is a's start in the pseudogenome, so ppos[a]+offset is the pg
@@ -2424,6 +2347,128 @@ int main(int argc,char** argv){
         scanning_rc=false;
     }
     lap("pigeonhole mapping");
+
+    // ── LEVEL-2 CANDIDATE FORK: split the MINOV group by MAXMAP ─────────────
+    //
+    // Everything above this line -- round 2, chain emission AND the pigeonhole
+    // mapping search -- is now computed ONCE per MINOV group instead of once
+    // per member.
+    //
+    // Mapping looks MAXMAP-dependent and is not. The search keeps the
+    // MINIMUM-mismatch placement per read: `lim = (cur==255) ? MAXMAP : cur-1`
+    // with a strict-improvement update, so MAXMAP is only the initial cap that
+    // decides whether a read is placed at all, never which placement wins.
+    // Running at the group's ceiling therefore yields every member's answer by
+    // thresholding readMM.
+    //
+    // Proven from the production HG002 log before a line was changed. The
+    // mismatch histograms of the four candidates in one group are bit-identical
+    // in every bin below the smaller ceiling:
+    //     MAXMAP=7   0:207172 1:928067 2:239064 3:117518 4:76881 5:57665
+    //                6:45931 7:38044                        8+:0
+    //     MAXMAP=11  ...same bins 0-7...   8:32688 9:28422 10:25114 11:22563
+    //     MAXMAP=18  ...same bins 0-11...                    >=12:109346
+    //     MAXMAP=29  ...same bins 0-11...                    >=12:195906
+    // and the cumulative sums reproduce each candidate's mapped count exactly:
+    //     1,710,342 = sum(bins 0..7)                    = placed(MAXMAP=7)
+    //     1,819,129 = 1,710,342 + 108,787 (bins 8..11)  = placed(MAXMAP=11)
+    //     1,928,475 = 1,819,129 + 109,346               = placed(MAXMAP=18)
+    //     2,015,035 = 1,819,129 + 195,906               = placed(MAXMAP=29)
+    // A larger ceiling only ADDS reads in higher bins; it never moves a read
+    // that was already placeable at a lower count.
+    if(g_l2_active){
+        // TEAR THE OPENMP RUNTIME DOWN BEFORE FORKING. Round 2 ran parallel
+        // regions in this process, so forking without this is exactly the
+        // libgomp deadlock the level-1 fork already documents -- the child's
+        // first parallel region waits forever on threads it did not inherit.
+        // This project has already paid for that bug once, with a 13-minute
+        // hang that showed up only after two clean runs.
+        omp_pause_resource_all(omp_pause_hard);
+        bool gchild=false; size_t mine2=0;
+        if(g_l2_members.size()==1){ gchild=true; mine2=0; }   // nothing to split
+        else {
+            std::vector<pid_t> run2;
+            auto reap=[&](size_t keep){
+                while(run2.size() >= keep && !run2.empty()){
+                    int st=0; pid_t d=wait(&st);
+                    if(d<=0) break;
+                    run2.erase(std::remove(run2.begin(),run2.end(),d),run2.end());
+                    if(!WIFEXITED(st)||WEXITSTATUS(st)!=0)
+                        fprintf(stderr,"  [a3] a candidate failed (status %d)\n",st);
+                }
+            };
+            for(size_t j=0;j<g_l2_members.size() && !gchild;++j){
+                pid_t pid=fork();
+                if(pid<0){ perror("fork"); return 1; }
+                if(pid==0){
+                    gchild=true; mine2=j;
+                    omp_set_num_threads((int)g_l2_threads);
+                    { char bb[16]; snprintf(bb,sizeof bb,"%u",g_l2_threads);
+                      setenv("OMP_NUM_THREADS", bb, 1); }
+                    break;
+                }
+                run2.push_back(pid);
+                reap(g_l2_conc);
+            }
+            if(!gchild){
+                reap(1);
+                // This group child produced no archive of its own -- its
+                // members did. _exit, not exit: it shares the parent's stdio
+                // buffers and must neither flush them nor run destructors.
+                fflush(stderr); _exit(0);
+            }
+        }
+        // grandchild: adopt one candidate. Everything per-candidate that the
+        // level-1 fork used to set is set HERE instead, including the chdir --
+        // which is why level 1 must not chdir, and why it was verified that
+        // nothing is written to the cwd between the two fork points.
+        const size_t ci = g_l2_members[mine2];
+        const std::string ddir = g_l2_base + ".cand" + std::to_string(ci) + ".d";
+        mkdir(ddir.c_str(), 0755);
+        setenv("MAXMAP",  std::to_string(g_l2_maxmaps[mine2]).c_str(), 1);
+        setenv("ARCHIVE", (g_l2_base + ".cand" + std::to_string(ci)).c_str(), 1);
+        // CAPS_CALL outputs have the SAME hazard the dump files had: every
+        // candidate writes the caller's VCF (and contig dump) to one shared
+        // path, so what survives belongs to whichever ran LAST, not to the
+        // winner -- and which that is depends on scheduling, so the result was
+        // not even reproducible run to run. Each candidate therefore writes its
+        // own file at an absolute path resolved from the cwd captured BEFORE
+        // any chdir (so a relative path the caller passed still refers to the
+        // directory they meant), and the parent promotes the winner's.
+        if(CAPS_CALL){
+            auto abso=[&](const char* q)->std::string{
+                std::string t(q);
+                return (!t.empty() && t[0]=='/') ? t : (g_l2_cwd + "/" + t);
+            };
+            if(const char* cv = getenv("CALL_VCF"))
+                setenv("CALL_VCF", (abso(cv) + ".cand" + std::to_string(ci)).c_str(), 1);
+            else
+                setenv("CALL_VCF", (g_l2_cwd + "/out.vcf.cand" + std::to_string(ci)).c_str(), 1);
+            if(const char* dc = getenv("CAPS_DUMP_CONTIGS"))
+                setenv("CAPS_DUMP_CONTIGS", (abso(dc) + ".cand" + std::to_string(ci)).c_str(), 1);
+        }
+        if(chdir(ddir.c_str())!=0) perror("chdir");
+
+        // APPLY THIS CANDIDATE'S CEILING to the shared search. The search ran at
+        // the group's maximum, so a read placed with more mismatches than this
+        // candidate allows must be un-placed -- restoring exactly the state it
+        // would have had if the search had run at this ceiling: readMM 255 and
+        // matched 0 (as initialised), prc 0 (prc.assign(n,0)) and ppos
+        // UINT64_MAX (ppos.assign(n,UINT64_MAX)), which the second-region chain
+        // emission then sets for every admitted read. MAXMAP itself is not
+        // re-read: it is never used after the mapping stage.
+        {
+            const uint32_t mycap = g_l2_maxmaps[mine2];
+            size_t dropped=0;
+            for(uint32_t rid : leftovers)
+                if(matched[rid] && readMM[rid] > mycap){
+                    matched[rid]=0; readMM[rid]=255; prc[rid]=0;
+                    ppos[rid]=UINT64_MAX; --n_matched; ++dropped;
+                }
+            fprintf(stderr,"  [a3] cand %zu: MAXMAP=%u un-placed %zu of the shared "
+                           "search's hits -> mapped=%zu\n", ci, mycap, dropped, n_matched);
+        }
+    }
 
     // Survivors get their own pseudogenome rather than being appended whole.
     // They are the reads that neither tiled well enough to assemble in round 2
