@@ -88,6 +88,7 @@ static inline bool pack(const char* p,uint64_t& out){
 #include "seqpar_core.h"
 #include "names_coder.h"
 #include "quality_coder.h"
+#include "caps_pack.h"
 #include "caps_caller.h"
 
 struct MemStream {
@@ -2262,61 +2263,19 @@ int main(int argc,char** argv){
                     while(!d.empty()&&(d.back()=='\n'||d.back()=='\r')) d.pop_back();
                     if(b.size()>1023) continue;                // mirror the load-pass skip
                     if(SEQ_PACK){
-                        // 2-BIT PACK, but ONLY for reads that are pure ACGT.
-                        //
-                        // BUG FOUND AND FIXED: the first version packed every
-                        // read and mapped non-ACGT to 'A'. That DESTROYS the N
-                        // information -- a k-mer spanning an N became a valid
-                        // k-mer with an A substituted -- and silently added
-                        // 2,273 k-mers on the r2 window (1,065,880 vs the
-                        // correct 1,063,607). F1 did not move, so the F1 check
-                        // alone did not catch it; only k-mer-set identity did.
-                        //
-                        // Reads containing N are stored RAW instead. They are a
-                        // small minority, so nearly all of the memory saving
-                        // remains, and no information is lost.
-                        // Layout: [0][lo][hi][packed...]  or  [1][raw bases...]
-                        bool pure = true;
-                        for(size_t qi=0; qi<b.size(); ++qi){
-                            const char c2=b[qi];
-                            if(c2!='A'&&c2!='C'&&c2!='G'&&c2!='T'&&
-                               c2!='a'&&c2!='c'&&c2!='g'&&c2!='t'){ pure=false; break; }
-                        }
-                        if(!pure){
-                            std::string rawv; rawv.reserve(1+b.size());
-                            rawv.push_back((char)1);
-                            rawv += b;
-                            call_seqs.push_back(std::move(rawv));
-                        } else {
-                            std::string pk(3 + (b.size()+3)/4, '\0');
-                            pk[0] = (char)0;
-                            pk[1] = (char)(b.size() & 0xFF);
-                            pk[2] = (char)((b.size() >> 8) & 0xFF);
-                            for(size_t qi=0; qi<b.size(); ++qi){
-                                int bb;
-                                switch(b[qi]){case 'A':case 'a':bb=0;break;case 'C':case 'c':bb=1;break;
-                                              case 'G':case 'g':bb=2;break;default:bb=3;}
-                                pk[3 + (qi>>2)] = (char)(pk[3 + (qi>>2)] | (bb << (2*(qi&3))));
-                            }
-                            call_seqs.push_back(std::move(pk));
-                        }
+                        // capspack::pack_seq is the SINGLE definition of this
+                        // format. capsule_decode rebuilds the same bytes from a
+                        // stored archive, and if the two ever disagree by a byte
+                        // the caller silently sees different reads. This project
+                        // has already lost data to exactly that class of bug --
+                        // packing that mapped non-ACGT to A added 2,273 k-mers
+                        // and no F1 check could see it. Shared, never copied.
+                        call_seqs.push_back(capspack::pack_seq(b));
                     } else {
                         call_seqs.push_back(b);
                     }
                     if(QUAL_BITMAP){
-                        // QUALITY AS A BITMAP, 1 bit per base.
-                        // The dBG caller only asks "is this base above the
-                        // confident-base threshold?" -- a one-bit question we
-                        // were answering with a full 8-bit phred character per
-                        // base. At 12.6M reads x ~148 bases that is 2.27 GB of
-                        // std::string to carry information that fits in 233 MB.
-                        // Packing here keeps the decision at the point where
-                        // the data is read, so nothing downstream has to hold
-                        // the full strings at all.
-                        std::string packed((d.size()+7)/8, '\0');
-                        for(size_t qi=0; qi<d.size(); ++qi)
-                            if((int)(d[qi]-33) >= QMIN) packed[qi>>3] |= (char)(1u << (qi&7));
-                        call_quals.push_back(std::move(packed));
+                        call_quals.push_back(capspack::pack_qual(d, QMIN));
                     } else {
                         call_quals.push_back(d);
                     }
