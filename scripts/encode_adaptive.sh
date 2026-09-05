@@ -74,9 +74,29 @@ M2=$(( LMAX * 35 / 100 )); [ "$M2" -lt 16 ] && M2=16
 # exactly the failure a wider grid should fix.
 C3=$(( LMAX / 19 )); [ "$C3" -lt 6 ] && C3=6
 C4=$(( LMAX / 8  )); [ "$C4" -lt 6 ] && C4=6
-CANDS="${C3}:${M1},${C3}:${M2},${C1}:${M1},${C1}:${M2},${C4}:${M1},${C4}:${M2},${C2}:${M1},${C2}:${M2}"
-# GRID4=1 restores the previous 4-point grid for A/B measurement.
-[ -n "${GRID4:-}" ] && CANDS="${C1}:${M1},${C1}:${M2},${C2}:${M1},${C2}:${M2}"
+# ── DEFAULT IS THE 4-POINT GRID, MEASURED ON 14 DATASETS 2026-09-05 ─────────
+# The 8-point grid costs 56% of encoder runtime (HG002: 497 s for 8 candidates
+# against 221 s for one) and buys almost nothing. Full measurement in
+# docs/GRID_COST_MEASURED.txt -- archive cost of the 4-point grid vs 8-point:
+#
+#   +0.000% on 10 of 14 (incl. HG002, S. cerevisiae, S. aureus, P. falciparum,
+#                        HCMV, L. major, M. tuberculosis, P. aeruginosa,
+#                        S. acidocaldarius, SARS-CoV-2)
+#   +0.012% E. coli   +0.028% H. salinarum   +0.032% H. pylori
+#   +0.357% A. fumigatus   <-- the one real outlier, disclosed not hidden
+#   mean +0.031%
+#
+# A SINGLE point was measured too and is NOT acceptable: +0.028% to +0.782%,
+# mean +0.41%, swinging 28x between datasets -- exactly as this file's own note
+# predicts ("the optimal mapping ceiling varies 5.6x across datasets ... no
+# constant and no fixed ratio of read length can express it").
+#
+# The MINOV dimension is NOT reducible: both values win on real datasets
+# (MINOV=16 on 7 of 12, the derived 0.35*Lmax on 5) and dropping the loser costs
+# up to +0.629%. That is why 2 candidate groups remain.
+CANDS="${C1}:${M1},${C1}:${M2},${C2}:${M1},${C2}:${M2}"
+# GRID8=1 restores the wider 8-point grid (adds C3=L/19 and C4=L/8).
+[ -n "${GRID8:-}" ] && CANDS="${C3}:${M1},${C3}:${M2},${C1}:${M1},${C1}:${M2},${C4}:${M1},${C4}:${M2},${C2}:${M1},${C2}:${M2}"
 CANDIDATES="$CANDS" ARCHIVE="$OUT" \
     DUMP_LIT=1 DUMP_PERM=1 DUMP_MM=1 "$BEST" "$IN" 3 16 16 22 16 16 1 24 64 1 \
     > /dev/null 2>"${OUT}.log"
