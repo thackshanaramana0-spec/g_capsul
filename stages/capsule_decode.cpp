@@ -15,6 +15,11 @@
 #include <vector>
 #include <map>
 #include <lzma.h>
+#include <fstream>
+#include <sys/stat.h>
+#include <omp.h>
+#include "caps_pack.h"
+#include "caps_caller.h"
 #include "coders_pgrc.h"
 #include "seqpar_core.h"
 #include "coders_inproc.h"
@@ -652,8 +657,90 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
     return 0;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+//  CALL VARIANTS FROM A STORED ARCHIVE
+//
+//  Until now Claim 2 called at COMPRESS time, from the encoder's in-memory
+//  state, so the honest sentence was "compress once and get calls as a
+//  byproduct" -- not "open an archive and call variants". This closes that.
+//
+//  It reuses the decoder's existing modes rather than reaching into them:
+//    1. normal decode  -> reads.seq and reads.seq.qual, in ORIGINAL read order
+//                         (the same order the caller indexes by)
+//    2. export         -> the pseudogenome, which supplies cd.contigs
+//    3. pack both with capspack (the SAME definition the encoder uses -- see
+//       include/caps_pack.h; two copies of that format is how the two paths
+//       would silently disagree)
+//    4. run_variant_call
+//
+//  CAPS_DBG / CAPS_DBG_ONLY are set here because the graph caller keys its
+//  input format off them: with both set it expects packed reads and a quality
+//  BITMAP, which is exactly what capspack produces. Setting them in the
+//  environment and forgetting to pack, or packing and forgetting to set them,
+//  are both silent wrong-data failures.
+static int capsule_call_from_archive(const std::string& in, const std::string& out_vcf,
+                                     const std::string& workdir)
+{
+    const std::string wd = workdir.empty() ? (in + ".calltmp") : workdir;
+    mkdir(wd.c_str(), 0755);
+    const std::string rp = wd + "/reads.seq";
+    const std::string cf = wd + "/contigs.fa";
+
+    setenv("CAPS_DBG", "1", 1);
+    setenv("CAPS_DBG_ONLY", "1", 1);
+    const int QMIN = getenv("CAPS_DBG_MINQ") ? atoi(getenv("CAPS_DBG_MINQ")) : 20;
+
+    fprintf(stderr, "[call] 1/4 decoding reads and quality from the archive\n");
+    if(capsule_decode_all(in.c_str(), wd, rp) != 0){ fprintf(stderr,"[call] decode failed\n"); return 1; }
+
+    fprintf(stderr, "[call] 2/4 exporting the retained pseudogenome for contigs\n");
+    if(capsule_decode_all(in.c_str(), cf, std::string(), "export", std::string()) != 0)
+        fprintf(stderr,"[call] export failed -- ploidy gate will see no contigs\n");
+
+    fprintf(stderr, "[call] 3/4 packing reads and quality (capspack, shared with the encoder)\n");
+    std::vector<std::string> seqs, quals;
+    {
+        std::ifstream fr(rp);
+        std::ifstream fq(rp + ".qual");
+        if(!fr){ fprintf(stderr,"[call] cannot read %s\n", rp.c_str()); return 1; }
+        std::string a, d;
+        const bool haveq = (bool)fq;
+        while(std::getline(fr, a)){
+            while(!a.empty() && (a.back()=='\n' || a.back()=='\r')) a.pop_back();
+            seqs.push_back(capspack::pack_seq(a));
+            if(haveq && std::getline(fq, d)){
+                while(!d.empty() && (d.back()=='\n' || d.back()=='\r')) d.pop_back();
+                quals.push_back(capspack::pack_qual(d, QMIN));
+            } else quals.push_back(std::string());
+        }
+    }
+    fprintf(stderr, "[call]     %zu reads, %zu quality records\n", seqs.size(), quals.size());
+    if(seqs.empty()){ fprintf(stderr,"[call] archive yielded no reads\n"); return 1; }
+
+    capscall::CallData cd;
+    {   // contigs from the exported pseudogenome; the ploidy gate samples these
+        std::ifstream fc(cf);
+        std::string line, cur;
+        while(std::getline(fc, line)){
+            if(!line.empty() && line[0]=='>'){ if(!cur.empty()){ cd.contigs.push_back(cur); cur.clear(); } }
+            else { while(!line.empty() && (line.back()=='\n'||line.back()=='\r')) line.pop_back(); cur += line; }
+        }
+        if(!cur.empty()) cd.contigs.push_back(cur);
+    }
+    cd.valid = true;
+    fprintf(stderr, "[call]     %zu contigs from the archive's pseudogenome\n", cd.contigs.size());
+
+    fprintf(stderr, "[call] 4/4 calling variants\n");
+    const int n = capscall::run_variant_call(seqs, quals, cd, out_vcf);
+    fprintf(stderr, "[call] %d records -> %s\n", n, out_vcf.c_str());
+    return n >= 0 ? 0 : 1;
+}
+
 #ifndef CAPSULE_NO_MAIN
 int main(int argc,char** argv){
+    // Claim 2 from a STORED archive: capsule_decode call <in.capsule> <out.vcf> [workdir]
+    if(argc>=4 && !strcmp(argv[1],"call"))
+        return capsule_call_from_archive(argv[2], argv[3], argc>4?argv[4]:std::string());
     // Claim 3 modes:  capsule_decode export|coverage|query <in.capsule> <out> [range]
     if(argc>=4 && (!strcmp(argv[1],"export")||!strcmp(argv[1],"coverage")||!strcmp(argv[1],"query")))
         return capsule_decode_all(argv[2], argv[3], std::string(), argv[1],
@@ -661,7 +748,8 @@ int main(int argc,char** argv){
     if(argc<3){ fprintf(stderr,"usage: capsule_decode <in.capsule> <outdir> [reads.out]\n"
                                "       capsule_decode export   <in.capsule> <out.fa>\n"
                                "       capsule_decode coverage <in.capsule> <out.tsv>\n"
-                               "       capsule_decode query    <in.capsule> <out.fa> <START-END>\n"); return 2; }
+                               "       capsule_decode query    <in.capsule> <out.fa> <START-END>\n"
+                               "       capsule_decode call     <in.capsule> <out.vcf> [workdir]\n"); return 2; }
     return capsule_decode_all(argv[1], argv[2], argc>3?argv[3]:std::string());
 }
 #endif  // CAPSULE_NO_MAIN

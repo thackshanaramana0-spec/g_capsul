@@ -7,7 +7,7 @@ OUT="${1:-/tmp/capsule_decode}"
 HTSOBJ="$(mktemp -d)"
 gcc -O3 -I"$HERE/thirdparty/htscodecs" -c "$HERE/thirdparty/htscodecs/fqzcomp_qual.c" -o "$HTSOBJ/fqzcomp_qual.o"
 gcc -O3 -I"$HERE/thirdparty/htscodecs" -c "$HERE/thirdparty/htscodecs/utils.c"        -o "$HTSOBJ/utils.o"
-g++ -O3 -march=native -std=c++17 -pthread -o "$OUT" \
+g++ -O3 -march=native -std=c++17 -pthread -fopenmp -o "$OUT" \
     "$HERE/stages/capsule_decode.cpp" \
     "$HERE/thirdparty/ppmd/Ppmd7.c" "$HERE/thirdparty/ppmd/Ppmd7Enc.c" \
     "$HERE/thirdparty/ppmd/Ppmd7Dec.c" "$HERE/thirdparty/ppmd/Alloc.c" \
