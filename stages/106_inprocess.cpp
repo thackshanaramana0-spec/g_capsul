@@ -2799,8 +2799,36 @@ int main(int argc,char** argv){
             auto extendTol=[&](const char* Q,size_t qlen,const char* S,size_t slen,
                                size_t qp,size_t s,size_t capL,int maxmm,
                                uint32_t* mmout,uint8_t& mmcnt)->size_t{
+                // ── WORD-AT-A-TIME EXTENSION ────────────────────────────
+                // This compared ONE BYTE per iteration while the pigeonhole
+                // mismatch loop next door already compares 32 bases at a time
+                // (w32 + popcount). perf puts 36.2% of all cycles in this
+                // worker, MINMEM is 45, and matches routinely run into the
+                // hundreds of bases -- so the overwhelming majority of these
+                // iterations were single-byte compares of bases that MATCH.
+                //
+                // Q and S are plain ASCII here, so eight bases fit in a uint64
+                // and a matching stretch advances eight at a time. On the
+                // first differing word, ctz gives the byte index directly
+                // (x86 is little-endian) and the original per-byte path takes
+                // over for the mismatch itself.
+                //
+                // OUTPUT-PRESERVING: the same L is returned and the same
+                // mismatch positions are recorded in the same order; only the
+                // scanning of EQUAL bytes is done in wider steps.
                 size_t L=0; mmcnt=0;
-                while(L<capL && qp+L<qlen && s+L<slen){
+                for(;;){
+                    size_t lim=capL; 
+                    if(qlen-qp<lim) lim=qlen-qp;
+                    if(slen-s  <lim) lim=slen-s;
+                    if(L>=lim) break;
+                    while(L+8<=lim){
+                        uint64_t a,b; memcpy(&a,Q+qp+L,8); memcpy(&b,S+s+L,8);
+                        const uint64_t d=a^b;
+                        if(d){ L += (size_t)(__builtin_ctzll(d)>>3); break; }
+                        L+=8;
+                    }
+                    if(L>=lim) break;
                     if(Q[qp+L]==S[s+L]){ ++L; continue; }
                     if((int)mmcnt>=maxmm) break;
                     mmout[mmcnt++]=(uint32_t)L; ++L;
@@ -2899,6 +2927,17 @@ int main(int argc,char** argv){
                     // bestsrc+best <= qlen-qp-best, which backward extension
                     // leaves unchanged on both sides.
                     size_t b=0;
+                    // Backward extension, word-at-a-time (same reasoning as
+                    // extendTol). Little-endian: loading 8 bytes ending at P
+                    // puts P-1 in the HIGH byte, so scanning backward means
+                    // finding the HIGHEST differing byte -- clz, not ctz.
+                    while(b+8<=cap && qp>=b+8 && bestsrc>=b+8){
+                        uint64_t x,y;
+                        memcpy(&x,Q+qp-b-8,8); memcpy(&y,S+bestsrc-b-8,8);
+                        const uint64_t d=x^y;
+                        if(d){ b += (size_t)(7 - ((63-__builtin_clzll(d))>>3)); break; }
+                        b+=8;
+                    }
                     while(b<cap && Q[qp-b-1]==S[bestsrc-b-1]) ++b;
                     Ref nr; nr.dst=(uint32_t)(qp-b); nr.src=(uint32_t)(bestsrc-b);
                     nr.len=(uint32_t)(best+b); nr.is_rc=false;
