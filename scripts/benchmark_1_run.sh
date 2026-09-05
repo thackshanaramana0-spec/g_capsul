@@ -44,6 +44,12 @@ TRUTH="${CAPSULE_TRUTH_DIR:-$HOME/giab_truth}"
 BIN_DIR="${CAPSULE_BIN_DIR:-/tmp/capsule_bin}"
 BEST="$BIN_DIR/best106"; DEC="$BIN_DIR/capsule_decode"
 NPROC=$(nproc)
+# DiscoSNP++ ships as a shell script in its own tree and its runner resolves
+# `run_discoSnp++.sh` through PATH. The file existing is NOT enough -- this
+# project has lost a competitor arm to exactly that before (see
+# docs/INVOCATION_ERRORS.md), and it fails as "no SNV line", which looks like a
+# scoring problem rather than a missing tool.
+[ -d "$HOME/DiscoSnp" ] && export PATH="$HOME/DiscoSnp:$PATH"
 T_RUN_START=$(date +%s)
 
 # ── logging ───────────────────────────────────────────────────────────────

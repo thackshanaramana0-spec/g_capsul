@@ -35,7 +35,13 @@ DATA_DIR="${CAPSULE_DATA_DIR:-/data/fastq}"
 REFS="${CAPSULE_REFS_DIR:-$HOME/refs}"
 BIN="${CAPSULE_BIN_DIR:-/tmp/capsule_bin}"
 BEST="$BIN/best106"; DEC="$BIN/capsule_decode"
-NPROC=$(nproc); T0=$(date +%s)
+NPROC=$(nproc)
+# DiscoSNP++ ships as a shell script in its own tree and its runner resolves
+# `run_discoSnp++.sh` through PATH. The file existing is NOT enough -- this
+# project has lost a competitor arm to exactly that before (see
+# docs/INVOCATION_ERRORS.md), and it fails as "no SNV line", which looks like a
+# scoring problem rather than a missing tool.
+[ -d "$HOME/DiscoSnp" ] && export PATH="$HOME/DiscoSnp:$PATH"; T0=$(date +%s)
 
 say(){ echo "$*" | tee -a "$LOG"; }
 _el(){ local s=$(( $(date +%s) - T0 )); printf "%02d:%02d" $((s/60)) $((s%60)); }
