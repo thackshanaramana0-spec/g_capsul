@@ -30,3 +30,14 @@ pg_full.txt
 *.log
 out.arcs2
 *.arcs2
+
+# Benchmark run outputs: archives (hundreds of MB), decoded reads, competitor
+# archives and scratch. GitHub rejects blobs over 100 MB, and a 547 MB .capsule
+# from one sanity run got swept in by `git add -A` and hard-rejected the push.
+# The CSVs and logs are what belong in the repo, not the artefacts themselves.
+results/sanity_*/
+results/benchmark_1_*/
+results/claim1/
+*.capsule
+*.spring
+*.genozip
