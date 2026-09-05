@@ -1057,12 +1057,8 @@ int main(int argc,char** argv){
     // classified fine: interior fraction 66% against PgRC2's 83%, which starves
     // the main pseudogenome and leaves the mapping stage with less to hit.
     uint32_t sweep_minov=MINOV;
-    // ── SHARED SWEEP PREFIX bookkeeping (see the pre-fork block below) ──────
-    bool     g_sweep_shared    = false;   // did the parent pre-sweep to Mhi?
-    uint32_t g_sweep_prefix_hi = 0;       // the Mhi it stopped at, if so
     static size_t g_sd_hit=0, g_cand=0, g_probe=0;
-    auto sweep=[&](bool cont=false, uint32_t startL=0){
-      if(!cont){
+    auto sweep=[&](){
         links=0; probes=0; g_sd_hit=0; g_cand=0; g_probe=0;
         // Round 1's result is discarded wholesale (nxt/prv/ovl are refilled on
         // the next call, and round 1 exists only to compute `admit`), so its
@@ -1078,20 +1074,6 @@ int main(int argc,char** argv){
         open_tails.clear(); open_tails.reserve(n);
         for(uint32_t i=0;i<n;++i) if(admit[i]&&rlen[i]>=sweep_minov) open_tails.push_back(i);
         tails = open_tails;
-      } else {
-        // CONTINUATION: nxt/prv/ovl/ch_h/ch_t and the harvest counters are
-        // exactly as the parent's pre-sweep left them -- inherited via fork's
-        // copy-on-write, not recomputed. open_tails/tails are STILL rebuilt
-        // fresh here (cheap: O(n) scan) because the very first level of the
-        // loop below immediately re-applies the nxt[a]!=NONE filter inside its
-        // own #pragma omp single block, which collapses this list to exactly
-        // what a single uninterrupted sweep() would have had at this L --
-        // verified by matching probes/links against the unsplit computation.
-        tails.clear(); tails.reserve(n);
-        open_tails.clear(); open_tails.reserve(n);
-        for(uint32_t i=0;i<n;++i) if(admit[i]&&rlen[i]>=sweep_minov) open_tails.push_back(i);
-        tails = open_tails;
-      }
     // STAGE 19. The sweep splits cleanly into a search and a commit.
     //
     // Everything expensive here -- the seed roll, the hash probe, and the
@@ -1151,7 +1133,7 @@ int main(int argc,char** argv){
     // At L = rlen[a] the offset is 0, so the seed is the read's own prefix and
     // rcmp compares the two reads in full -- exactly the duplicate test. The
     // existing ch_h[a]==b guard already prevents a 2-cycle.
-    for(uint32_t L=(cont?startL:Lmax); L>=sweep_minov && L>=SW; --L){
+    for(uint32_t L=Lmax; L>=sweep_minov && L>=SW; --L){
         if(SWTIME&&me0) ta=omp_get_wtime();
         #pragma omp single
         {
@@ -1478,36 +1460,6 @@ int main(int argc,char** argv){
                 size_t g=0; for(; g<gmin.size(); ++g) if(gmin[g]==cands[ci].second) break;
                 if(g==gmin.size()){ gmin.push_back(cands[ci].second); gidx.push_back({}); }
                 gidx[g].push_back(ci);
-            }
-            // ── SHARED SWEEP PREFIX (round 2) ───────────────────────────────
-            // The two MINOV groups' round-2 sweeps are IDENTICAL for every
-            // level down to the SHALLOWER (larger) MINOV: both start from the
-            // same post-round-1 state and run the same loop, diverging only
-            // once the shallower group's floor is reached and the deeper
-            // group continues. Confirmed from production logs (not assumed):
-            // the two groups' `round2: probes=.. links=..` lines are a strict
-            // superset relationship (e.g. ERR5181310 probes 10,295 -> 14,543,
-            // links 18 -> 21) -- exactly the signature of "same prefix, one
-            // continues further".
-            //
-            // So the shared prefix is computed ONCE, here, in the PARENT,
-            // while the full OpenMP team is still available -- BEFORE the
-            // fork teardown below. Every child then either IS the
-            // shallow-MINOV group (needs no further sweeping at all -- it
-            // inherits the finished state via fork's copy-on-write) or
-            // CONTINUES the identical loop from where this stopped, instead
-            // of restarting at Lmax and recomputing the shared part again.
-            //
-            // CAPS_NO_SWEEP_SHARE=1 restores independent per-group sweeps,
-            // for A/B measurement.
-            if(gmin.size() >= 2 && !getenv("CAPS_NO_SWEEP_SHARE")){
-                uint32_t Mhi=gmin[0]; for(uint32_t m:gmin) if(m>Mhi) Mhi=m;
-                sweep_minov = Mhi;
-                sweep();
-                g_sweep_prefix_hi = Mhi;
-                g_sweep_shared = true;
-                fprintf(stderr,"  [a3] shared sweep prefix to MINOV=%u (round2 links=%zu)\n",
-                        Mhi, links);
             }
             // fork() in a process that has live OpenMP threads deadlocks the
             // child: libgomp's internal locks are copied in whatever state they
@@ -1894,16 +1846,7 @@ int main(int argc,char** argv){
     sweep_minov=MINOV;                // builder: caller's floor
     if(getenv("LOWCOV") && sweep_minov>8) sweep_minov=8;   // see LOWCOV note at SW
     if(getenv("MINOV")) sweep_minov=(uint32_t)atoi(getenv("MINOV"));  // override for sweeps
-    if(g_sweep_shared && sweep_minov==g_sweep_prefix_hi){
-        // The parent's pre-sweep already computed this exact result -- same
-        // sweep_minov, same Lmax start, same admit/rlen it would have used.
-        // Nothing left to do; the inherited nxt/prv/ovl/ch_h/ch_t (and links/
-        // probes for the log line below) ARE this group's round-2 result.
-    } else if(g_sweep_shared && sweep_minov < g_sweep_prefix_hi){
-        sweep(/*cont=*/true, /*startL=*/g_sweep_prefix_hi-1);
-    } else {
-        sweep();   // not shared: single group, override changed the floor, or CAPS_NO_SWEEP_SHARE
-    }
+    sweep();
     fprintf(stderr,"round2: probes=%zu links=%zu\n",probes,links);
     fprintf(stderr,"[FUNNEL] probes=%zu  seed_hit=%zu (%.1f%%)  cand_examined=%zu  links=%zu (%.2f%% of probes)\n",g_probe,g_sd_hit,100.0*g_sd_hit/(g_probe?g_probe:1),g_cand,links,100.0*links/(g_probe?g_probe:1));
     lap("round 2 (assembly)");
