@@ -737,6 +737,7 @@ int main(int argc,char** argv){
     std::vector<uint32_t> ptab;
     size_t pmask=0;
     auto pmix=[](uint64_t x){ x^=x>>33; x*=0xff51afd7ed558ccdULL; x^=x>>33; return x; };
+    std::vector<uint16_t> pext;
     auto buildPref=[&](bool useAdmit){
         pent.clear(); pent.reserve(n);
         for(uint32_t i=0;i<n;++i){
@@ -745,6 +746,28 @@ int main(int argc,char** argv){
             pent.push_back(((uint64_t)(uint32_t)rseed(i,0,SW)<<32)|(uint64_t)i);
         }
         std::sort(pent.begin(),pent.end());
+        // ── SEQUENTIAL CANDIDATE DISCRIMINATOR ──────────────────────────────
+        // MEASURED BOTTLENECK. Instrumenting the sweep on 3M human reads:
+        //     probes 94,268,287   seed_hit 16.1%   cand_examined 371,742,373
+        // i.e. 24.5 candidates are walked per seed hit, and each one touches
+        // admit[b], rlen[b] and rcmp() at a RANDOM read index -- a cache miss
+        // apiece, at IPC 0.62. The failed lookups are not the cost; the
+        // candidate walk is.
+        //
+        // pext[q] holds the 8 bases FOLLOWING each entry's seed, stored in
+        // index order so the walk reads it sequentially -- the same cache line
+        // that already carries pent[q]. A candidate whose bases [32,40) differ
+        // from the query's cannot pass rcmp, so it is rejected without ever
+        // touching the read store.
+        //
+        // OUTPUT-PRESERVING, and only where it is valid: the check applies
+        // only when L >= SW+8, because below that the extra bases lie beyond
+        // the overlap being tested and comparing them would reject real links.
+        pext.assign(pent.size(), 0xFFFFu);
+        for(size_t i=0;i<pent.size();++i){
+            const uint32_t b=(uint32_t)(pent[i]&0xFFFFFFFFULL);
+            if(rlen[b] >= SW+8) pext[i]=(uint16_t)(rseed(b,SW,8)&0xFFFFu);
+        }
         size_t sz=1; while(sz<pent.size()*2+1) sz<<=1;
         pmask=sz-1; ptab.assign(sz,UINT32_MAX);
         for(size_t i=0;i<pent.size();++i){
@@ -875,8 +898,9 @@ int main(int argc,char** argv){
     // classified fine: interior fraction 66% against PgRC2's 83%, which starves
     // the main pseudogenome and leaves the mapping stage with less to hit.
     uint32_t sweep_minov=MINOV;
+    static size_t g_sd_hit=0, g_cand=0, g_probe=0;
     auto sweep=[&](){
-        links=0; probes=0;
+        links=0; probes=0; g_sd_hit=0; g_cand=0; g_probe=0;
         // Round 1's result is discarded wholesale (nxt/prv/ovl are refilled on
         // the next call, and round 1 exists only to compute `admit`), so its
         // harvest must be discarded too -- only round 2's survives, which is
@@ -918,7 +942,7 @@ int main(int argc,char** argv){
     // disjoint exactly as before: the search is per-tail independent and the
     // commit below still walks i in order.
     bool sweep_done=false;
-    size_t pr_total=0;
+    size_t pr_total=0; size_t sd_hit=0; size_t cand_seen=0;
     #pragma omp parallel
     {
     // Start at Lmax, not Lmax-1. A suffix-prefix overlap of exactly the read
@@ -980,7 +1004,7 @@ int main(int argc,char** argv){
         else {
             if(cand.size()<w*CCAP) cand.resize(w*CCAP);
             ccnt.assign(w,0);
-            pr_total=0;
+            pr_total=0; sd_hit=0; cand_seen=0;
         }
         }   // end single (implicit barrier: every thread now sees tails/cand)
         if(sweep_done) break;
@@ -1017,7 +1041,7 @@ int main(int argc,char** argv){
             // num_threads(T) with T=(w<4096?1:NT) existed only to dodge fork
             // cost on small levels; with the team already open there is no
             // fork to dodge, and the writes were disjoint either way.
-            #pragma omp for schedule(static) reduction(+:pr_total,nm1,nm2)
+            #pragma omp for schedule(static) reduction(+:pr_total,nm1,nm2,sd_hit,cand_seen)
             for(long long ii=0;ii<(long long)w;++ii){
                 const size_t i=(size_t)ii;
                 const uint32_t a=tails[i];
@@ -1027,9 +1051,15 @@ int main(int argc,char** argv){
                 ++pr_total;
                 const uint32_t pix=pfind(seed[a]);
                 if(pix==UINT32_MAX) continue;
+                ++sd_hit;
                 const uint32_t pk=(uint32_t)seed[a];
+                const uint16_t aext = (off+SW+8 <= rlen[a])
+                                    ? (uint16_t)(rseed(a,off+SW,8)&0xFFFFu) : 0xFFFFu;
                 uint8_t c=0;
                 for(uint32_t q=pix;q<pent.size()&&(uint32_t)(pent[q]>>32)==pk;++q){
+                    ++cand_seen;
+                    // Sequential reject before any random read access.
+                    if(L >= SW+8 && pext[q]!=0xFFFFu && pext[q]!=aext) continue;
                     const uint32_t b=(uint32_t)(pent[q]&0xFFFFFFFFULL);
                     if(b==a) continue;
                     if(!admit[b]) continue;                  // excluded reads are leftovers,
@@ -1081,7 +1111,7 @@ int main(int argc,char** argv){
                 ccnt[i]=c;
             }
             #pragma omp single
-            { probes+=pr_total; }
+            { probes+=pr_total; g_sd_hit+=sd_hit; g_cand+=cand_seen; g_probe+=pr_total; }
         }
 
         // ── serial: same order, same first survivor ───────────────────────
@@ -1564,6 +1594,7 @@ int main(int argc,char** argv){
     if(getenv("MINOV")) sweep_minov=(uint32_t)atoi(getenv("MINOV"));  // override for sweeps
     sweep();
     fprintf(stderr,"round2: probes=%zu links=%zu\n",probes,links);
+    fprintf(stderr,"[FUNNEL] probes=%zu  seed_hit=%zu (%.1f%%)  cand_examined=%zu  links=%zu (%.2f%% of probes)\n",g_probe,g_sd_hit,100.0*g_sd_hit/(g_probe?g_probe:1),g_cand,links,100.0*links/(g_probe?g_probe:1));
     lap("round 2 (assembly)");
     if(CAPS_CALL){
         fprintf(stderr,"[HARVEST] commits=%zu branches(ccnt==2)=%zu  ccnt hist:",
