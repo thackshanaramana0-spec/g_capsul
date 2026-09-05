@@ -1,0 +1,199 @@
+#!/bin/bash
+# ═══════════════════════════════════════════════════════════════════════════
+#  SANITY — ONE dataset, ALL THREE CLAIMS, end to end.
+#
+#  The rehearsal for the full run. It exercises exactly the same code paths
+#  benchmark_1_run.sh uses, on a single dataset, so every artefact the real
+#  benchmark will produce can be inspected before committing a machine-day:
+#  the archive, the decoded reads, the VCF, the contigs, the coverage table,
+#  the query output, and every CSV row.
+#
+#  It ends with a FILE MANIFEST -- every output, its full path, its size, and
+#  a one-line description of what it is and which table it feeds.
+#
+#  usage:
+#    bash scripts/benchmark_sanity_one.sh                 # HG002 (all 3 claims)
+#    bash scripts/benchmark_sanity_one.sh SRR2584863      # any of the 19
+#    DS=... OUT_DIR=... bash scripts/benchmark_sanity_one.sh
+#
+#  HG002 is the default because it is the only kind of dataset that reaches
+#  ALL THREE claims: it compresses (Claim 1), it is diploid human with a GIAB
+#  truth set so variants can be called and scored (Claim 2), and its archive
+#  feeds export/coverage/query (Claim 3). A bacterial accession exercises
+#  Claims 1 and 3 only.
+# ═══════════════════════════════════════════════════════════════════════════
+set -u
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; cd "$HERE"
+source "$HERE/scripts/capsule_config.sh" 2>/dev/null || true
+
+DS="${1:-${DS:-HG002}}"
+STAMP=$(date +%Y%m%d_%H%M%S)
+OUT="${OUT_DIR:-$HERE/results/sanity_${DS}_$STAMP}"
+mkdir -p "$OUT"
+LOG="$OUT/sanity.log"
+DATA_DIR="${CAPSULE_DATA_DIR:-/data/fastq}"
+REFS="${CAPSULE_REFS_DIR:-$HOME/refs}"
+BIN="${CAPSULE_BIN_DIR:-/tmp/capsule_bin}"
+BEST="$BIN/best106"; DEC="$BIN/capsule_decode"
+NPROC=$(nproc); T0=$(date +%s)
+
+say(){ echo "$*" | tee -a "$LOG"; }
+_el(){ local s=$(( $(date +%s) - T0 )); printf "%02d:%02d" $((s/60)) $((s%60)); }
+inf(){ echo "[$(date +%H:%M:%S) +$(_el)] $*" | tee -a "$LOG"; }
+step(){ echo "[$(date +%H:%M:%S) +$(_el)]    -> $*" | tee -a "$LOG"; }
+ok(){   echo "[$(date +%H:%M:%S) +$(_el)]    OK  $*" | tee -a "$LOG"; }
+err(){  echo "[$(date +%H:%M:%S) +$(_el)]  FAIL $*" | tee -a "$LOG"; }
+banner(){ say ""; say "════════════════════════════════════════════════════════════════════"; say " $*"; say "════════════════════════════════════════════════════════════════════"; }
+mb(){ awk -v b="${1:-0}" 'BEGIN{printf "%.2f MB", b/1048576}'; }
+gb(){ awk -v b="${1:-0}" 'BEGIN{printf "%.2f GB", b/1073741824}'; }
+rg(){ awk -v k="${1:-0}" 'BEGIN{printf "%.2f GB", k/1048576}'; }
+tv(){ local f="$1" w h
+  w=$(grep "Elapsed (wall clock)" "$f" 2>/dev/null | awk '{n=split($NF,a,":");
+      if(n==3) printf "%.2f",a[1]*3600+a[2]*60+a[3]; else if(n==2) printf "%.2f",a[1]*60+a[2]; else printf "%.2f",a[1]}')
+  h=$(grep "Maximum resident set size" "$f" 2>/dev/null | awk '{print $NF}')
+  echo "${w:-0} ${h:-0}"; }
+
+# Manifest: every artefact worth inspecting, recorded as it is produced.
+MAN="$OUT/_manifest.tsv"; : > "$MAN"
+keep(){ [ -e "$2" ] && printf "%s\t%s\t%s\t%s\n" "$1" "$2" "$(stat -c%s "$2" 2>/dev/null||echo 0)" "$3" >> "$MAN"; }
+
+FAILED=0
+banner "SANITY — $DS — all three claims, end to end"
+say "started : $(date '+%Y-%m-%d %H:%M:%S')"
+say "output  : $OUT"
+say "commit  : $(git rev-parse --short HEAD 2>/dev/null)  branch $(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
+say "machine : $NPROC cores, $(free -g|awk '/^Mem:/{print $2}') GB RAM, $(df -h /|awk 'NR==2{print $4}') free"
+
+# ── input ──────────────────────────────────────────────────────────────────
+SRC="$DATA_DIR/${DS}_1.fq"; [ -s "$SRC" ] || SRC="$DATA_DIR/${DS}_pooled.fq"
+[ -s "$SRC" ] || { err "no input for $DS in $DATA_DIR"; exit 1; }
+RAW=$(stat -c%s "$SRC"); NREADS=$(( $(wc -l < "$SRC") / 4 ))
+inf "input   : $SRC"
+inf "size    : $(gb $RAW)   reads: $NREADS"
+for b in "$BEST" "$DEC"; do
+  [ -x "$b" ] || { err "missing binary $b -- run benchmark_0_preflight.sh first"; exit 1; }
+done
+keep "input" "$SRC" "the FASTQ under test"
+
+# ── CLAIM 1 ────────────────────────────────────────────────────────────────
+banner "CLAIM 1 — compression (T1 size, T2 time + RAM)"
+A="$OUT/$DS.capsule"
+step "CAPSULE compress (adaptive sweep, concurrent candidates)"
+/usr/bin/time -v env CAPS_NAMES=1 CAPS_QUAL=1 INPUT="$SRC" ARCHIVE="$A" BEST="$BEST" \
+    bash "$HERE/scripts/encode_adaptive.sh" >"$OUT/encode.stdout" 2>"$OUT/_t_c"
+read -r CW CR <<< "$(tv "$OUT/_t_c")"
+if [ -s "$A" ]; then
+  ARCH=$(stat -c%s "$A")
+  ok "archive  $(mb $ARCH)   ratio $(awk -v a=$ARCH -v r=$RAW 'BEGIN{printf "%.3f%%",100*a/r}')   wall ${CW}s   RAM $(rg $CR)"
+  keep "claim1" "$A" "the .capsule archive -- T1 size, and what Claim 3 reads"
+  keep "claim1" "${A}.log" "encoder log: per-stage timings, stream sizes, candidate sweep"
+else err "no archive produced"; FAILED=1; fi
+
+step "CAPSULE decompress + lossless verify (decodes the ARCHIVE, not dumps)"
+DD="$OUT/decoded"; mkdir -p "$DD"
+/usr/bin/time -v "$DEC" "$A" "$DD" "$DD/reads.seq" >"$OUT/decode.stdout" 2>"$OUT/_t_d"
+read -r DW DR <<< "$(tv "$OUT/_t_d")"
+LL=LOSSY
+if [ -s "$DD/reads.seq" ]; then
+  awk 'NR%4==2' "$SRC" | tr -d '\r' | sort > "$OUT/_a"; sort "$DD/reads.seq" > "$OUT/_b"
+  cmp -s "$OUT/_a" "$OUT/_b" && LL=LOSSLESS
+  rm -f "$OUT/_a" "$OUT/_b"
+fi
+[ "$LL" = LOSSLESS ] && ok "decompress wall ${DW}s  RAM $(rg $DR)  -> $LL" \
+                     || { err "decompress -> $LL"; FAILED=1; }
+keep "claim1" "$DD/reads.seq" "reads reconstructed FROM THE ARCHIVE (lossless check input)"
+
+for T in SPRING Genozip; do
+  step "$T (competitor arm, identical input)"
+  if [ "$T" = SPRING ]; then
+    /usr/bin/time -v spring -c -i "$SRC" -o "$OUT/$DS.spring" -t "$NPROC" 2>"$OUT/_t_s" >/dev/null
+    S=$OUT/$DS.spring
+  else
+    /usr/bin/time -v genozip --force -o "$OUT/$DS.genozip" "$SRC" 2>"$OUT/_t_s" >/dev/null
+    S=$OUT/$DS.genozip
+  fi
+  read -r XW XR <<< "$(tv "$OUT/_t_s")"
+  if [ -s "$S" ]; then
+    XS=$(stat -c%s "$S")
+    ok "$T archive $(mb $XS)  ratio $(awk -v a=$XS -v r=$RAW 'BEGIN{printf "%.3f%%",100*a/r}')  wall ${XW}s  RAM $(rg $XR)"
+    keep "claim1" "$S" "$T archive -- the competitor number in T1"
+  else err "$T produced no archive"; fi
+done
+
+CSV1="$OUT/claim1_t1_t2.csv"
+{ echo "dataset,tool,raw_bytes,archive_bytes,ratio_pct,compress_s,decompress_s,peak_ram_kb,lossless"
+  echo "$DS,CAPSULE,$RAW,${ARCH:-},$(awk -v a=${ARCH:-0} -v r=$RAW 'BEGIN{printf "%.4f",100*a/r}'),$CW,$DW,$CR,$LL"
+  [ -s "$OUT/$DS.spring" ]  && echo "$DS,SPRING,$RAW,$(stat -c%s "$OUT/$DS.spring"),,,,,"
+  [ -s "$OUT/$DS.genozip" ] && echo "$DS,Genozip,$RAW,$(stat -c%s "$OUT/$DS.genozip"),,,,,"
+} > "$CSV1"
+keep "claim1" "$CSV1" "T1 + T2 table rows for this dataset"
+
+# ── CLAIM 2 ────────────────────────────────────────────────────────────────
+banner "CLAIM 2 — variant calling (T3 het-SNV F1)"
+if [ -s "$DATA_DIR/${DS}_pooled.fq" ] && [ -s "$REFS/chr20.fa" ]; then
+  step "our caller (SNV configuration, one pass with compression)"
+  C2="$OUT/claim2"; mkdir -p "$C2"
+  CAPS_DBG=1 CAPS_DBG_ONLY=1 \
+    bash "$HERE/scripts/run_fullchr20_bench_capsule.sh" "$BEST" "$HERE/scripts" \
+         "$REFS/chr20.fa" "$SRC" "$DS" "$C2" > "$OUT/claim2.log" 2>&1
+  LN=$(grep -aE '^SNV ' "$OUT/claim2.log" | tail -1)
+  if [ -n "$LN" ]; then
+    ok "OURS  $LN"
+    keep "claim2" "$C2/calls.vcf"   "variant calls in contig coordinates (caller output)"
+    keep "claim2" "$C2/lifted.vcf"  "calls lifted to chr20 coordinates (what vcfeval scores)"
+    keep "claim2" "$C2/contigs.fa"  "assembled contigs the calls came from"
+    keep "claim2" "$OUT/claim2.log" "full Claim 2 log incl. rtg vcfeval summary"
+    { echo "individual,tool,snv_line"; echo "$DS,CAPSULE,\"$LN\""; } > "$OUT/claim2_t3.csv"
+    keep "claim2" "$OUT/claim2_t3.csv" "T3 row for this individual"
+  else err "no SNV line -- see $OUT/claim2.log"; FAILED=1; fi
+else
+  inf "SKIP Claim 2: $DS is not one of the 4 GIAB human sets (needs a truth VCF)"
+fi
+
+# ── CLAIM 3 ────────────────────────────────────────────────────────────────
+banner "CLAIM 3 — archive analysis (T6a export, T6b coverage, T6c query)"
+C3="$OUT/claim3"; mkdir -p "$C3"
+CSV3="$OUT/claim3_t6.csv"; echo "dataset,operation,ours_s,output_bytes,rows,status" > "$CSV3"
+run3(){ local op="$1" outf="$2"; shift 2
+  step "T6 $op"
+  local t0 t1 s
+  t0=$(date +%s.%N); "$DEC" "$op" "$A" "$outf" "$@" >"$C3/$op.stdout" 2>"$C3/$op.log"; local rc=$?
+  t1=$(date +%s.%N); s=$(awk -v a=$t0 -v b=$t1 'BEGIN{printf "%.3f",b-a}')
+  if [ $rc -eq 0 ] && [ -s "$outf" ]; then
+    local sz rows; sz=$(stat -c%s "$outf"); rows=$(wc -l < "$outf")
+    ok "$op  ${s}s  -> $(mb $sz)  ${rows} lines"
+    echo "$DS,$op,$s,$sz,$rows,DONE" >> "$CSV3"
+    keep "claim3" "$outf" "output of arcs $op, read from the archive alone"
+  else err "$op failed (rc=$rc) -- see $C3/$op.log"; echo "$DS,$op,,,,FAILED" >> "$CSV3"; FAILED=1; fi
+}
+run3 export   "$C3/contigs.fa"
+run3 coverage "$C3/coverage.tsv"
+run3 query    "$C3/region.fq" 0-100000
+keep "claim3" "$CSV3" "T6 rows for this dataset"
+
+# ── MANIFEST ───────────────────────────────────────────────────────────────
+banner "FILE MANIFEST — every artefact, where it is, how big, what it is for"
+say ""
+printf "%-8s %12s  %-46s %s\n" "CLAIM" "SIZE" "PATH" "WHAT IT IS" | tee -a "$LOG"
+say "$(printf '%.0s-' {1..150})"
+while IFS=$'\t' read -r c p s d; do
+  printf "%-8s %12s  %-46s %s\n" "$c" "$(mb $s)" "${p#$OUT/}" "$d" | tee -a "$LOG"
+done < "$MAN"
+say ""
+inf "output root : $OUT"
+inf "total size  : $(du -sh "$OUT" | cut -f1)"
+inf "elapsed     : $(_el)"
+say ""
+if [ "$FAILED" -eq 0 ]; then
+  say "  ┌──────────────────────────────────────────────────────────────┐"
+  say "  │  SANITY PASSED — all three claims produced their artefacts.  │"
+  say "  │  The full run should behave the same on every dataset.        │"
+  say "  └──────────────────────────────────────────────────────────────┘"
+else
+  say "  ┌──────────────────────────────────────────────────────────────┐"
+  say "  │  SANITY FAILED — see the FAIL lines above before the full run │"
+  say "  └──────────────────────────────────────────────────────────────┘"
+fi
+rm -f "$OUT"/_t_c "$OUT"/_t_d "$OUT"/_t_s
+say "  log: $LOG"
+exit $FAILED

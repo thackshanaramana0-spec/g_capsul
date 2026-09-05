@@ -1324,6 +1324,22 @@ int main(int argc,char** argv){
                 if(CAPS_QUAL && !g_QL_done && !g_input_path.empty()){
                     g_QL = qlc::encode_from_fastq(g_input_path.c_str()); g_QL_done = true;
                 }
+                // TEAR THE RUNTIME DOWN AGAIN BEFORE FORKING.
+                //
+                // The teardown above (omp_pause_resource_all, ~100 lines up)
+                // happens BEFORE this hoist, and the quality coder's trial
+                // search is itself an OpenMP region -- so encoding here
+                // RE-CREATES the thread pool, and the fork below then hits
+                // exactly the deadlock that call exists to prevent: libgomp's
+                // locks are copied in whatever state they held and the child
+                // hangs at 0.0% CPU on its first parallel region.
+                //
+                // This is not theoretical. It was measured: the first version
+                // of this hoist ran fine twice and then hung a verification
+                // sweep for 13 minutes on the first dataset. A race that
+                // sometimes passes is worse than a consistent failure, because
+                // it would have stalled a 10-hour benchmark at random.
+                if(g_NM_done || g_QL_done) omp_pause_resource_all(omp_pause_hard);
             }
             if(!gs_child){
                 size_t K = cands.size();
