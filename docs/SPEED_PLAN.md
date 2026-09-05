@@ -52,3 +52,39 @@ So, for every change from here:
 5. One change measured at a time; `A_only` source kept aside so A and B never
    share a measurement.
 6. Full 19-dataset sweep before anything is called generalized.
+
+## MEASURED: where the 497 s actually goes (2026-09-05)
+
+A single candidate at 12 threads was timed directly, which is the only honest way
+to separate work from concurrency:
+
+```
+single candidate (MAXMAP=29), 12 threads   TOTAL=221.28 s
+  round 1 32.67 | round 2 53.94 | emit 6.89 | pigeonhole 58.98
+single candidate (MAXMAP=7),  12 threads   TOTAL=218.87 s
+  entering MEM 3.70 | second-region sweep 2.07 | MEM run() 34.76
+```
+
+**The 8-point grid costs 276 s of the 497 s -- 56% of runtime -- for 0.586%
+archive size (0.010% against the second-best point).** That is the only drastic
+lever left, and it is a size decision, not an engineering one.
+
+**A hypothesis of mine, refuted by this.** The 8-candidate log shows the
+low-MAXMAP candidates at 149-158 s in "entering MEM matching" and 88-113 s in
+MEM run(), and I wrote that the second-region sweep was superlinear and
+suspicious. Alone at 12 threads the same candidate spends 3.70 s and 34.76 s.
+Nothing is inefficient: the tail is CORE-BOUND, eight candidates over twelve
+cores (8 x ~417 core-s of MEM / 12 ~= 278 s vs a 262 s measured tail).
+Per-candidate stage times in a concurrent run are not work measurements.
+
+Sweep internals (`CAPS_SWEEP_TIMING=1`), single candidate:
+
+```
+round 1     133 levels  prep 1.63 (5.0%)   par 22.52 (69.2%)  commit 8.39 (25.8%)  total 32.53
+round 2      98 levels  prep 0.80 (5.9%)   par  9.49 (69.4%)  commit 3.39 (24.8%)  total 13.68
+2nd region   98 levels  prep 0.23 (37.2%)  par  0.38 (61.1%)  commit 0.01 ( 1.7%)  total  0.62
+```
+
+Two consequences: the sweeps are **~31% serial** (an Amdahl ceiling on rounds 1
+and 2), and round 2's 53.94 s stage contains only 13.68 s of sweep -- the other
+~40 s is `buildPref`, the prefix-index rebuild, which nothing has examined.
