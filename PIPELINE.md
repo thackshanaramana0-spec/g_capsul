@@ -121,10 +121,31 @@ artefact, not a property of the data.
 | recall | **0.818** | **0.818** | 0.763 |
 | caller time | 98.5 s | 98.9 s | 76.5 s |
 | peak RAM | 6.99 GB | 7.12 GB | 3.45 GB |
-| archive | **26 MB lossless** | 26 MB | none |
+| sequence layer | 26 MB | 26 MB | none |
+| **full archive (lossless)** | **547 MB** | — | none |
 
 No Method B parameter was set on HG003. Recall transfers identically; F1 within
 0.002.
+
+**Read the two size rows carefully — they measure different things.** An earlier
+version of this table listed a single "archive 26 MB lossless" row, which was
+wrong twice over: 26 MB is the SEQUENCE LAYER only (literal + mem_triples +
+mm_*), and a 26 MB file cannot be lossless because it carries no names and no
+quality. Measured on HG002 (4.28 GB input, full FASTQ, CAPS_NAMES + CAPS_QUAL):
+
+| stream | size | share |
+|---|---|---|
+| qual_body | 470.6 MB | **82.0%** |
+| pos_abs | 43.4 MB | 7.6% |
+| names_body | 30.6 MB | 5.3% |
+| literal | 14.5 MB | 2.5% |
+| mm_pos, mem_triples, mm_sym, extmm | ~11 MB | 1.9% |
+| **total** | **547 MB** | 13.41% of input |
+
+Quality is 82% of a real archive, so any statement about "our archive size" that
+omits it is off by a factor of twenty. The comparable, measured numbers on the
+same file are SPRING 570 MB (13.98%) and Genozip 908 MB (22.24%) -- we win both,
+by 4.0% and 39.7%, verified LOSSLESS.
 
 **Where we lose, stated plainly:** RAM ~2x and wall time ~1.3x. About 3.6 GB of
 the 6.99 GB is encoder state Method B never reads — it stays resident because
