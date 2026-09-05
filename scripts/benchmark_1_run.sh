@@ -79,15 +79,28 @@ parse_time_v(){
 
 # ── heartbeat: proof of life for a run left going for hours ───────────────
 HB_PID=""
+# THE STAGE IS PASSED THROUGH A FILE, NOT A VARIABLE.
+#
+# The heartbeat runs in a SUBSHELL forked once at startup, so it captured
+# CURRENT_STAGE's value at that moment and could never see a later update --
+# every heartbeat for the whole run would have said "starting". A status line
+# that cannot change is worse than none, because it looks like progress.
+STAGE_F="$OUT_DIR/.stage"; echo "starting" > "$STAGE_F"
+PROG_F="$OUT_DIR/PROGRESS.txt"; : > "$PROG_F"
+mark(){ echo "$*" > "$STAGE_F"; }
+# checkpoint(): one durable line per completed step, so the run can be checked
+# at a glance at any time without reading the full log.
+checkpoint(){
+    printf "[%s +%s] %s\n" "$(_ts)" "$(_el)" "$*" >> "$PROG_F"
+    echo "[$(_ts) +$(_el)]  ✓ CHECKPOINT: $*" | tee -a "$LOG"
+}
 start_heartbeat(){
     ( while true; do sleep $((HEARTBEAT_MIN*60))
-        echo "[$(_ts) +$(_el)] ---- still running: ${CURRENT_STAGE:-?} | disk $(df -h / | awk 'NR==2{print $4}') free | mem $(free -g | awk '/^Mem:/{print $7}')G avail | load$(cut -d' ' -f1-3 /proc/loadavg | sed 's/^/ /')" >> "$LOG"
+        echo "[$(date '+%H:%M:%S')] ---- alive: $(cat "$STAGE_F" 2>/dev/null) | done so far: $(wc -l < "$PROG_F" 2>/dev/null) checkpoints | disk $(df -h / | awk 'NR==2{print $4}') free | mem $(free -g | awk '/^Mem:/{print $7}')G avail | load$(cut -d' ' -f1-3 /proc/loadavg | sed 's/^/ /')" | tee -a "$LOG"
       done ) & HB_PID=$!
 }
 stop_heartbeat(){ [ -n "$HB_PID" ] && kill "$HB_PID" 2>/dev/null; }
 trap 'stop_heartbeat' EXIT INT TERM
-CURRENT_STAGE="starting"
-mark(){ CURRENT_STAGE="$*"; }
 
 # ── CSVs, written incrementally ───────────────────────────────────────────
 CSV1="$OUT_DIR/claim1_t1_t2.csv"
@@ -153,6 +166,7 @@ phase1_one(){                      # $1 = dataset name ; returns 1 on failure
     if [ ! -s "$A" ]; then err "$DS: CAPSULE produced no archive"; debug_dump "$DS encode" "${A}.log"; rm -f "$IN" "$TF"; return 1; fi
     ARCH=$(stat -c%s "$A")
     ok "compress  archive=$(mbs $ARCH)  ratio=$(awk -v a=$ARCH -v r=$RAW 'BEGIN{printf "%.2f%%",100*a/r}')  wall=${CW}s  RAM=$(ramg $CR)"
+    checkpoint "$DS  CAPSULE compress done -- $(mbs $ARCH), ${CW}s, $(ramg $CR)"
 
     mark "P1 $DS: CAPSULE decompress + lossless"
     step "CAPSULE decompress + lossless verify"
@@ -161,6 +175,7 @@ phase1_one(){                      # $1 = dataset name ; returns 1 on failure
     read -r DW DR <<< "$(parse_time_v "$TF2")"
     LL=$(losscmp "$IN" "$OUTDIR/reads.seq" "$OUTDIR/reads.seq.names" "$OUTDIR/reads.seq.qual")
     ok "decompress wall=${DW}s  RAM=$(ramg $DR)  -> $LL"
+    checkpoint "$DS  CAPSULE decompress + lossless done -- $LL, ${DW}s"
     printf "%s,CAPSULE,%s,%s,%.4f,%s,%s,%s,%s,DONE\n" "$DS" "$RAW" "$ARCH" \
         "$(awk -v a=$ARCH -v r=$RAW 'BEGIN{print 100*a/r}')" "$CW" "$DW" "$CR" "$LL" >> "$CSV1"
     rm -rf "$OUTDIR" "$TF" "$TF2"          # decode scratch is the big transient
@@ -182,6 +197,7 @@ phase1_one(){                      # $1 = dataset name ; returns 1 on failure
         read -r DW DR <<< "$(parse_time_v "$TF2")"
         LL=$(losscmp_plain "$IN" "$WD/$DS.spr.dec")
         ok "SPRING    archive=$(mbs $ARCH)  ctime=${CW}s  dtime=${DW}s  RAM=$(ramg $CR)  $LL"
+        checkpoint "$DS  SPRING done -- $(mbs $ARCH), ${CW}s, $LL"
         printf "%s,SPRING,%s,%s,%.4f,%s,%s,%s,%s,DONE\n" "$DS" "$RAW" "$ARCH" \
             "$(awk -v a=$ARCH -v r=$RAW 'BEGIN{print 100*a/r}')" "$CW" "$DW" "$CR" "$LL" >> "$CSV1"
     else
@@ -202,6 +218,7 @@ phase1_one(){                      # $1 = dataset name ; returns 1 on failure
         read -r DW DR <<< "$(parse_time_v "$TF2")"
         LL=$(losscmp_plain "$IN" "$WD/$DS.gz.dec")
         ok "Genozip   archive=$(mbs $ARCH)  ctime=${CW}s  dtime=${DW}s  RAM=$(ramg $CR)  $LL"
+        checkpoint "$DS  Genozip done -- $(mbs $ARCH), ${CW}s, $LL"
         printf "%s,Genozip,%s,%s,%.4f,%s,%s,%s,%s,DONE\n" "$DS" "$RAW" "$ARCH" \
             "$(awk -v a=$ARCH -v r=$RAW 'BEGIN{print 100*a/r}')" "$CW" "$DW" "$CR" "$LL" >> "$CSV1"
     else
@@ -270,6 +287,7 @@ run_phase1(){
         inf "[$i/$n] $DS done in ${el}s   (elapsed $(_el), $((n-i)) left)"
         [ "$i" -gt 0 ] && inf "     projected remaining: ~$(( (($(date +%s)-T_RUN_START)/i) * (n-i) / 60 )) min at current rate"
     done
+    checkpoint "PHASE 1 COMPLETE -- $N_OK ok, $N_FAIL failed"
     banner "PHASE 1 COMPLETE — $N_OK ok, $N_FAIL failed  ->  $CSV1"
 }
 
@@ -303,6 +321,7 @@ run_phase2(){
         tv=$(parse_time_v "$d.log"); w=${tv% *}; hwm=${tv#* }
         if [ -n "${f1:-}" ]; then
             ok "OURS      SNV F1=$f1  P=$p  R=$r   wall=${w}s  RAM=$(ramg $hwm)"
+            checkpoint "$IND  our caller done -- SNV F1=$f1 P=$p R=$r, ${w}s"
             printf "%s,CAPSULE,%s,%s,%s,%s,%s,DONE\n" "$IND" "$f1" "$p" "$r" "$w" "$hwm" >> "$CSV2"
         else
             err "$IND: our caller produced no SNV line"; debug_dump "$IND ours" "$d.log"
@@ -323,6 +342,7 @@ run_phase2(){
             r=$(grep -aE '^SNV ' "$OUT_DIR/c2_${IND}_disco.log" | tail -1 | grep -oP ' R=\K[0-9.]+')
             tv=$(parse_time_v "$OUT_DIR/c2_${IND}_disco.log"); w=${tv% *}; hwm=${tv#* }
             if [ -n "${f1:-}" ]; then ok "DiscoSNP++ SNV F1=$f1  P=$p  R=$r   wall=${w}s  RAM=$(ramg $hwm)"
+                checkpoint "$IND  DiscoSNP++ done -- SNV F1=$f1"
                 printf "%s,DiscoSNP++,%s,%s,%s,%s,%s,DONE\n" "$IND" "$f1" "$p" "$r" "$w" "$hwm" >> "$CSV2"
             else err "DiscoSNP++ produced no SNV line for $IND"; debug_dump "$IND disco" "$OUT_DIR/c2_${IND}_disco.log"
                 printf "%s,DiscoSNP++,,,,,,FAILED\n" "$IND" >> "$CSV2"; fi
@@ -356,6 +376,7 @@ run_phase2(){
         el=$(( $(date +%s) - t0 ))
         inf "[$i/$n] $IND done in ${el}s   (elapsed $(_el))"
     done
+    checkpoint "PHASE 2 COMPLETE"
     banner "PHASE 2 COMPLETE  ->  $CSV2"
 }
 
@@ -420,6 +441,7 @@ run_phase3(){
             if [ $RC -eq 0 ] && [ -s "$d/spades/contigs.fasta" ]; then
                 local SP_T; SP_T=$(awk -v a=$t_a -v b=$t_b 'BEGIN{printf "%.2f",b-a}')
                 ok "SPAdes      ${SP_T}s   ->  speedup $(awk -v s=$SP_T -v o=$OURS_EXP 'BEGIN{printf "%.1fx",s/o}')"
+                checkpoint "$DS  T6a export done -- ours ${OURS_EXP}s vs SPAdes ${SP_T}s"
                 printf "%s,export,%s,SPAdes,%s,%s,DONE,\n" "$DS" "$OURS_EXP" "$SP_T" \
                     "$(awk -v s=$SP_T -v o=$OURS_EXP 'BEGIN{printf "%.1f",s/o}')" >> "$CSV3"
             else
@@ -452,6 +474,7 @@ run_phase3(){
             if [ $RC -eq 0 ]; then
                 local CV_T; CV_T=$(awk -v a=$t_a -v b=$t_b 'BEGIN{printf "%.2f",b-a}')
                 ok "bwa+mosdepth ${CV_T}s  ->  speedup $(awk -v s=$CV_T -v o=$OURS_COV 'BEGIN{printf "%.1fx",s/o}')"
+                checkpoint "$DS  T6b coverage done -- ours ${OURS_COV}s vs bwa+mosdepth ${CV_T}s"
                 printf "%s,coverage,%s,bwa+samtools+mosdepth,%s,%s,DONE,\n" "$DS" "$OURS_COV" "$CV_T" \
                     "$(awk -v s=$CV_T -v o=$OURS_COV 'BEGIN{printf "%.1f",s/o}')" >> "$CSV3"
             else
@@ -465,6 +488,7 @@ run_phase3(){
         fi
         inf "[$i/$n] $DS done in $(( $(date +%s) - t0 ))s   (elapsed $(_el))"
     done
+    checkpoint "PHASE 3 COMPLETE"
     banner "PHASE 3 COMPLETE  ->  $CSV3"
 }
 
