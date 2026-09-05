@@ -1697,6 +1697,17 @@ int main(int argc,char** argv){
                         bestsz=(size_t)sb.st_size; bi=ci; }
                 }
                 if(bestsz==SIZE_MAX){ fprintf(stderr,"[a3] all candidates failed\n"); return 1; }
+                // Report EVERY candidate's size, not just the winner. The
+                // smaller grids are subsets of this one (GRID4 is candidates
+                // 2,3,6,7; the compiled-in single point is candidate 2), so one
+                // 8-point run answers "what would a smaller grid have cost?"
+                // exactly -- no extra encodes.
+                for(size_t ci=0; ci<cands.size(); ++ci){
+                    std::string f = base + ".cand" + std::to_string(ci);
+                    struct stat sb2; size_t sz2 = (stat(f.c_str(),&sb2)==0)?(size_t)sb2.st_size:0;
+                    fprintf(stderr,"  [a3] cand%zu MAXMAP=%u MINOV=%u size=%zu%s\n",
+                            ci, cands[ci].first, cands[ci].second, sz2, ci==bi?"  <-- WINNER":"");
+                }
                 // Promote the winner's dumps into this directory, then drop
                 // every candidate's scratch dir, so what remains on disk is the
                 // archive AND the streams that actually produced it.

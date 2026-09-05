@@ -128,7 +128,16 @@ static bool encode_block(const std::string& qbuf,
     // ties resolved to the lowest (ci, strat). Results are collected into a
     // fixed-index array and scanned in that same order, so the selection is
     // identical regardless of completion order -- verified byte-identical.
-    const int ntrial = ncand * 4;
+    // CAPS_QSTRAT / CAPS_QOFF limit the trial grid, for measuring what the 8
+    // trials actually buy. Unset, both are the full grid and the output is
+    // bit-identical to before. Strategy order matters: the scan below keeps the
+    // first strictly-smaller result, so restricting to the first k strategies
+    // evaluates a PREFIX of the same ordered candidate list.
+    int nstrat = 4;
+    if(const char* e=getenv("CAPS_QSTRAT")){ int v=atoi(e); if(v>=1&&v<=4) nstrat=v; }
+    int nc = ncand;
+    if(const char* e=getenv("CAPS_QOFF")){ int v=atoi(e); if(v>=1&&v<=ncand) nc=v; }
+    const int ntrial = nc * nstrat;
     std::vector<std::string> shifted(ncand);
     for(int ci=0; ci<ncand; ++ci){
         shifted[ci].resize(qbuf.size());
@@ -140,7 +149,7 @@ static bool encode_block(const std::string& qbuf,
     std::vector<char> ok(ntrial, 0);
     #pragma omp parallel for schedule(dynamic,1)
     for(int t=0; t<ntrial; ++t){
-        const int ci = t / 4, strat = t % 4;
+        const int ci = t / nstrat, strat = t % nstrat;
         // fqz_compress MUTATES the slice -- it writes s->flags[rec]
         // (fqzcomp_qual.c:655) and s->len[i] (:790). Copying the struct alone
         // is not enough because the copy still points at the SAME len/flags
@@ -165,7 +174,7 @@ static bool encode_block(const std::string& qbuf,
         if(!ok[t]) continue;
         if(!got || res[t].size() < best){
             out = res[t]; best = res[t].size(); got = true;
-            qmin_out = cands[t/4];
+            qmin_out = cands[t/nstrat];
         }
     }
     return got;
