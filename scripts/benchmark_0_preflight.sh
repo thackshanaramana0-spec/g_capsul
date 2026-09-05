@@ -65,7 +65,11 @@ chk_cmd "SPRING"          spring     req
 chk_cmd "Genozip"         genozip    req
 chk_cmd "Genounzip"       genounzip  req
 say "  -- Claim 2 (variant calling) --"
-chk_path "DiscoSNP++"     "$HOME/DiscoSnp/run_discoSnp++.sh" req
+# Checked through PATH, not by file existence: the runner invokes
+# `run_discoSnp++.sh` by name, so a present-but-unreachable script fails later
+# as "no SNV line" -- a missing competitor arm that reads like a scoring bug.
+[ -d "$HOME/DiscoSnp" ] && export PATH="$HOME/DiscoSnp:$PATH"
+chk_cmd  "DiscoSNP++ (on PATH)" run_discoSnp++.sh req
 chk_cmd  "rtg (vcfeval)"  rtg        req
 if [ -d "$HOME/miniconda3/envs/kmer2snp_r" ]; then pass "Kmer2SNP (conda env)" "$HOME/miniconda3/envs/kmer2snp_r"
 else warn "Kmer2SNP (conda env)" "MISSING — Claim 2 runs with DiscoSNP++ only, T3 loses its 3rd arm"; fi

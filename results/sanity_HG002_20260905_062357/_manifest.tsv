@@ -1,1 +1,16 @@
 input	/data/fastq/HG002_pooled.fq	4279197941	the FASTQ under test
+claim1	/root/arcs-clean/c_star_pg_advance/results/sanity_HG002_20260905_062357/HG002.capsule	574014786	the .capsule archive -- T1 size, and what Claim 3 reads
+claim1	/root/arcs-clean/c_star_pg_advance/results/sanity_HG002_20260905_062357/HG002.capsule.log	45285	encoder log: per-stage timings, stream sizes, candidate sweep
+claim1	/root/arcs-clean/c_star_pg_advance/results/sanity_HG002_20260905_062357/decoded/reads.seq	1878132633	reads reconstructed FROM THE ARCHIVE (lossless check input)
+claim1	/root/arcs-clean/c_star_pg_advance/results/sanity_HG002_20260905_062357/HG002.spring	598200320	SPRING archive -- the competitor number in T1
+claim1	/root/arcs-clean/c_star_pg_advance/results/sanity_HG002_20260905_062357/HG002.genozip	951587282	Genozip archive -- the competitor number in T1
+claim1	/root/arcs-clean/c_star_pg_advance/results/sanity_HG002_20260905_062357/claim1_t1_t2.csv	283	T1 + T2 table rows for this dataset
+claim2	/root/arcs-clean/c_star_pg_advance/results/sanity_HG002_20260905_062357/claim2/calls.vcf	197167032	variant calls in contig coordinates (caller output)
+claim2	/root/arcs-clean/c_star_pg_advance/results/sanity_HG002_20260905_062357/claim2/lifted.vcf	1645277	calls lifted to chr20 coordinates (what vcfeval scores)
+claim2	/root/arcs-clean/c_star_pg_advance/results/sanity_HG002_20260905_062357/claim2/contigs.fa	60674354	assembled contigs the calls came from
+claim2	/root/arcs-clean/c_star_pg_advance/results/sanity_HG002_20260905_062357/claim2.log	1901	full Claim 2 log incl. rtg vcfeval summary
+claim2	/root/arcs-clean/c_star_pg_advance/results/sanity_HG002_20260905_062357/claim2_t3.csv	93	T3 table: het-SNV TP/FP/FN/P/R/F1, ours vs DiscoSNP++
+claim3	/root/arcs-clean/c_star_pg_advance/results/sanity_HG002_20260905_062357/claim3/contigs.fa	181072516	output of arcs export, read from the archive alone
+claim3	/root/arcs-clean/c_star_pg_advance/results/sanity_HG002_20260905_062357/claim3/coverage.tsv	625570993	output of arcs coverage, read from the archive alone
+claim3	/root/arcs-clean/c_star_pg_advance/results/sanity_HG002_20260905_062357/claim3/region.fq	1466505	output of arcs query, read from the archive alone
+claim3	/root/arcs-clean/c_star_pg_advance/results/sanity_HG002_20260905_062357/claim3_t6.csv	174	T6 rows for this dataset
