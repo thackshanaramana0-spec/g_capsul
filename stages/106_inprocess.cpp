@@ -1003,9 +1003,20 @@ int main(int argc,char** argv){
     // disjoint exactly as before: the search is per-tail independent and the
     // commit below still walks i in order.
     bool sweep_done=false;
+    // SWEEP PHASE TIMING (CAPS_SWEEP_TIMING=1). The level loop is
+    // serial-prep -> parallel-search -> serial-commit, and only the middle
+    // third is parallel. With 110 levels in round 2 the two serial passes are
+    // paid 110 times over millions of reads, so Amdahl's law -- not the TLB --
+    // is the candidate explanation for round 2 refusing to scale with threads.
+    // Diagnostic only: unset, this is one branch per level and the archive is
+    // bit-identical.
+    double tt_prep=0, tt_par=0, tt_com=0; size_t nlev=0, tt_w=0, tt_open=0;
+    const bool SWTIME = getenv("CAPS_SWEEP_TIMING")!=nullptr;
     size_t pr_total=0; size_t sd_hit=0; size_t cand_seen=0;
     #pragma omp parallel
     {
+    const bool me0 = (omp_get_thread_num()==0);
+    double ta=0, tb=0, tc=0, td=0;
     // Start at Lmax, not Lmax-1. A suffix-prefix overlap of exactly the read
     // length IS an exact duplicate, and it is the only length at which one can
     // appear: two identical 251-base reads do NOT overlap at L=250, because
@@ -1025,6 +1036,7 @@ int main(int argc,char** argv){
     // rcmp compares the two reads in full -- exactly the duplicate test. The
     // existing ch_h[a]==b guard already prevents a 2-cycle.
     for(uint32_t L=Lmax; L>=sweep_minov && L>=SW; --L){
+        if(SWTIME&&me0) ta=omp_get_wtime();
         #pragma omp single
         {
         // Two different filters were being applied to the same array, and only
@@ -1069,6 +1081,7 @@ int main(int argc,char** argv){
         }
         }   // end single (implicit barrier: every thread now sees tails/cand)
         if(sweep_done) break;
+        if(SWTIME&&me0) tb=omp_get_wtime();
         const size_t w = tails.size();
 
         // ── parallel: roll each seed, probe, keep candidates passing the
@@ -1174,6 +1187,7 @@ int main(int argc,char** argv){
             #pragma omp single
             { probes+=pr_total; g_sd_hit+=sd_hit; g_cand+=cand_seen; g_probe+=pr_total; }
         }
+        if(SWTIME&&me0) tc=omp_get_wtime();
 
         // ── serial: same order, same first survivor ───────────────────────
         // A retained list that filled to CCAP may have been truncated, so if
@@ -1238,8 +1252,21 @@ int main(int argc,char** argv){
             }
         }
         }   // end single (commit)
+        if(SWTIME&&me0){ td=omp_get_wtime();
+            tt_prep+=tb-ta; tt_par+=tc-tb; tt_com+=td-tc;
+            ++nlev; tt_w+=w; tt_open+=open_tails.size(); }
     }       // end level loop
     }       // end parallel (one team for the whole sweep)
+    if(SWTIME){
+        const double tot=tt_prep+tt_par+tt_com;
+        fprintf(stderr,"[sweep] levels=%zu  prep=%.2fs (%.1f%%)  par=%.2fs (%.1f%%)  "
+                       "commit=%.2fs (%.1f%%)  total=%.2fs  serial=%.1f%%  "
+                       "mean_tails=%zu mean_open=%zu\n",
+            nlev, tt_prep, tot?100*tt_prep/tot:0, tt_par, tot?100*tt_par/tot:0,
+            tt_com, tot?100*tt_com/tot:0, tot,
+            tot?100*(tt_prep+tt_com)/tot:0,
+            nlev?tt_w/nlev:0, nlev?tt_open/nlev:0);
+    }
     };
 
     // ── round 1: label, do not build ────────────────────────────────────────
@@ -1286,12 +1313,56 @@ int main(int argc,char** argv){
     // between candidates and the code path is bit-for-bit the one that runs
     // today -- the output is identical by construction rather than by review.
     // Children run one at a time, so peak RSS is unchanged.
+    // ── TWO-LEVEL CANDIDATE FORK: state carried from level 1 to level 2 ─────
+    // Level 1 forks per distinct MINOV; level 2, after `emit chains`, forks per
+    // MAXMAP within that group. These live at main scope because the two fork
+    // sites are ~450 lines apart.
+    std::vector<uint32_t> g_l2_maxmaps;    // MAXMAP of each member of MY group
+    std::vector<size_t>   g_l2_members;    // their GLOBAL candidate indices
+    std::string           g_l2_base, g_l2_cwd;
+    unsigned              g_l2_threads = 1;
+    size_t                g_l2_conc    = 1;
+    bool                  g_l2_active  = false;
     if(const char* cl = getenv("CANDIDATES")){
         std::vector<std::pair<uint32_t,uint32_t>> cands;   // (MAXMAP, MINOV)
         { const char* q=cl;
           while(*q){ unsigned a=0,b=0; if(sscanf(q,"%u:%u",&a,&b)==2) cands.push_back({a,b});
                      while(*q && *q!=',') ++q; if(*q==',') ++q; } }
         if(!cands.empty()){
+            // ── GROUP BY MINOV: ROUND 2 IS A FUNCTION OF MINOV ALONE ────────
+            //
+            // The 8-point grid is 4 MAXMAP x 2 MINOV. MINOV is consumed by the
+            // round-2 sweep; MAXMAP is not read until the mapping stage, ~300
+            // lines later. So the four candidates sharing a MINOV compute a
+            // BIT-IDENTICAL round-2 assembly and three of them throw it away.
+            //
+            // Not inferred from the code -- read off the production HG002 log,
+            // where `round2:` prints exactly two distinct results across the
+            // eight candidates:
+            //     probes=165361129 links=10254332   x4   (MINOV=16)
+            //     probes=173265221 links=10369827   x4   (MINOV=51)
+            // and the per-candidate stage times were 785,785,785,782 s for one
+            // group and 125,125,115,114 s for the other -- i.e. ~2,360 s of
+            // recomputation of an assembly that was already in hand.
+            //
+            // So the fork is at the right PLACE (after round 1) but the wrong
+            // DEPTH. Level 1 forks one child per distinct MINOV; that child
+            // runs round 2 and emit chains once, with a real share of the
+            // cores, and only then forks one grandchild per MAXMAP.
+            //
+            // OUTPUT-PRESERVING BY CONSTRUCTION: a grandchild's state at the
+            // level-2 fork is exactly the state the corresponding candidate had
+            // at the same point, because round 2 is a deterministic function of
+            // (shared prefix, MINOV). It is also thread-count independent --
+            // already established, since K=8/4/2 (1, 3 and 6 threads per
+            // candidate) produced byte-identical archives.
+            std::vector<uint32_t> gmin;                 // distinct MINOV, first-seen order
+            std::vector<std::vector<size_t>> gidx;      // candidate indices per group
+            for(size_t ci=0; ci<cands.size(); ++ci){
+                size_t g=0; for(; g<gmin.size(); ++g) if(gmin[g]==cands[ci].second) break;
+                if(g==gmin.size()){ gmin.push_back(cands[ci].second); gidx.push_back({}); }
+                gidx[g].push_back(ci);
+            }
             // fork() in a process that has live OpenMP threads deadlocks the
             // child: libgomp's internal locks are copied in whatever state they
             // held, and the child's first parallel region then waits forever on
@@ -1503,14 +1574,30 @@ int main(int argc,char** argv){
                 // speedup falls out of the same formula with K substituted --
                 // on the largest inputs expect ~1.9-2.6x rather than 3.5x, and
                 // that is a memory bound, not a modelling error.
+                // SPLIT THE MEASURED MEMORY BUDGET ACROSS THE TWO LEVELS, so
+                // peak RAM is what it was. K is the number of candidate-sized
+                // resident images the box was measured to afford; with two
+                // levels the concurrent images are (groups x members), so the
+                // product is held at K rather than each level taking K.
+                const size_t Kg = std::min(gmin.size(), K ? K : (size_t)1);
+                g_l2_conc = std::max<size_t>(1, (K ? K : 1) / (Kg ? Kg : 1));
+                // Level-1 children each get a real share of the machine for
+                // round 2 -- that is the whole point. Grandchildren then get
+                // the per-candidate share they had before.
                 const unsigned per_child_threads =
-                    (unsigned)std::max<size_t>(1, (size_t)omp_get_max_threads() / (K ? K : 1));
+                    (unsigned)std::max<size_t>(1, (size_t)omp_get_max_threads() / (Kg ? Kg : 1));
+                g_l2_threads =
+                    (unsigned)std::max<size_t>(1, (size_t)omp_get_max_threads() /
+                                                  ((Kg?Kg:1) * (g_l2_conc?g_l2_conc:1)));
+                fprintf(stderr,"  [a3] two-level fork: %zu MINOV group(s) x members "
+                               "(round 2 shared) conc=%zu x %zu threads=%u/%u\n",
+                        gmin.size(), Kg, g_l2_conc, per_child_threads, g_l2_threads);
                 std::vector<pid_t> running;
-                for(size_t ci=0; ci<cands.size() && !child; ++ci){
+                for(size_t gi=0; gi<gmin.size() && !child; ++gi){
                     pid_t pid = fork();
                     if(pid < 0){ perror("fork"); return 1; }
                     if(pid == 0){
-                        child=true; mine=ci;
+                        child=true; mine=gi;
                         // Child's share of the machine. Set before any parallel
                         // region in the child runs.
                         omp_set_num_threads((int)per_child_threads);
@@ -1519,8 +1606,8 @@ int main(int argc,char** argv){
                         break;
                     }
                     running.push_back(pid);
-                    // Keep at most K children alive at once.
-                    while(running.size() >= K){
+                    // Keep at most Kg group children alive at once.
+                    while(running.size() >= Kg){
                         int st=0; pid_t done = wait(&st);
                         if(done > 0){
                             running.erase(std::remove(running.begin(),running.end(),done),
@@ -1617,34 +1704,19 @@ int main(int argc,char** argv){
             const std::string absbase =
                 (!base.empty() && base[0]=='/') ? base
                                                 : (std::string(cwdbuf) + "/" + base);
-            const std::string ddir = absbase + ".cand" + std::to_string(mine) + ".d";
-            mkdir(ddir.c_str(), 0755);
-            setenv("MAXMAP", std::to_string(cands[mine].first).c_str(), 1);
-            setenv("MINOV",  std::to_string(cands[mine].second).c_str(), 1);
-            setenv("ARCHIVE", (absbase + ".cand" + std::to_string(mine)).c_str(), 1);
-            // CAPS_CALL outputs have the SAME hazard the dump files above had:
-            // every child writes the caller's VCF (and contig dump) to one
-            // shared path, so what survives belongs to whichever child ran
-            // LAST, not to the winner -- and which child that is depends on
-            // scheduling, so the result was not even reproducible run to run.
-            // Same fix: each candidate writes its own file, absolute (resolved
-            // BEFORE the chdir below, so a relative path the caller passed
-            // still refers to the directory they meant), and the parent
-            // promotes the winner's and deletes the losers'.
-            if(CAPS_CALL){
-                auto abso=[&](const char* p)->std::string{
-                    std::string s(p);
-                    return (!s.empty() && s[0]=='/') ? s : (std::string(cwdbuf) + "/" + s);
-                };
-                if(const char* cv = getenv("CALL_VCF"))
-                    setenv("CALL_VCF", (abso(cv) + ".cand" + std::to_string(mine)).c_str(), 1);
-                else
-                    setenv("CALL_VCF", (std::string(cwdbuf) + "/out.vcf.cand" + std::to_string(mine)).c_str(), 1);
-                if(const char* dc = getenv("CAPS_DUMP_CONTIGS"))
-                    setenv("CAPS_DUMP_CONTIGS", (abso(dc) + ".cand" + std::to_string(mine)).c_str(), 1);
-            }
-            if(chdir(ddir.c_str())!=0) perror("chdir");
-            sweep_minov = cands[mine].second;
+            // LEVEL 1 SETS ONLY WHAT ROUND 2 NEEDS. MAXMAP, ARCHIVE, the
+            // scratch dir and the caller's per-candidate output paths are all
+            // per-CANDIDATE, so they are deferred to the level-2 fork below --
+            // which is also why this child must not chdir yet. Verified there
+            // is no file written between here and `emit chains`.
+            g_l2_base    = absbase;
+            g_l2_cwd     = cwdbuf;
+            g_l2_members = gidx[mine];
+            g_l2_maxmaps.clear();
+            for(size_t ci : gidx[mine]) g_l2_maxmaps.push_back(cands[ci].first);
+            g_l2_active  = true;
+            setenv("MINOV",  std::to_string(gmin[mine]).c_str(), 1);
+            sweep_minov = gmin[mine];
             }
         }
     }
@@ -1735,6 +1807,89 @@ int main(int argc,char** argv){
     fprintf(stderr,"links=%zu chains(multi)=%u leftovers=%zu pg after chains=%zu\n",
             links,multi,leftovers.size(),pg.size());
     lap("emit chains");
+
+    // ── LEVEL-2 CANDIDATE FORK: split the MINOV group by MAXMAP ─────────────
+    //
+    // Everything above this line is a function of (input, MINOV) only -- round
+    // 2 and chain emission -- and has now been computed ONCE for this group
+    // instead of once per member. MAXMAP becomes live in the mapping stage
+    // below, so this is the first point at which the members genuinely differ,
+    // and therefore the correct fork depth.
+    if(g_l2_active){
+        // TEAR THE OPENMP RUNTIME DOWN BEFORE FORKING. Round 2 ran parallel
+        // regions in this process, so forking without this is exactly the
+        // libgomp deadlock the level-1 fork already documents -- the child's
+        // first parallel region waits forever on threads it did not inherit.
+        // This project has already paid for that bug once, with a 13-minute
+        // hang that showed up only after two clean runs.
+        omp_pause_resource_all(omp_pause_hard);
+        bool gchild=false; size_t mine2=0;
+        if(g_l2_members.size()==1){ gchild=true; mine2=0; }   // nothing to split
+        else {
+            std::vector<pid_t> run2;
+            auto reap=[&](size_t keep){
+                while(run2.size() >= keep && !run2.empty()){
+                    int st=0; pid_t d=wait(&st);
+                    if(d<=0) break;
+                    run2.erase(std::remove(run2.begin(),run2.end(),d),run2.end());
+                    if(!WIFEXITED(st)||WEXITSTATUS(st)!=0)
+                        fprintf(stderr,"  [a3] a candidate failed (status %d)\n",st);
+                }
+            };
+            for(size_t j=0;j<g_l2_members.size() && !gchild;++j){
+                pid_t pid=fork();
+                if(pid<0){ perror("fork"); return 1; }
+                if(pid==0){
+                    gchild=true; mine2=j;
+                    omp_set_num_threads((int)g_l2_threads);
+                    { char bb[16]; snprintf(bb,sizeof bb,"%u",g_l2_threads);
+                      setenv("OMP_NUM_THREADS", bb, 1); }
+                    break;
+                }
+                run2.push_back(pid);
+                reap(g_l2_conc);
+            }
+            if(!gchild){
+                reap(1);
+                // This group child produced no archive of its own -- its
+                // members did. _exit, not exit: it shares the parent's stdio
+                // buffers and must neither flush them nor run destructors.
+                fflush(stderr); _exit(0);
+            }
+        }
+        // grandchild: adopt one candidate. Everything per-candidate that the
+        // level-1 fork used to set is set HERE instead, including the chdir --
+        // which is why level 1 must not chdir, and why it was verified that
+        // nothing is written to the cwd between the two fork points.
+        const size_t ci = g_l2_members[mine2];
+        const std::string ddir = g_l2_base + ".cand" + std::to_string(ci) + ".d";
+        mkdir(ddir.c_str(), 0755);
+        setenv("MAXMAP",  std::to_string(g_l2_maxmaps[mine2]).c_str(), 1);
+        setenv("ARCHIVE", (g_l2_base + ".cand" + std::to_string(ci)).c_str(), 1);
+        // CAPS_CALL outputs have the SAME hazard the dump files had: every
+        // candidate writes the caller's VCF (and contig dump) to one shared
+        // path, so what survives belongs to whichever ran LAST, not to the
+        // winner -- and which that is depends on scheduling, so the result was
+        // not even reproducible run to run. Each candidate therefore writes its
+        // own file at an absolute path resolved from the cwd captured BEFORE
+        // any chdir (so a relative path the caller passed still refers to the
+        // directory they meant), and the parent promotes the winner's.
+        if(CAPS_CALL){
+            auto abso=[&](const char* q)->std::string{
+                std::string t(q);
+                return (!t.empty() && t[0]=='/') ? t : (g_l2_cwd + "/" + t);
+            };
+            if(const char* cv = getenv("CALL_VCF"))
+                setenv("CALL_VCF", (abso(cv) + ".cand" + std::to_string(ci)).c_str(), 1);
+            else
+                setenv("CALL_VCF", (g_l2_cwd + "/out.vcf.cand" + std::to_string(ci)).c_str(), 1);
+            if(const char* dc = getenv("CAPS_DUMP_CONTIGS"))
+                setenv("CAPS_DUMP_CONTIGS", (abso(dc) + ".cand" + std::to_string(ci)).c_str(), 1);
+        }
+        if(chdir(ddir.c_str())!=0) perror("chdir");
+        fprintf(stderr,"  [a3] cand %zu: MAXMAP=%u MINOV=%s (round 2 shared)\n",
+                ci, g_l2_maxmaps[mine2], getenv("MINOV")?getenv("MINOV"):"?");
+    }
     // ── NEAR-MISS: translate to pg coordinates and cluster ──────────────────
     // Each observation is (tail read a, offset of the differing base within a).
     // ppos[a] is a's start in the pseudogenome, so ppos[a]+offset is the pg
