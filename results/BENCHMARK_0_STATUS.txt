@@ -1,10 +1,10 @@
 ╔══════════════════════════════════════════════════════════════════════╗
 ║  BENCHMARK 0 — PRE-RUN STATUS                                        ║
 ╚══════════════════════════════════════════════════════════════════════╝
-generated : 2026-09-05 05:59:06 IST
+generated : 2026-09-05 06:15:58 IST
 host      : e2e-147-20  |  user: root
 repo      : /root/arcs-clean/c_star_pg_advance
-branch    : c_star_pg_advance  commit: 0ee1d28
+branch    : c_star_pg_advance  commit: 5faff35
 tree      : DIRTY (uncommitted changes present)
 
 ════════════════════════════════════════════════════════════════════════
@@ -108,3 +108,77 @@ tree      : DIRTY (uncommitted changes present)
   silently altering kc (it has happened twice in this project).
 
   running sanity window (HG002 r2, ~1 min) ...
+  sanity wall time                     19 s
+  [ OK ]   k-mer multiset identity            kc=1063607 (expected 1063607)
+  [ OK ]   SNV F1 unchanged                   F1=0.886 P=0.944 R=0.836
+
+════════════════════════════════════════════════════════════════════════
+ 7. CONFIGURATION — the exact values that will run
+════════════════════════════════════════════════════════════════════════
+  Every value below is a DEFAULT compiled into the binary. If one has
+  drifted from the validated value, every published number is at risk.
+
+  PARAMETER                  SHIPPED        VALIDATED  BASIS
+  ----------------------------------------------------------------------------------------
+  MINC                       2              2          structural (drop singletons)
+  MINQ                       20             20         phred convention
+  MAXPOLY                    1              1          swept: beats DiscoSNP++ P=3 held-out
+  HALFW                      31             31         held-out rejected the derived 44
+  ----------------------------------------------------------------------------------------
+  env CAPS_DBG_IBFS                    unset (correct)
+  env CAPS_KC_FREQMIN                  unset (correct)
+  env CAPS_DBG_STR                     unset (correct)
+  env CAPS_DBG_SB                      unset (correct)
+  env CAPS_DBG_INDEL                   unset (correct)
+
+  L3 memory ceiling  : 60% of measured MemAvailable, spill auto-enables
+  L15 parallelism    : traversal parallel (was serial under CAPS_DBG_SB)
+  L2 freq minimizers : OFF (measured +14% volume — rejected)
+  spill format       : superkmer (key-only spill silently drops 30% of k-mers)
+
+════════════════════════════════════════════════════════════════════════
+ 8. WHAT BENCHMARK 1 WILL RUN
+════════════════════════════════════════════════════════════════════════
+  PHASE 1 — Claim 1: all 19 datasets, ONE AT A TIME
+      per dataset: encode(8-candidate adaptive sweep, concurrent) -> archive KEPT
+                   decode -> lossless compare -> scratch deleted
+                   SPRING compress+decompress, Genozip compress+decompress
+      tables: T1 archive size | T2 wall time + peak RAM (all 3 tools)
+      est: ~1-2 h (encoder is 5.4x faster as of 9e39e23)  archives kept: ~7 GB
+
+  PHASE 2 — Claim 2: 4 GIAB human sets only
+      per set: our caller (compress+call, one pass) -> DiscoSNP++ -> Kmer2SNP
+               -> rtg vcfeval against GIAB truth
+      tables: T3 het-SNV F1 (3-way) | T4 coverage sweep 10/15/20/30x
+      est: 3-4 h
+
+  PHASE 3 — Claim 3: reads the archives Phase 1 kept
+      T6a export   vs SPAdes            — 6 datasets (one per kingdom)
+      T6b coverage vs bwa+samtools+mosdepth — same 6
+      T6c query    — ALL 19 (no competitor exists)
+      est: 2-2.5 h
+
+  TOTAL ESTIMATE: 6-9 h sequential. Peak transient disk ~35 GB, peak RAM ~20 GB.
+  NOTE: timings are ESTIMATES from two anchors (E. coli encode 32.46 s,
+        HG002 chr20 25 min). Phase 1's first dataset replaces them with
+        a measured rate.
+
+════════════════════════════════════════════════════════════════════════
+ 9. VERDICT
+════════════════════════════════════════════════════════════════════════
+  checks passed                        31
+  warnings                             0
+  failures                             0
+  preflight took                       41 s
+
+  ╔════════════════════════════════════════════════════════════════════╗
+  ║   VERDICT: GO                                                      ║
+  ║   Every required tool, dataset, reference and truth set is present.║
+  ║   The code reproduces its validated k-mer set and F1.              ║
+  ╚════════════════════════════════════════════════════════════════════╝
+
+  START WITH:  bash scripts/benchmark_1_run.sh
+  (add SANITY_ONLY=1 to run just the first dataset and get a measured rate)
+
+  status file: /root/arcs-clean/c_star_pg_advance/results/BENCHMARK_0_STATUS.txt
+  finished   : 2026-09-05 06:16:39

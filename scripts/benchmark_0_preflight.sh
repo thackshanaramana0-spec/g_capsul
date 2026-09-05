@@ -188,14 +188,33 @@ H="$HERE/include/caps_caller.h"
 cfg(){ printf "  %-26s %-14s %-10s %s\n" "$1" "$2" "$3" "$4" | tee -a "$OUT"; }
 cfg "PARAMETER" "SHIPPED" "VALIDATED" "BASIS"
 say "  ----------------------------------------------------------------------------------------"
-chk_default(){ local name="$1" pat="$2" want="$3" basis="$4" got
-    got=$(grep -oP "$pat" "$H" 2>/dev/null | head -1)
+# These declarations span several lines (env override on one, default on the
+# next), so a line-oriented grep cannot see the default and reports "?" --
+# which is a FALSE drift warning, and a warning nobody can act on is worse
+# than none. Extraction reads the whole file and takes the default after the
+# last ':' of the declaration.
+chk_default(){ local name="$1" want="$2" basis="$3" got
+    got=$(python3 - "$H" "$name" <<'PYEOF'
+import re,sys
+src=open(sys.argv[1]).read(); name=sys.argv[2]
+# Anchor on the DECLARATION, not the first textual match: these names also
+# appear inside comment tables (e.g. "HALFW=31   63 bp   TP=336"), and matching
+# a comment produced a bogus "?" and a false drift warning.
+m=re.search(r'const\s+\w+(?:\s+\w+)?\s+'+re.escape(name)+r'\s*=\s*(.*?);', src, re.S)
+if m:
+    tail=m.group(1)
+    d=re.findall(r':\s*([0-9]+)\s*u?\s*$', tail.strip(), re.S)
+    if not d: d=re.findall(r':\s*([0-9]+)', tail)
+    print(d[-1] if d else "?")
+else: print("?")
+PYEOF
+)
     cfg "$name" "${got:-?}" "$want" "$basis"
     [ "${got:-x}" = "$want" ] || { warn "config drift: $name" "shipped=${got:-?} validated=$want"; }; }
-chk_default "MINC"    'MINC\s*=[^;]*?:\s*\K[0-9]+'                    2  "structural (drop singletons)"
-chk_default "MINQ"    'MINQ\s*=[^;]*?:\s*\K[0-9]+'                    20 "phred convention"
-chk_default "MAXPOLY" 'MAXPOLY\s*=[^;]*?:\s*\K[0-9]+'                 1  "swept: beats their P=3 held-out"
-chk_default "HALFW"   'CAPS_DBG_HALFW"\)\s*\n?\s*\?[^:]*:\s*\K[0-9]+' 31 "held-out rejected 44"
+chk_default "MINC"    2  "structural (drop singletons)"
+chk_default "MINQ"    20 "phred convention"
+chk_default "MAXPOLY" 1  "swept: beats DiscoSNP++ P=3 held-out"
+chk_default "HALFW"   31 "held-out rejected the derived 44"
 say "  ----------------------------------------------------------------------------------------"
 for v in CAPS_DBG_IBFS CAPS_KC_FREQMIN CAPS_DBG_STR CAPS_DBG_SB CAPS_DBG_INDEL; do
     if [ -n "${!v:-}" ]; then warn "env override active: $v=${!v}" "this is NOT the validated configuration"
@@ -210,11 +229,11 @@ say "  spill format       : superkmer (key-only spill silently drops 30% of k-me
 # ── 8. PLAN ───────────────────────────────────────────────────────────────
 hdr "8. WHAT BENCHMARK 1 WILL RUN"
 say "  PHASE 1 — Claim 1: all 19 datasets, ONE AT A TIME"
-say "      per dataset: encode(4-candidate adaptive) -> archive KEPT"
+say "      per dataset: encode(8-candidate adaptive sweep, concurrent) -> archive KEPT"
 say "                   decode -> lossless compare -> scratch deleted"
 say "                   SPRING compress+decompress, Genozip compress+decompress"
 say "      tables: T1 archive size | T2 wall time + peak RAM (all 3 tools)"
-say "      est: 3.5-5 h        archives retained: ~7 GB"
+say "      est: ~1-2 h (encoder is 5.4x faster as of 9e39e23)  archives kept: ~7 GB"
 say ""
 say "  PHASE 2 — Claim 2: 4 GIAB human sets only"
 say "      per set: our caller (compress+call, one pass) -> DiscoSNP++ -> Kmer2SNP"
@@ -228,7 +247,7 @@ say "      T6b coverage vs bwa+samtools+mosdepth — same 6"
 say "      T6c query    — ALL 19 (no competitor exists)"
 say "      est: 2-2.5 h"
 say ""
-say "  TOTAL ESTIMATE: 9-12 h sequential. Peak transient disk ~35 GB, peak RAM ~20 GB."
+say "  TOTAL ESTIMATE: 6-9 h sequential. Peak transient disk ~35 GB, peak RAM ~20 GB."
 say "  NOTE: timings are ESTIMATES from two anchors (E. coli encode 32.46 s,"
 say "        HG002 chr20 25 min). Phase 1's first dataset replaces them with"
 say "        a measured rate."
