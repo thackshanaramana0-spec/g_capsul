@@ -152,11 +152,25 @@ contigs in the SAME process:
 Identical anchor count, identical keys, identical values. The selections are
 equivalent.
 
-The 4-record difference came from comparing two SEPARATE encoder runs, and this
-caller is **nondeterministic run-to-run** -- a fact established earlier the same
-day (bubble ids shift with thread scheduling) and then not applied when reading
-this A/B. Comparing uncontrolled runs and attributing the delta to the patch was
-the error, not the patch.
+**AND THAT EXPLANATION WAS ALSO WRONG — retracted a second time.** Repeating
+both builds shows they are each DETERMINISTIC and disagree by exactly 4:
+
+    original build:  300, 300
+    flat build:      296, 296
+
+So it is not run-to-run nondeterminism. The anchor SET is identical (proven
+above); the difference is downstream.
+
+**Root cause, found:** `for (auto& kv : pkidx)` iterates an `unordered_map`,
+whose order depends on INSERTION HISTORY -- and the flat build inserts sorted by
+k-mer where the original inserted by contig. `ploc` records one location per
+event with first-writer-wins, so anchor order decides which location an event
+gets, and 4 events resolve differently.
+
+**Fix: sort the anchors by (contig, pos, key) before the loop.** The result then
+depends only on the data, not on container bucket layout. That is a correctness
+improvement in its own right -- the ORIGINAL was quietly depending on an
+implementation detail -- and it makes both builds agree.
 
 Two hypotheses for the 4 lost indels were tested and REFUTED:
 1. *Selection predicate differs.* Replayed both rules on 400k synthetic
