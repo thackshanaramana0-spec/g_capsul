@@ -185,7 +185,8 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
                        std::vector<uint8_t>* out_qflat = nullptr,
                        std::vector<std::string>* out_qbits = nullptr,
                        int qbits_qmin = 20,
-                       std::vector<std::string>* out_qtext = nullptr){
+                       std::vector<std::string>* out_qtext = nullptr,
+                       std::vector<std::string>* out_contigs = nullptr){
     auto _dt0 = std::chrono::steady_clock::now();
     uint64_t PGLEN=0, MAINEND=0; uint32_t MINMEM=0; std::vector<Stream> ss;
     if(!read_capsule(arcpath,PGLEN,MAINEND,MINMEM,ss)){ fprintf(stderr,"bad archive\n"); return 1; }
@@ -335,6 +336,42 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
     fprintf(stderr,"  pg rebuilt: %llu bytes from %zu refs\n",(unsigned long long)PGLEN,NR);
     if(getenv("DUMP_PG")){
         FILE* f=fopen("pg_full_dec.txt","wb"); fwrite(pg.data(),1,pg.size(),f); fclose(f);
+    }
+
+    // ── CONTIGS HANDED BACK IN MEMORY ───────────────────────────────────────
+    // The caller used to get its contigs by invoking this whole function a
+    // SECOND time in "export" mode: re-open the archive, re-decode the ref and
+    // literal streams, re-apply the extension mismatches, rebuild the same
+    // ~148 MB pseudogenome, write ~450k FASTA records to disk, and then parse
+    // that file back into strings. 5.60 s of export plus 0.97 s of re-parse,
+    // for a pseudogenome that is sitting in `pg` right here.
+    //
+    // Same contigs, character for character: this is the export loop's own
+    // span walk, including its skip of empty or out-of-range spans, taking
+    // substrings of pg instead of writing 60-column FASTA that the caller
+    // would immediately re-concatenate.
+    if(out_contigs && has("contig_spans")){
+        auto sb = dec("contig_spans");
+        size_t p2 = 0;
+        auto getv = [&]() -> uint64_t {                 // LEB128
+            uint64_t x = 0; int sh = 0;
+            while (p2 < sb.size()) { uint8_t b = sb[p2++];
+                x |= (uint64_t)(b & 0x7F) << sh;
+                if (!(b & 0x80)) break; sh += 7; }
+            return x;
+        };
+        const uint64_t nsp = getv();
+        uint64_t prev = 0;
+        out_contigs->reserve((size_t)nsp);
+        for (uint64_t i = 0; i < nsp; ++i) {
+            const uint64_t gap = getv(), len = getv();
+            const uint64_t a0 = prev + gap, b0 = a0 + len;
+            prev = b0;
+            if (b0 > pg.size() || len == 0) continue;
+            out_contigs->emplace_back((const char*)pg.data() + a0, (size_t)len);
+        }
+        fprintf(stderr, "[export] %zu contigs (from contig_spans) handed over in memory\n",
+                out_contigs->size());
     }
 
     // ── CLAIM 3 / export ────────────────────────────────────────────────────
@@ -843,13 +880,15 @@ static int capsule_call_from_archive(const std::string& in, const std::string& o
     std::vector<uint8_t> rflat; std::vector<size_t> rowoff;
     std::vector<std::string> qbits;
     std::vector<std::string> qtext_mem;
+    std::vector<std::string> contigs_mem;
     // In WANT_INDELS mode the full caller reverses `quals[oi]` PER BASE, so it
     // needs quality as TEXT, not as the Q>=QMIN bitmap the graph path uses.
     // Requesting bitmaps here would be silently wrong rather than an error.
     if(capsule_decode_all(in.c_str(), wd, rp, std::string(), std::string(),
                           &rflat, &rowoff, nullptr,
                           WANT_INDELS ? nullptr : &qbits, QMIN,
-                          WANT_INDELS ? &qtext_mem : nullptr) != 0){
+                          WANT_INDELS ? &qtext_mem : nullptr,
+                          WANT_INDELS ? &contigs_mem : nullptr) != 0){
         fprintf(stderr,"[call] decode failed\n"); return 1; }
 
     _lap("1 decode reads+qual");
@@ -857,9 +896,15 @@ static int capsule_call_from_archive(const std::string& in, const std::string& o
     // two concatenated pseudogenome records -- build_substrate collapses and
     // re-places reads per contig, so 2 giant records is a different operation.
     if (WANT_INDELS) setenv("CAPSULE_EXPORT_CONTIGS", "1", 1);
-    fprintf(stderr, "[call] 2/4 exporting the retained pseudogenome for contigs\n");
-    if(capsule_decode_all(in.c_str(), cf, std::string(), "export", std::string()) != 0)
-        fprintf(stderr,"[call] export failed -- ploidy gate will see no contigs\n");
+    // Step 1 hands the contigs back in memory when the archive carries
+    // contig_spans, so the second full archive pass runs only as a fallback.
+    if (contigs_mem.empty()) {
+        fprintf(stderr, "[call] 2/4 exporting the retained pseudogenome for contigs\n");
+        if(capsule_decode_all(in.c_str(), cf, std::string(), "export", std::string()) != 0)
+            fprintf(stderr,"[call] export failed -- ploidy gate will see no contigs\n");
+    } else {
+        fprintf(stderr, "[call] 2/4 contigs came back with step 1 -- no second archive pass\n");
+    }
 
     _lap("2 export pseudogenome");
     fprintf(stderr, "[call] 3/4 packing reads and quality (capspack, shared with the encoder)\n");
@@ -900,7 +945,9 @@ static int capsule_call_from_archive(const std::string& in, const std::string& o
     }
     _lap("3 read back + pack");
     capscall::CallData cd;
-    {   // contigs from the exported pseudogenome; the ploidy gate samples these
+    if(!contigs_mem.empty()){
+        cd.contigs.swap(contigs_mem);
+    } else {   // contigs from the exported pseudogenome; the ploidy gate samples these
         std::ifstream fc(cf);
         std::string line, cur;
         while(std::getline(fc, line)){
