@@ -5467,7 +5467,34 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             // cannot be used to index a different substrate -- doing so
             // segfaulted immediately. This channel builds its OWN anchor index
             // over whichever substrate it uses.
-            std::unordered_map<uint64_t, std::pair<uint32_t,uint32_t>> pkidx;
+            // FLAT SORTED MAP, NOT A HASH MAP. `pv` is already sorted by key
+            // and the selection walk below emits entries in that order, so the
+            // result is inherently sorted -- it was being poured into an
+            // unordered_map (21.6M nodes, one allocation each) and then
+            // ITERATED, which is pointer-chasing through 21.6M nodes.
+            //
+            // Same reasoning as the collapse_contigs container swap that took
+            // the run 207.6 -> 170.9 s: the semantics here need ordered append
+            // plus membership, both of which a sorted array does better.
+            // Lookups are binary search, but they are guarded by the Bloom
+            // bitset so only a small fraction ever reach it.
+            struct FlatAnchorMap {
+                std::vector<uint64_t> k;
+                std::vector<std::pair<uint32_t,uint32_t>> v;
+                inline void append(uint64_t key, uint32_t ci, uint32_t pos) {
+                    k.push_back(key); v.emplace_back(ci, pos);
+                }
+                inline size_t size() const { return k.size(); }
+                inline bool count(uint64_t key) const {
+                    return std::binary_search(k.begin(), k.end(), key);
+                }
+                inline const std::pair<uint32_t,uint32_t>* find_ptr(uint64_t key) const {
+                    auto it = std::lower_bound(k.begin(), k.end(), key);
+                    if (it == k.end() || *it != key) return nullptr;
+                    return &v[(size_t)(it - k.begin())];
+                }
+                void reserve(size_t n) { k.reserve(n); v.reserve(n); }
+            } pkidx;
             {
                 // ── FLAT SORTED ARRAY, NOT THREE HASH MAPS ──────────────────
                 // MEASURED: this block is ~92% of indel_pass (480 s of 522 s on
@@ -5541,7 +5568,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                     const size_t occ = b0 - a0;
                     // first-seen entry decides contig/pos/orientation
                     if (pv[a0].fwd == 0 && (int)occ <= PUNIQ && occ == 1)
-                        pkidx[pv[a0].k] = { pv[a0].ci, pv[a0].pos };
+                        pkidx.append(pv[a0].k, pv[a0].ci, pv[a0].pos);
                     a0 = b0;
                 }
                 fprintf(stderr, "[PCLUSTER] %zu 25-mers -> %zu unique forward anchors\n",
@@ -5569,9 +5596,10 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                     for (auto it=ok2.begin(); it!=ok2.end(); )
                         if (ocount[it->first]!=1) it=ok2.erase(it); else ++it;
                     size_t onlyA=0, onlyB=0, valdiff=0;
-                    for (auto& kv : ok2) { auto it=pkidx.find(kv.first);
-                        if (it==pkidx.end()) ++onlyA; else if (it->second!=kv.second) ++valdiff; }
-                    for (auto& kv : pkidx) if (!ok2.count(kv.first)) ++onlyB;
+                    for (auto& kv : ok2) { const auto* pv2 = pkidx.find_ptr(kv.first);
+                        if (!pv2) ++onlyA; else if (*pv2 != kv.second) ++valdiff; }
+                    for (size_t ki = 0; ki < pkidx.k.size(); ++ki)
+                        if (!ok2.count(pkidx.k[ki])) ++onlyB;
                     fprintf(stderr, "[PCLUSTER-VERIFY] original=%zu flat=%zu | only_orig=%zu "
                                     "only_flat=%zu value_diff=%zu\n",
                             ok2.size(), pkidx.size(), onlyA, onlyB, valdiff);
@@ -5636,9 +5664,10 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 pbf_bits = (size_t)1 << (64 - __builtin_clzll(std::max<size_t>(1, pkidx.size() * 16)));
                 pbf.assign(pbf_bits / 64 + 1, 0ULL);
                 const size_t mask = pbf_bits - 1;
-                for (const auto& kv : pkidx) {
-                    const uint64_t h1 = kv.first * 0x9E3779B97F4A7C15ULL;
-                    const uint64_t h2 = (kv.first ^ (kv.first >> 29)) * 0xBF58476D1CE4E5B9ULL;
+                for (size_t ki = 0; ki < pkidx.k.size(); ++ki) {
+                    const uint64_t key = pkidx.k[ki];
+                    const uint64_t h1 = key * 0x9E3779B97F4A7C15ULL;
+                    const uint64_t h2 = (key ^ (key >> 29)) * 0xBF58476D1CE4E5B9ULL;
                     pbf[((h1 >> 20) & mask) >> 6] |= 1ULL << (((h1 >> 20) & mask) & 63);
                     pbf[((h2 >> 20) & mask) >> 6] |= 1ULL << (((h2 >> 20) & mask) & 63);
                 }
@@ -5731,9 +5760,9 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             // pvotes/panch are set inserts (order-free) and ploc now keeps the
             // smallest (contig,pos) rather than the last writer, so all three
             // merge deterministically regardless of which thread saw an anchor.
-            std::vector<std::pair<uint64_t,std::pair<uint32_t,uint32_t>>> panch_v;
-            panch_v.reserve(pkidx.size());
-            for (const auto& kv : pkidx) panch_v.push_back(kv);
+            // pkidx is already a flat sorted array, so the anchor loop indexes
+            // it directly -- the separate panch_v copy is gone.
+            const size_t panch_n = pkidx.size();
             int pc_nt = 1;
             #ifdef _OPENMP
             pc_nt = omp_get_max_threads();
@@ -5741,7 +5770,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             std::vector<std::map<std::tuple<std::string,int,std::string>, std::unordered_set<uint32_t>>> tvotes((size_t)pc_nt), tanch((size_t)pc_nt);
             std::vector<std::map<std::tuple<std::string,int,std::string>, std::pair<uint32_t,uint32_t>>> tloc((size_t)pc_nt);
             #pragma omp parallel for schedule(dynamic, 4096)
-            for (long long ai = 0; ai < (long long)panch_v.size(); ++ai) {
+            for (long long ai = 0; ai < (long long)panch_n; ++ai) {
                 int ptid = 0;
                 #ifdef _OPENMP
                 ptid = omp_get_thread_num();
@@ -5749,12 +5778,12 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 auto& pvotes = tvotes[(size_t)ptid];
                 auto& panch  = tanch[(size_t)ptid];
                 auto& ploc   = tloc[(size_t)ptid];
-                const auto& kv = panch_v[(size_t)ai];
-                uint32_t ccid = kv.second.first;
-                uint32_t cpos = kv.second.second;
+                const uint64_t akey = pkidx.k[(size_t)ai];
+                uint32_t ccid = pkidx.v[(size_t)ai].first;
+                uint32_t cpos = pkidx.v[(size_t)ai].second;
                 const std::string& cc2 = pc_cd.contigs[ccid];
                 if (cpos < (uint32_t)LW) continue;
-                auto rit = rc_reads.find(kv.first);
+                auto rit = rc_reads.find(akey);
                 if (rit == rc_reads.end()) continue;
                 for (auto& pr : rit->second) {
                     if (std::getenv("CAPS_PCDBG")) ++g_pc_seen;
@@ -5865,7 +5894,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 }
             }
             { decltype(tvotes)().swap(tvotes); decltype(tanch)().swap(tanch); decltype(tloc)().swap(tloc);
-              decltype(panch_v)().swap(panch_v); }
+              }
             if (std::getenv("CAPS_PCDBG")) {
                 std::map<int,int> hist;
                 for (auto& kv : pvotes) hist[(int)kv.second.size()]++;
