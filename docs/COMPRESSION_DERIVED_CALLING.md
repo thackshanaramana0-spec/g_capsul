@@ -403,6 +403,53 @@ rejected overlaps, and nothing else in this project reaches them -- but at
 is missing is not another threshold on the existing evidence; it is evidence
 that distinguishes two real adjacent variants from two coincident errors.
 
+## OPTION 0 -- calling from a STORED archive. THIS IS THE ARCS CLAIM.
+
+`capsule_decode call <in.capsule> <out.vcf>` -- archive in, VCF out, no FASTQ
+anywhere. It decodes reads+quality from the archive AND exports the retained
+pseudogenome from the same file, then runs the caller.
+
+Measured on full HG002 chr20, scored identically to every other number here:
+
+| | A (call at compress time) | **Option 0 (from stored archive)** |
+|---|---|---|
+| input | 3.99 GB FASTQ | **0.54 GB .capsule, FASTQ absent** |
+| TP / FP / FN | 36,855 / 2,655 / 7,720 | 36,855 / 2,656 / 7,720 |
+| P / R | 0.9328 / 0.8268 | 0.9328 / 0.8268 |
+| **F1** | **0.8766** | **0.8766** |
+| time | 106 s caller | 254.9 s (decode + call) |
+| RAM | 6.03 GB | **5.43 GB** |
+
+**Identical F1, identical TP and FN, one FP of 2,655 different** -- the caller's
+known bubble-ordering nondeterminism, not a divergence. `kc nodes=140,719,632`
+matches A exactly: the graph built from archive-decoded reads is the same graph.
+
+**This is the Claim 2 sentence that survives a reviewer:**
+
+> Given only a 0.54 GB CAPSULE archive -- no FASTQ, no reference, no index --
+> the tool reproduces its full het-SNV call set at F1 0.8766, decoding the reads
+> AND serving back the retained pseudogenome from that same file.
+
+SPRING and PgRC2 cannot make it: both must first materialise a ~4 GB FASTQ, and
+neither retains an assembly at all. This is Assemble -> Retain -> Compress ->
+Serve demonstrated end to end, and unlike E it is backed by a working number.
+
+**Scope, stated precisely.** Option 0 supports "the archive is SELF-SUFFICIENT".
+It does NOT support "the archive's structure computes the calls" -- it
+decompresses internally and runs the bubble caller on decoded reads, and the
+exported pseudogenome still only feeds the ploidy gate. The first sentence is
+defensible; the second is E, and E does not work.
+
+**Two caveats for the paper:**
+1. 2.4x the time (254.9 s vs 106 s): decoding 12.6M reads is the price. RAM is
+   LOWER (5.43 vs 6.03 GB). A storage-first workflow, not a speed win.
+2. `export` collapses the pseudogenome to 2 contigs (`pg_main`, `pg_second`)
+   where the in-memory path passes 451,760. Harmless here because the ploidy
+   gate only samples them, but it is a latent difference between the paths.
+3. The `call` mode does NOT set `CAPS_DUMP_CONTIGS`, so out of the box its VCF
+   is in contig coordinates with no contig sequences emitted -- unliftable and
+   therefore unscoreable. Set it externally, or fix the mode.
+
 ## Summary of every configuration measured
 
 | config | what | F1 | vs A |
