@@ -311,6 +311,10 @@ static qlc::Encoded g_QL;  static bool g_QL_done = false;
 // indel-bubble mechanism needs genuinely separate haplotype contigs, which a
 // single merged pg coordinate space would erase). Zero cost when unset.
 static const bool CAPS_CALL  = getenv("CAPS_CALL")  != nullptr;
+// Near-miss base-quality mask: built only when the near-miss VCF is requested,
+// so no default-path or plain-CAPS_CALL run pays its ~222 MB.
+static const bool NM_QUAL    = getenv("CAPS_NM_VCF") != nullptr;
+static const int  NM_MINQ    = getenv("CAPS_NM_MINQ") ? atoi(getenv("CAPS_NM_MINQ")) : 20;
 static std::vector<std::pair<uint64_t,uint64_t>> g_contig_spans;   // [start,end) in pg coords
 static std::string g_input_path;
 static void phase(const char* name){
@@ -484,6 +488,21 @@ int main(int argc,char** argv){
     std::vector<uint64_t> rpk;            // 32 bases per uint64, base 0 in the top bits
     std::vector<uint64_t> woff;           // starting WORD of each read
     std::vector<uint16_t> rlen;           // length in bases (uint16: >255bp reads are real, uint8 silently dropped them)
+    // ── PER-BASE QUALITY MASK (near-miss calling only) ─────────────────────
+    // MEASURED MOTIVATION. The encoder's calling channels carry NO base
+    // quality, so a sequencing error and a heterozygous allele are literally
+    // the same observation to them. That is why mem_extmm reaches recall
+    // 0.9009 but precision 0.036, and why every ANCHOR-quality filter
+    // (MLEN/MMCNT/RC) selects for easy loci instead: none of them says
+    // anything about the base itself. The caller separates exactly this way
+    // (QMIN=20, caps_caller.h), and the quality is already being read here.
+    //
+    // One bit per base: "this base is >= CAPS_NM_MINQ". It reuses woff, the
+    // 2-bit packing's own offset array -- base j of read u is bit
+    // woff[u]*32 + j -- so it needs no second index and costs rpk.size()/2
+    // words (~222 MB at full chr20). Built ONLY when the near-miss VCF is
+    // requested, so no default-path run pays for it.
+    std::vector<uint64_t> qmask;
     // STAGE 22 (their stage 6, OrderInfo): to restore the original file order we
     // need, for every ORIGINAL read, where its sequence sits in the pg. Dedup
     // collapses duplicates, so the original->unique map has to be kept too.
@@ -595,6 +614,26 @@ int main(int argc,char** argv){
                 out.push_back(v);
             }
         };
+        // Record which bases of a newly-seen unique read are >= NM_MINQ.
+        // Called immediately after the read is packed, so rpk.size() already
+        // includes it and woff.back() is its start word: base j is bit
+        // woff[u]*32 + j, the same addressing the 2-bit packing uses.
+        // Only the FIRST occurrence of a duplicate group is recorded; copies
+        // are identical sequence, and an error would have to recur at the same
+        // base in every copy to survive, which is what makes the mask useful.
+        auto qmark=[&](uint64_t w0, size_t len, const std::string& q){
+            const size_t needw=(rpk.size()+1)/2;
+            if(qmask.size()<needw) qmask.resize(needw,0);
+            const uint64_t base0=w0*32ULL;
+            const size_t nq=std::min(len,q.size());
+            const uint8_t thr=(uint8_t)(33+NM_MINQ);       // Phred+33
+            for(size_t j=0;j<nq;++j){
+                if((uint8_t)q[j]>=thr){
+                    const uint64_t bi=base0+j;
+                    if((bi>>6)<qmask.size()) qmask[bi>>6]|=(1ULL<<(bi&63));
+                }
+            }
+        };
         while(std::getline(f,a)&&std::getline(f,b)&&std::getline(f,c)&&std::getline(f,d)){
             ++n_in;
             // STAGE 105 -- STRUCTURAL: N-containing reads used to bypass
@@ -638,6 +677,7 @@ int main(int argc,char** argv){
                 woff.push_back(rpk.size());
                 rpk.insert(rpk.end(),tmpw.begin(),tmpw.end());
                 rlen.push_back((uint16_t)b.size());
+                if(NM_QUAL) qmark(woff.back(), b.size(), d);
                 continue;
             }
             const uint64_t h64=fnv(b.data(),(uint32_t)b.size());
@@ -667,6 +707,7 @@ int main(int argc,char** argv){
                 woff.push_back(rpk.size());
                 rpk.insert(rpk.end(),tmpw.begin(),tmpw.end());
                 rlen.push_back((uint16_t)b.size());
+                if(NM_QUAL) qmark(woff.back(), b.size(), d);
             }
         }
         // These three were the hole in the huge-page work: built by push_back,
@@ -1026,12 +1067,18 @@ int main(int argc,char** argv){
     // targets inside sweep() AND are reported after round 2 returns.
     size_t nm1=0, nm2=0;
     // alt = the base the OTHER haplotype's read carries at that position (2-bit)
-    struct NMObs { uint32_t read_a, pos_in_a; uint8_t alt; };
+    // read_b is carried because the ALLELE evidence is the number of DISTINCT
+    // reads supporting the alt, not the number of (a,b) pair observations: one
+    // read a pairs with many partners b at the same locus, which inflated the
+    // first version of this counter to AF>1 on 43.7% of sites.
+    struct NMObs { uint32_t read_a, pos_in_a, read_b; uint8_t alt; uint8_t hq; };
     std::vector<NMObs> nm_obs;
     // Minimum verified overlap for a near-miss to count, as a FRACTION of Lmax
     // rather than a fixed constant (standing rule 1): at Lmax=148 this is 74
     // bases, and one mismatch across 74+ otherwise-exact bases is not a chance
     // collision. Overridable so the threshold can be swept, not guessed.
+    // Quality mask is built only when the near-miss VCF is being emitted.
+    // (Declared here so the harvest and the parse loop agree on the gate.)
     uint32_t nm_minL=Lmax/2;
     if(const char* e=getenv("CAPS_NM_MINL")) nm_minL=(uint32_t)atoi(e);
     std::vector<uint32_t> nxt,prv,ovl,ch_h,ch_t;
@@ -1279,7 +1326,19 @@ int main(int argc,char** argv){
                                 // overlap starts at its own offset 0, so the
                                 // differing base is b[mmpos].
                                 const uint8_t altb=(uint8_t)((w32(woff[b]*32ULL+(uint32_t)mmpos)>>62)&3ULL);
-                                nm_local.push_back({a,(uint32_t)(off+mmpos),altb});
+                                // Is the ALT base itself well-sequenced? The
+                                // differing base lives in read b at mmpos, and
+                                // the mask is addressed by the same woff the
+                                // 2-bit packing uses. Recorded, NOT filtered:
+                                // the threshold is swept against vcfeval
+                                // afterwards rather than chosen here.
+                                uint8_t hqb=1;
+                                if(NM_QUAL){
+                                    const uint64_t qbi=woff[b]*32ULL+(uint64_t)mmpos;
+                                    hqb=(uint8_t)(((qbi>>6)<qmask.size())
+                                          ? ((qmask[qbi>>6]>>(qbi&63))&1ULL) : 0ULL);
+                                }
+                                nm_local.push_back({a,(uint32_t)(off+mmpos),b,altb,hqb});
                             }
                             else if(mm==2) ++nm2;
                         }
@@ -1963,11 +2022,14 @@ int main(int argc,char** argv){
         // key = pg position << 2 | alt base, so the same position with two
         // different alternate bases stays two candidates (a real multi-allelic
         // site) instead of being merged into one.
-        std::vector<uint64_t> sites; sites.reserve(nm_obs.size());
+        // (key, supporting read) so a site's support can be counted in DISTINCT
+        // reads. key = (pg position << 2) | alt.
+        std::vector<std::pair<uint64_t,uint64_t>> sites; sites.reserve(nm_obs.size());
         size_t unplaced=0;
         for(const auto& o : nm_obs){
             if(ppos[o.read_a]==UINT64_MAX){ ++unplaced; continue; }
-            sites.push_back(((ppos[o.read_a]+o.pos_in_a)<<2)|(uint64_t)o.alt);
+            sites.emplace_back(((ppos[o.read_a]+o.pos_in_a)<<2)|(uint64_t)o.alt,
+                               ((uint64_t)o.read_b<<1)|(uint64_t)(o.hq?1u:0u));
         }
         std::sort(sites.begin(),sites.end());
         size_t distinct=0; size_t d2=0,d3=0,d5=0,d10=0;
@@ -1998,15 +2060,28 @@ int main(int argc,char** argv){
             int32_t run=0;
             for(size_t q=0;q<nmcov.size();++q){ run+=nmcov[q]; nmcov[q]=run; }
         }
+        size_t hq_sites=0;
         for(size_t i=0;i<sites.size();){
-            size_t j=i; while(j<sites.size()&&sites[j]==sites[i]) ++j;
-            const size_t depth=j-i; ++distinct;
+            // One sorted pass per (pos,alt) group. Within it the entries are
+            // ordered by supporting read, so distinct-read support and its
+            // high-quality subset are both counted without a set.
+            const uint64_t kk=sites[i].first;
+            size_t j=i, depth=0, hqd=0; uint64_t prevb=UINT64_MAX; bool prevhq=false;
+            while(j<sites.size()&&sites[j].first==kk){
+                const uint64_t rb=sites[j].second>>1;
+                const bool hq=(sites[j].second&1ULL)!=0;
+                if(rb!=prevb){ ++depth; if(hq) ++hqd; prevb=rb; prevhq=hq; }
+                else if(hq && !prevhq){ ++hqd; prevhq=true; }   // read counts as HQ if ANY obs is
+                ++j;
+            }
+            ++distinct;
+            if(hqd) ++hq_sites;
             if(depth>=2)  ++d2;
             if(depth>=3)  ++d3;
             if(depth>=5)  ++d5;
             if(depth>=10) ++d10;
             if(nv && depth>=(size_t)NMD){
-                const uint64_t p=sites[i]>>2; const uint8_t alt=(uint8_t)(sites[i]&3ULL);
+                const uint64_t p=kk>>2; const uint8_t alt=(uint8_t)(kk&3ULL);
                 // locate the contig containing pg position p
                 auto it=std::upper_bound(g_contig_spans.begin(),g_contig_spans.end(),p,
                         [](uint64_t v,const std::pair<uint64_t,uint64_t>& s){ return v<s.first; });
@@ -2014,11 +2089,27 @@ int main(int argc,char** argv){
                     --it;
                     if(p<it->second && p<pg.size()){
                         const size_t cid=(size_t)(it-g_contig_spans.begin());
+                        // TRUE VARIANT ALLELE FRACTION for this data structure.
+                        // `tot` (nmcov) counts reads PLACED at this pg position
+                        // -- i.e. reads that agreed with the pseudogenome, the
+                        // REF-supporting haplotype. `depth` counts the distinct
+                        // reads that were REJECTED here for differing by one
+                        // base -- the ALT-supporting haplotype. The two
+                        // haplotypes are stitched into DIFFERENT places in the
+                        // pg, so there is no pileup at a locus and depth/tot is
+                        // unbounded (measured AF>1 on 43.7% of sites).
+                        // VAF = ALT/(ALT+REF) is bounded and is what a caller
+                        // actually tests: ~0.5 for a heterozygous site, and
+                        // ~1/coverage for a lone sequencing error.
                         const int32_t tot = (p<nmcov.size())? nmcov[p] : 0;
-                        const double af = tot>0 ? (double)depth/(double)tot : 0.0;
-                        fprintf(nv,"contig_%zu\t%llu\t.\t%c\t%c\t.\tPASS\tSVTYPE=SNV;SRC=nearmiss;DP=%zu;COV=%d;AF=%.4f\n",
+                        const double den = (double)depth + (double)tot;
+                        const double af  = den>0 ? (double)depth/den : 0.0;
+                        const double dhq = (double)hqd + (double)tot;
+                        const double afhq= dhq>0 ? (double)hqd/dhq : 0.0;
+                        fprintf(nv,"contig_%zu\t%llu\t.\t%c\t%c\t.\tPASS\t"
+                                   "SVTYPE=SNV;SRC=nearmiss;DP=%zu;COV=%d;AF=%.4f;HQ=%zu;AFHQ=%.4f\n",
                                 cid,(unsigned long long)(p-it->first+1),pg[p],"ACGT"[alt],depth,
-                                (int)tot,af);
+                                (int)tot,af,hqd,afhq);
                     }
                 }
             }
@@ -2043,6 +2134,10 @@ int main(int argc,char** argv){
                 nm_obs.size(),sites.size(),unplaced,distinct);
         fprintf(stderr,"[NEARMISS] sites by depth: >=2:%zu  >=3:%zu  >=5:%zu  >=10:%zu\n",
                 d2,d3,d5,d10);
+        if(NM_QUAL)
+            fprintf(stderr,"[NEARMISS] quality mask: minQ=%d  qmask=%zu MB  "
+                           "sites with >=1 high-quality observation: %zu of %zu\n",
+                    NM_MINQ, qmask.size()*8/1048576, hq_sites, distinct);
     }
 
     // The prefix index is not consulted anywhere in the mapping stage -- that
