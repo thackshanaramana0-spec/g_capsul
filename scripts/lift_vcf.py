@@ -168,6 +168,21 @@ _feat={}                      # eval-only: genome pos -> caller INFO
 rows=[]
 indel_rows=[]
 indel_rows_rev=0
+# EVAL-ONLY, OPT-IN (LIFT_KEEP_INFO=1). The lift hardcodes INFO to "." and
+# deduplicates output keys, which is correct for scoring a caller's VCF but
+# destroys two things a CANDIDATE channel needs: the per-record evidence fields
+# (DP/AF/MLEN/MMCNT) and the RECURRENCE -- how many source records mapped to the
+# same genome locus. For mem_extmm that recurrence IS the evidence: one record
+# is a sequencing error, many independent pg regions disagreeing at one locus is
+# a real variant. Counted here, emitted as RC=. Default path is byte-unchanged.
+_KEEPINFO = bool(os.environ.get('LIFT_KEEP_INFO'))
+_rc = {}
+_inf = {}
+def _note(gpos, gR, alt, info):
+    if not _KEEPINFO: return
+    k = (gpos, len(gR), len(alt))
+    _rc[k] = _rc.get(k, 0) + 1
+    if k not in _inf: _inf[k] = info if info else '.'
 for line in open(CALLS):
     if line[0]=='#':continue
     f=line.rstrip('\n').split('\t')
@@ -197,6 +212,7 @@ for line in open(CALLS):
         if alts:
             gt="/".join(str(i+1) for i in range(len(alts))) if len(alts)>1 else "0/1"
             rows.append((gpos,gR,",".join(alts),gt))
+            _note(gpos,gR,",".join(alts),_info)
             _feat[gpos]=_info
         continue
     if len(cref)!=1 or len(calt)!=1:
@@ -304,6 +320,7 @@ for line in open(CALLS):
     else:
         continue                                        # both == ref, not a variant
     rows.append((gpos,gR,alt,gt))
+    _note(gpos,gR,alt,_info)
     _feat[gpos]=_info          # eval-only: carry caller features for TP/FP analysis
 
 # COMMIT TO ONE INDEL CALL PER LOCUS.
@@ -367,7 +384,12 @@ with open(OUT,'w') as o:
         key=(gpos,len(gR),len(alt))                     # allow a SNV and an indel to coexist
         if key in seen: continue
         seen.add(key)
-        o.write("%s\t%d\t.\t%s\t%s\t30\tPASS\t.\tGT\t%s\n"%(CHROM,gpos,gR,alt,gt))
+        if _KEEPINFO:
+            _ii = _inf.get(key,'.')
+            o.write("%s\t%d\t.\t%s\t%s\t30\tPASS\t%s;RC=%d\tGT\t%s\n"
+                    %(CHROM,gpos,gR,alt,_ii,_rc.get(key,1),gt))
+        else:
+            o.write("%s\t%d\t.\t%s\t%s\t30\tPASS\t.\tGT\t%s\n"%(CHROM,gpos,gR,alt,gt))
 import os as _os
 with open(_os.path.splitext(OUT)[0]+".feat.tsv","w") as _ff:
     for _p,_i in sorted(_feat.items()): _ff.write("%d\t%s\n"%(_p,_i))

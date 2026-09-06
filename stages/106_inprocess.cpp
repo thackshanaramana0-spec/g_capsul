@@ -1114,6 +1114,15 @@ int main(int argc,char** argv){
     #pragma omp parallel
     {
     const bool me0 = (omp_get_thread_num()==0);
+    // Per-thread near-miss buffer, merged ONCE at the end of the team's life.
+    // The critical section this replaces was justified in-comment as "~44k
+    // pushes across the entire run" -- true on the dataset it was written
+    // against, but full HG002 chr20 pushes 13,019,987 times, every one of them
+    // serialising the sweep's hottest inner loop. Declared inside the parallel
+    // region, so it is per-thread by scope.
+    // ORDER-SAFE: the sole consumer builds `sites` from nm_obs and SORTS it
+    // before counting, so nm_obs order cannot reach the output.
+    std::vector<NMObs> nm_local;
     double ta=0, tb=0, tc=0, td=0;
     // Start at Lmax, not Lmax-1. A suffix-prefix overlap of exactly the read
     // length IS an exact duplicate, and it is the only length at which one can
@@ -1270,8 +1279,7 @@ int main(int argc,char** argv){
                                 // overlap starts at its own offset 0, so the
                                 // differing base is b[mmpos].
                                 const uint8_t altb=(uint8_t)((w32(woff[b]*32ULL+(uint32_t)mmpos)>>62)&3ULL);
-                                #pragma omp critical(nmobs)
-                                nm_obs.push_back({a,(uint32_t)(off+mmpos),altb});
+                                nm_local.push_back({a,(uint32_t)(off+mmpos),altb});
                             }
                             else if(mm==2) ++nm2;
                         }
@@ -1354,6 +1362,16 @@ int main(int argc,char** argv){
             tt_prep+=tb-ta; tt_par+=tc-tb; tt_com+=td-tc;
             ++nlev; tt_w+=w; tt_open+=open_tails.size(); }
     }       // end level loop
+    if(!nm_local.empty()){
+        #pragma omp critical(nmobs)
+        {
+            nm_obs.insert(nm_obs.end(), nm_local.begin(), nm_local.end());
+            // Release each thread's buffer AS it merges rather than at region
+            // exit, so peak is one team-wide copy plus the largest single
+            // buffer, not two full copies of a 13M-element vector.
+            std::vector<NMObs>().swap(nm_local);
+        }
+    }
     }       // end parallel (one team for the whole sweep)
     if(SWTIME){
         const double tot=tt_prep+tt_par+tt_com;
@@ -1957,6 +1975,29 @@ int main(int argc,char** argv){
         const int NMD=getenv("CAPS_NM_DEPTH")?atoi(getenv("CAPS_NM_DEPTH")):5;
         FILE* nv=NMV?fopen(NMV,"w"):nullptr;
         if(nv) fprintf(nv,"##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n");
+        // ── THE DENOMINATOR ────────────────────────────────────────────────
+        // nm_obs supplies how many reads carry the ALT, and nothing else. A
+        // caller needs the allele FRACTION: a het site sits near 0.5, while a
+        // recurrent sequencing error or a collapsed repeat does not. The total
+        // depth at a pg position is a difference array over the placements the
+        // encoder already computed -- ppos[u] is the read's start, rlen[u] its
+        // length -- so the denominator costs one linear pass and no index.
+        // Built only when the VCF is requested, so the default path is
+        // untouched. ppos and nm_obs are BOTH in unique-read space, so the
+        // ratio is consistent (duplicate multiplicity cancels in the ratio).
+        std::vector<int32_t> nmcov;
+        if(nv){
+            nmcov.assign(pg.size()+1,0);
+            for(uint32_t u=0;u<(uint32_t)ppos.size();++u){
+                if(ppos[u]==UINT64_MAX) continue;
+                const uint64_t b=ppos[u];
+                uint64_t e=b+(uint64_t)rlen[u];
+                if(e>pg.size()) e=pg.size();
+                if(b<pg.size()){ nmcov[b]++; nmcov[e]--; }
+            }
+            int32_t run=0;
+            for(size_t q=0;q<nmcov.size();++q){ run+=nmcov[q]; nmcov[q]=run; }
+        }
         for(size_t i=0;i<sites.size();){
             size_t j=i; while(j<sites.size()&&sites[j]==sites[i]) ++j;
             const size_t depth=j-i; ++distinct;
@@ -1973,8 +2014,11 @@ int main(int argc,char** argv){
                     --it;
                     if(p<it->second && p<pg.size()){
                         const size_t cid=(size_t)(it-g_contig_spans.begin());
-                        fprintf(nv,"contig_%zu\t%llu\t.\t%c\t%c\t.\tPASS\tSVTYPE=SNV;SRC=nearmiss;DP=%zu\n",
-                                cid,(unsigned long long)(p-it->first+1),pg[p],"ACGT"[alt],depth);
+                        const int32_t tot = (p<nmcov.size())? nmcov[p] : 0;
+                        const double af = tot>0 ? (double)depth/(double)tot : 0.0;
+                        fprintf(nv,"contig_%zu\t%llu\t.\t%c\t%c\t.\tPASS\tSVTYPE=SNV;SRC=nearmiss;DP=%zu;COV=%d;AF=%.4f\n",
+                                cid,(unsigned long long)(p-it->first+1),pg[p],"ACGT"[alt],depth,
+                                (int)tot,af);
                     }
                 }
             }
@@ -3938,6 +3982,18 @@ int main(int argc,char** argv){
                       return (int64_t)(it-g_contig_spans.begin());
                   };
                   size_t mmi=0, emitted=0;
+                  // Which pg contigs these records actually reference. The
+                  // records are indexed by g_contig_spans, and NOTHING dumped
+                  // that contig space -- CAPS_DUMP_CONTIGS writes the caller's
+                  // dcontig/lcontig/bcontig spaces only. So every mcontig_
+                  // record hit `if rn not in cmap: return None` in lift_vcf.py
+                  // and was silently dropped before scoring: 2,520,833 records
+                  // on full HG002 chr20, 96% of the emitted VCF, never
+                  // evaluated in either direction. Dumping only the REFERENCED
+                  // spans (as the DBG-ONLY path already does with lc_used)
+                  // keeps the eval-only alignment proportional to what was
+                  // emitted rather than to the whole pseudogenome.
+                  std::vector<uint8_t> mc_used(g_contig_spans.size(), 0);
                   for(const Ref& r : allrefs){
                       for(uint8_t k=0;k<r.mmcnt;++k){
                           uint64_t dstpos = (uint64_t)r.dst + r.mmpos[k];
@@ -3948,6 +4004,7 @@ int main(int argc,char** argv){
                               fprintf(av, "mcontig_%ld\t%zu\t.\t%c\t%c\t.\tPASS\tSVTYPE=SNV;SRC=mem_extmm;MLEN=%u;MMCNT=%u\n",
                                       (long)cid, (size_t)local+1, refc_, obsc_, r.len, r.mmcnt);
                               ++emitted;
+                              mc_used[(size_t)cid]=1;
                           }
                       }
                       mmi += r.mmcnt;
@@ -4011,6 +4068,21 @@ int main(int argc,char** argv){
                   }
                   fclose(av);
                   fprintf(stderr,"[CAPS-CALL] mem_extmm channel: %zu SNV records appended to %s\n", emitted, call_vcf.c_str());
+                  if(const char* mcp=getenv("CAPS_DUMP_MCONTIGS")){
+                      if(FILE* mf=fopen(mcp,"w")){
+                          size_t nd=0;
+                          for(size_t k=0;k<mc_used.size();++k){
+                              if(!mc_used[k]) continue;
+                              const uint64_t b=g_contig_spans[k].first, e=g_contig_spans[k].second;
+                              if(e<=b||b>=pg.size()) continue;
+                              const size_t len=(size_t)std::min<uint64_t>(e,pg.size())-b;
+                              fprintf(mf,">mcontig_%zu\n%s\n",k,pg.substr((size_t)b,len).c_str());
+                              ++nd;
+                          }
+                          fclose(mf);
+                          fprintf(stderr,"[CAPS-CALL] mem_extmm contigs: %zu referenced spans -> %s\n",nd,mcp);
+                      }
+                  }
               }
           }
           if(getenv("DBG_STREAMS")){
