@@ -4530,6 +4530,39 @@ int main(int argc,char** argv){
         jobs.push_back({"mem_dstgap",  [&]{ return best_encode(ref_gaps.data(), ref_gaps.size()); }});
         jobs.push_back({"mem_len",     [&]{ return best_encode(ref_lens.data(), ref_lens.size()); }});
         jobs.push_back({"mem_rc",      [&]{ return best_encode(ref_rc.data(),   ref_rc.size());   }});
+        // ── CONTIG SPANS: the one thing the decoder CANNOT recompute ────────
+        // The caller's full (non-DBG_ONLY) path needs each read's (contig id,
+        // offset), not just its pseudogenome position. pos_abs gives the pg
+        // position, and g_contig_spans converts pg -> (contig, offset).
+        //
+        // Those boundaries come from the CHAIN structure during assembly --
+        // where one chain ended and the next began. The decoder rebuilds `pg`
+        // faithfully but never sees the chain boundaries, so it cannot derive
+        // them: they must be stored. Without this stream the archive can serve
+        // SNVs (bubbles need only k-mers) but NOT indels, because
+        // build_substrate has no read placements to work from.
+        //
+        // Cost is small: ~451k spans, and spans are contiguous (end[i] ==
+        // start[i+1] almost everywhere), so storing the END offsets as deltas
+        // is a near-monotone sequence the existing coder handles well.
+        if (CAPS_CALL && !g_contig_spans.empty()) {
+            static std::vector<uint8_t> v_spans;
+            v_spans.clear();
+            uint64_t prev = 0;
+            auto putv = [&](uint64_t x){                    // LEB128
+                while (x >= 0x80) { v_spans.push_back((uint8_t)(x | 0x80)); x >>= 7; }
+                v_spans.push_back((uint8_t)x);
+            };
+            putv(g_contig_spans.size());
+            for (const auto& sp : g_contig_spans) {
+                putv(sp.first  - prev);                     // gap since last end
+                putv(sp.second - sp.first);                 // span length
+                prev = sp.second;
+            }
+            fprintf(stderr, "[SPANS] %zu contig spans -> %zu B pre-coding\n",
+                    g_contig_spans.size(), v_spans.size());
+            jobs.push_back({"contig_spans", [&]{ return best_encode(v_spans.data(), v_spans.size(), false); }});
+        }
         jobs.push_back({"pos_abs",     [&]{ return best_encode_chunked(v_pos.data(), v_pos.size(), true); }});
         jobs.push_back({"pos_strand",  [&]{ return best_encode(v_str.data(), v_str.size(), false); }});
         jobs.push_back({"mm_sym",      [&]{ return mmc::encode(v_mr, v_mo); }});

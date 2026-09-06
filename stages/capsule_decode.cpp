@@ -349,6 +349,47 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
             for(size_t i=a;i<b;i+=60){ size_t e=std::min(b,i+60);
                 fwrite(pg.data()+i,1,e-i,f); fputc('\n',f); }
         };
+        // PER-CONTIG EXPORT when the archive carries contig_spans.
+        //
+        // The two-record form (pg_main / pg_second) is the pseudogenome as one
+        // concatenated sequence. That is right for Claim 3's `export`, but the
+        // CALLER needs the individual assembled contigs -- `build_substrate`
+        // collapses and re-places reads per contig, and handing it 2 giant
+        // records is a completely different operation from handing it the
+        // ~451k real ones.
+        //
+        // contig_spans is written by the encoder under CAPS_CALL (see
+        // 106_inprocess.cpp): the chain boundaries, which the decoder cannot
+        // recompute because it rebuilds pg faithfully but never sees where one
+        // chain ended and the next began.
+        if (has("contig_spans") && getenv("CAPSULE_EXPORT_CONTIGS")) {
+            auto sb = dec("contig_spans");
+            size_t p2 = 0;
+            auto getv = [&]() -> uint64_t {                 // LEB128
+                uint64_t x = 0; int sh = 0;
+                while (p2 < sb.size()) { uint8_t b = sb[p2++];
+                    x |= (uint64_t)(b & 0x7F) << sh;
+                    if (!(b & 0x80)) break; sh += 7; }
+                return x;
+            };
+            const uint64_t nsp = getv();
+            uint64_t prev = 0; size_t nw = 0;
+            for (uint64_t i = 0; i < nsp; ++i) {
+                const uint64_t gap = getv(), len = getv();
+                const uint64_t a0 = prev + gap, b0 = a0 + len;
+                prev = b0;
+                if (b0 > pg.size() || len == 0) continue;
+                fprintf(f, ">contig_%llu\n", (unsigned long long)i);
+                for (size_t k = (size_t)a0; k < (size_t)b0; k += 60) {
+                    size_t e = std::min((size_t)b0, k + 60);
+                    fwrite(pg.data() + k, 1, e - k, f); fputc('\n', f);
+                }
+                ++nw;
+            }
+            fclose(f);
+            fprintf(stderr, "[export] %zu contigs (from contig_spans) -> %s\n", nw, outdir.c_str());
+            return 0;
+        }
         emit("capsule_pg_main",0,(size_t)MAINEND);
         emit("capsule_pg_second",(size_t)MAINEND,pg.size());
         fclose(f);
@@ -719,6 +760,20 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
 //  BITMAP, which is exactly what capspack produces. Setting them in the
 //  environment and forgetting to pack, or packing and forgetting to set them,
 //  are both silent wrong-data failures.
+// Decode a single named stream straight from an archive path. The main
+// decoder's `dec()` is a lambda over state local to capsule_decode_all, and the
+// call path needs a few streams (pos_abs, pos_strand, contig_spans, orig2uid)
+// without re-running the whole decode.
+static std::vector<uint8_t> arc_stream(const std::string& path, const char* name, size_t w = 1)
+{
+    uint64_t pg_len = 0, main_end = 0; uint32_t minmem = 0;
+    std::vector<Stream> ss;
+    if (!read_capsule(path.c_str(), pg_len, main_end, minmem, ss)) return {};
+    for (auto& st : ss)
+        if (st.name == name) return capsule_decode_stream(st.coded, w);
+    return {};
+}
+
 static int capsule_call_from_archive(const std::string& in, const std::string& out_vcf,
                                      const std::string& workdir)
 {
@@ -727,8 +782,28 @@ static int capsule_call_from_archive(const std::string& in, const std::string& o
     const std::string rp = wd + "/reads.seq";
     const std::string cf = wd + "/contigs.fa";
 
-    setenv("CAPS_DBG", "1", 1);
-    setenv("CAPS_DBG_ONLY", "1", 1);
+    // CAPS_CALL_INDELS=1 runs the FULL caller (SNV pileup + indel_pass) from a
+    // stored archive instead of the graph-only path. Two reasons:
+    //  * indels are unreachable from the archive otherwise -- DBG_ONLY skips
+    //    indel_pass entirely, so Option 0 cannot emit them at all;
+    //  * it is the fast iteration harness for indel work. The encoder + SNV
+    //    stages ahead of indel_pass cost ~650 s of every full run; entering
+    //    from the archive skips the encoder and starts the caller in ~18 s.
+    // Default is unchanged (graph-only), so Option 0's measured numbers stand.
+    const bool WANT_INDELS = std::getenv("CAPS_CALL_INDELS") != nullptr;
+    if (!WANT_INDELS) {
+        setenv("CAPS_DBG", "1", 1);
+        setenv("CAPS_DBG_ONLY", "1", 1);
+    } else {
+        // CAREFUL: `SEQ_PACKED` in caps_caller.h is
+        // `getenv("CAPS_DBG_ONLY") && getenv("CAPS_DBG")`, so clearing
+        // DBG_ONLY also switches the caller to expecting PLAIN TEXT reads.
+        // Packing them anyway would be read as text -- silent corruption, not
+        // an error. So in this mode the reads are handed over UNPACKED, which
+        // is what the full caller expects.
+        unsetenv("CAPS_DBG");
+        unsetenv("CAPS_DBG_ONLY");
+    }
     // Phase timing. The 4 steps below were reported as bare progress lines, so
     // "decode+export+pack = 71.95 s" was only knowable by subtracting the
     // caller's own total from the wall clock -- which says nothing about WHICH
@@ -755,11 +830,19 @@ static int capsule_call_from_archive(const std::string& in, const std::string& o
     if(getenv("CAPS_CALL_NOQUAL")) setenv("CAPS_SKIP_QUAL","1",1);
     std::vector<uint8_t> rflat; std::vector<size_t> rowoff;
     std::vector<std::string> qbits;
+    // In WANT_INDELS mode the full caller reverses `quals[oi]` PER BASE, so it
+    // needs quality as TEXT, not as the Q>=QMIN bitmap the graph path uses.
+    // Requesting bitmaps here would be silently wrong rather than an error.
     if(capsule_decode_all(in.c_str(), wd, rp, std::string(), std::string(),
-                          &rflat, &rowoff, nullptr, &qbits, QMIN) != 0){
+                          &rflat, &rowoff, nullptr,
+                          WANT_INDELS ? nullptr : &qbits, QMIN) != 0){
         fprintf(stderr,"[call] decode failed\n"); return 1; }
 
     _lap("1 decode reads+qual");
+    // In indel mode the caller needs the INDIVIDUAL assembled contigs, not the
+    // two concatenated pseudogenome records -- build_substrate collapses and
+    // re-places reads per contig, so 2 giant records is a different operation.
+    if (WANT_INDELS) setenv("CAPSULE_EXPORT_CONTIGS", "1", 1);
     fprintf(stderr, "[call] 2/4 exporting the retained pseudogenome for contigs\n");
     if(capsule_decode_all(in.c_str(), cf, std::string(), "export", std::string()) != 0)
         fprintf(stderr,"[call] export failed -- ploidy gate will see no contigs\n");
@@ -770,13 +853,25 @@ static int capsule_call_from_archive(const std::string& in, const std::string& o
     {
         // Reads: straight out of the handed-over buffer. rowoff[o+1]-rowoff[o]
         // includes the trailing newline the decoder wrote, hence the -1.
-        const bool haveq = !qbits.empty();
+        // WANT_INDELS: quality went to a file as text (no bitmaps requested).
+        std::vector<std::string> qtext;
+        if (WANT_INDELS) {
+            std::ifstream fq(rp + ".qual");
+            std::string ln;
+            while (std::getline(fq, ln)) {
+                while (!ln.empty() && (ln.back()=='\n' || ln.back()=='\r')) ln.pop_back();
+                qtext.push_back(ln);
+            }
+            fprintf(stderr, "  [call] quality as text: %zu records\n", qtext.size());
+        }
+        const bool haveq = WANT_INDELS ? !qtext.empty() : !qbits.empty();
         const size_t NO = rowoff.empty() ? 0 : rowoff.size() - 1;
         // Quality already arrived as packed bitmaps (parallel, straight from
         // the archive), so this loop only packs sequence. Sized up front so
         // every slot is written exactly once and no two threads share one.
         seqs.resize(NO);
-        if(haveq && qbits.size() >= NO) quals.swap(qbits);
+        if(WANT_INDELS && qtext.size() >= NO) quals.swap(qtext);
+        else if(!WANT_INDELS && haveq && qbits.size() >= NO) quals.swap(qbits);
         else { quals.assign(NO, std::string());
                if(haveq) fprintf(stderr,"  [call] quality count %zu < reads %zu\n", qbits.size(), NO); }
         #pragma omp parallel for schedule(static)
@@ -784,7 +879,9 @@ static int capsule_call_from_archive(const std::string& in, const std::string& o
             const size_t b = rowoff[o];
             size_t len = (rowoff[o+1] > b) ? (rowoff[o+1] - b - 1) : 0;
             if(b + len > rflat.size()) len = (b < rflat.size()) ? (rflat.size() - b) : 0;
-            seqs[o] = capspack::pack_seq((const char*)rflat.data() + b, len);
+            seqs[o] = WANT_INDELS
+                    ? std::string((const char*)rflat.data() + b, len)   // plain text
+                    : capspack::pack_seq((const char*)rflat.data() + b, len);
         }
         std::vector<uint8_t>().swap(rflat);      // release 1.86 GB before calling
         std::vector<size_t>().swap(rowoff);
@@ -803,6 +900,96 @@ static int capsule_call_from_archive(const std::string& in, const std::string& o
     }
     cd.valid = true;
     fprintf(stderr, "[call]     %zu contigs from the archive's pseudogenome\n", cd.contigs.size());
+
+    // ── READ PLACEMENTS FROM THE ARCHIVE (what makes indels possible) ───────
+    // The full caller's build_substrate needs each read's (contig id, offset).
+    // DBG_ONLY does not -- bubbles read only k-mers -- which is why SNVs work
+    // from the archive today and indels do not: with empty placement arrays
+    // build_substrate would place NO reads and the indel pass would emit
+    // nothing, silently.
+    //
+    // The archive has the pieces: pos_abs (pg position per UNIQUE read),
+    // pos_strand, and contig_spans (pg -> contig boundaries). Two traps, both
+    // already documented in this file and both silent if got wrong:
+    //   * pos_abs is per-UNIQUE read; the caller indexes per-ORIGINAL read.
+    //     They differ by duplicates, and conflating them undercounted coverage
+    //     by 20% on E. coli. orig2uid is the expansion.
+    //   * read_clip has NO archive source. The encoder derives it during
+    //     placement, not from a stream. It is left zero here, which is
+    //     CORRECT ONLY IF the caller treats 0 as "no left overhang" -- stated
+    //     here so the first VCF comparison against the FASTQ path tells us
+    //     whether that assumption holds rather than us assuming it does.
+    if (WANT_INDELS) {
+        // w=1, matching BOTH proven consumers (the coverage path at ~line 231
+        // and the read path at ~line 401): they decode pos_abs as raw bytes and
+        // then reinterpret them as uint32_t. Passing w=4 tells the stream
+        // decoder a different element width and yields garbage, not an error.
+        auto pb  = arc_stream(in, "pos_abs");
+        auto sbv = arc_stream(in, "pos_strand");
+        auto spb = arc_stream(in, "contig_spans");
+        auto ofl = arc_stream(in, "orig2uid_flags");
+        auto ovl = arc_stream(in, "orig2uid_vals");
+        if (pb.empty() || spb.empty()) {
+            fprintf(stderr, "[call] ARCHIVE LACKS %s -- indels need it; "
+                            "re-compress with CAPS_CALL=1 so contig_spans is written\n",
+                    spb.empty() ? "contig_spans" : "pos_abs");
+            return 1;
+        }
+        // spans -> a sorted table of contig starts
+        std::vector<uint64_t> cstart, cend;
+        { size_t p2 = 0;
+          auto getv=[&]()->uint64_t{ uint64_t x=0; int sh=0;
+              while(p2<spb.size()){ uint8_t b=spb[p2++]; x |= (uint64_t)(b&0x7F)<<sh;
+                                    if(!(b&0x80)) break; sh+=7; } return x; };
+          const uint64_t nsp=getv(); uint64_t prev=0;
+          cstart.reserve(nsp); cend.reserve(nsp);
+          for(uint64_t i=0;i<nsp;++i){ const uint64_t g=getv(), l=getv();
+              const uint64_t a0=prev+g; cstart.push_back(a0); cend.push_back(a0+l); prev=a0+l; } }
+        std::vector<uint32_t> P(pb.size()/4);
+        memcpy(P.data(), pb.data(), P.size()*4);
+        const size_t NU2 = P.size();
+        std::vector<uint8_t> st(NU2, 0);
+        for(size_t i=0;i<NU2;++i){ size_t B=i>>3,b=i&7; if(B<sbv.size()) st[i]=(sbv[B]>>(7-b))&1; }
+        // expand unique -> original exactly as the read path does
+        // EXACTLY the expansion the coverage path uses (this file, ~line 239).
+        // My first version had the flag sense INVERTED and treated the stored
+        // value as an absolute id; it is a DELTA. Flag set -> back-reference to
+        // an earlier unique at (exp - d); flag clear -> a new unique at exp.
+        // Getting this wrong mis-maps every duplicate read silently -- the same
+        // class of error that undercounted coverage by 20% on E. coli.
+        std::vector<uint32_t> o2u;
+        const size_t NO2 = seqs.size();
+        if(!ovl.empty()||!ofl.empty()){
+            size_t k=0; o2u.reserve(NO2);
+            for(size_t i=0;i<NO2;++i){
+                bool nz = (i>>3)<ofl.size() ? ((ofl[i>>3]>>(7-(i&7)))&1) : 0;
+                int32_t d=0; if(nz && k+4<=ovl.size()){ memcpy(&d,&ovl[k],4); k+=4; }
+                o2u.push_back((uint32_t)d);
+            }
+            uint32_t exp=0;
+            for(auto& v:o2u){ int32_t d=(int32_t)v; if(d==0){ v=exp; ++exp; } else v=(uint32_t)(exp-d); }
+        } else { o2u.resize(NO2); for(size_t i=0;i<NO2;++i) o2u[i]=(uint32_t)i; }
+        cd.read_cid.assign(NO2, UINT32_MAX);
+        cd.read_pos.assign(NO2, 0);
+        cd.read_rc.assign(NO2, 0);
+        cd.read_clip.assign(NO2, 0);
+        size_t placed=0;
+        for(size_t o=0;o<NO2;++o){
+            const uint32_t u=o2u[o];
+            if(u>=NU2) continue;
+            const uint64_t gp=P[u];
+            auto it=std::upper_bound(cstart.begin(), cstart.end(), gp);
+            if(it==cstart.begin()) continue;
+            const size_t ci=(size_t)(it-cstart.begin()-1);
+            if(gp>=cend[ci]) continue;                 // in a gap between contigs
+            cd.read_cid[o]=(uint32_t)ci;
+            cd.read_pos[o]=(uint32_t)(gp-cstart[ci]);
+            cd.read_rc[o]=st[u];
+            ++placed;
+        }
+        fprintf(stderr, "[call]     %zu/%zu read placements rebuilt from the archive "
+                        "(%zu contig spans)\n", placed, NO2, cstart.size());
+    }
 
     _lap("3b parse contigs");
     fprintf(stderr, "[call] 4/4 calling variants\n");

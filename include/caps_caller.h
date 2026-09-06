@@ -31,6 +31,9 @@
 #include <map>
 #include <vector>
 #include <sys/mman.h>
+#ifdef _OPENMP
+#include <parallel/algorithm>
+#endif
 #include <string>
 #include <array>
 #include <tuple>
@@ -106,6 +109,8 @@ inline uint64_t rc31(uint64_t v) {
     for (int i = 0; i < 31; ++i) { r = (r << 2) | (3u - (v & 3u)); v >>= 2; }
     return r;
 }
+// Sum of the indel_pass section timers, checked against the stage total.
+static double g_ipsum = 0.0;
 inline uint64_t canon31(uint64_t v) { uint64_t r = rc31(v); return v < r ? v : r; }
 inline uint64_t colkey(uint32_t cid, uint32_t pos) { return ((uint64_t)cid << 32) | pos; }
 
@@ -1872,6 +1877,17 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
     auto kcount = [&](const std::string& km) -> uint32_t {
         if (km.size() != 31) return 0;
         uint64_t v; if (!pack31(km.data(), v)) return 0;
+        const KC* e = kc_find(canon31(v)); return e ? e->cnt : 0u;
+    };
+    // Same thing without materialising the 31-mer. The junction scans in the
+    // indel emit path call this once per offset as
+    // `kcount(hap.substr(q, 31))`, so every probe allocated a fresh
+    // std::string purely to be read 31 times and thrown away -- inside the
+    // section that measured 1,018 s of an 1,093 s stage. `pack31` reads a raw
+    // pointer, so the copy was never needed. Identical result by construction.
+    auto kcount_at = [&](const char* p31, size_t avail) -> uint32_t {
+        if (avail < 31) return 0;
+        uint64_t v; if (!pack31(p31, v)) return 0;
         const KC* e = kc_find(canon31(v)); return e ? e->cnt : 0u;
     };
 
@@ -4507,12 +4523,41 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         // the ORIGINAL uncapped semantics exactly, just laid out flat.
         struct KIdxEntry { uint64_t kmer; uint32_t ci; uint32_t pos; uint8_t orient; };
         std::vector<KIdxEntry> kidx;
-        for (size_t ci = 0; ci < cdb.contigs.size(); ++ci) {
-            const std::string& c = cdb.contigs[ci];
-            for (size_t i = 0; i + BK <= c.size(); ++i) {
-                uint64_t v; if (!pack25(c.data() + i, v)) continue;
-                uint64_t rcv = rc25(v), canon = v < rcv ? v : rcv;
-                kidx.push_back({canon, (uint32_t)ci, (uint32_t)i, (uint8_t)(v <= rcv ? 0 : 1)});
+        {
+            // PARALLEL BUILD, ORDER PRESERVED. kidx is ~65M entries x 24 B
+            // (~1.5 GB) built by serial push_back inside the stage that is 64%
+            // of the whole run. Contigs are independent, so each thread fills
+            // its own buffer -- but the stable_sort below depends on the
+            // ORIGINAL insertion order (contig 0,1,2..., each in increasing
+            // position), because "first pair wins" downstream reads it. A
+            // plain concatenation of thread buffers would NOT be that order.
+            //
+            // So: count per contig first, prefix-sum to get each contig's exact
+            // slot, then fill in parallel by INDEX. The result is byte-identical
+            // to the serial push_back order by construction, with no
+            // concatenation step and no per-thread buffers to merge.
+            const size_t NC = cdb.contigs.size();
+            std::vector<size_t> off(NC + 1, 0);
+            #pragma omp parallel for schedule(dynamic, 256)
+            for (long long ci = 0; ci < (long long)NC; ++ci) {
+                const std::string& c = cdb.contigs[(size_t)ci];
+                size_t cnt = 0;
+                for (size_t i = 0; i + BK <= c.size(); ++i) {
+                    uint64_t v; if (pack25(c.data() + i, v)) ++cnt;
+                }
+                off[(size_t)ci + 1] = cnt;
+            }
+            for (size_t i = 0; i < NC; ++i) off[i + 1] += off[i];
+            kidx.resize(off[NC]);
+            #pragma omp parallel for schedule(dynamic, 256)
+            for (long long ci = 0; ci < (long long)NC; ++ci) {
+                const std::string& c = cdb.contigs[(size_t)ci];
+                size_t w = off[(size_t)ci];
+                for (size_t i = 0; i + BK <= c.size(); ++i) {
+                    uint64_t v; if (!pack25(c.data() + i, v)) continue;
+                    uint64_t rcv = rc25(v), canon = v < rcv ? v : rcv;
+                    kidx[w++] = {canon, (uint32_t)ci, (uint32_t)i, (uint8_t)(v <= rcv ? 0 : 1)};
+                }
             }
         }
         // STABLE sort, not plain sort: the original hashmap's per-key vector
@@ -4525,8 +4570,16 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         // positions and therefore DP/AF for some indel records. Caught by
         // byte-comparing against the pre-change binary on real data before
         // trusting this, not by reasoning alone.
+        // Parallel STABLE sort -- stability is load-bearing (see the note
+        // above: a plain sort moved anchor positions and DP/AF). GNU's
+        // __gnu_parallel::stable_sort keeps the same guarantee.
+        #if defined(_OPENMP) && defined(_GLIBCXX_PARALLEL_ALGO_H)
+        __gnu_parallel::stable_sort(kidx.begin(), kidx.end(),
+            [](const KIdxEntry& a, const KIdxEntry& b){ return a.kmer < b.kmer; });
+        #else
         std::stable_sort(kidx.begin(), kidx.end(),
             [](const KIdxEntry& a, const KIdxEntry& b){ return a.kmer < b.kmer; });
+        #endif
         auto kidx_run_len = [&](uint64_t key) -> int {
             auto lo = std::lower_bound(kidx.begin(), kidx.end(), key,
                 [](const KIdxEntry& e, uint64_t k){ return e.kmer < k; });
@@ -4575,29 +4628,81 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         //
         // Verification is by byte-comparing the VCF against the serial build,
         // never by inspection.
+        auto _ip0 = clk::now();
+        auto _iplap = [&](const char* what){
+            const double d = elapsed_s(_ip0, clk::now());
+            g_ipsum += d;
+            fprintf(stderr, "[INDEL-PROF] %-24s %8.2fs\n", what, d);
+            _ip0 = clk::now();
+        };
+        // KEEP ONLY THE RUNS THAT DO WORK.
+        //
+        // MEASURED FAILURE, first attempt: threading over ALL runs gave 2.9%
+        // (1153.8 -> 1120.3 s) at 482% CPU of a possible 1200%. There are
+        // 86,487,848 runs and the body bails immediately on
+        // `occ.size() < 2 || > MAXOCC`, so the overwhelming majority are
+        // no-ops -- ~1.35M dynamic scheduling handoffs for nothing, which
+        // swamps the real work. Parallelising the outer loop was the wrong
+        // GRANULARITY, not the wrong idea.
+        //
+        // The pair scan is O(occ^2), so cost is concentrated in the few runs
+        // with many occurrences. Filtering first turns tens of millions of
+        // trivial tasks into a small set of substantial ones, and lets the
+        // schedule be guided by actual cost.
         std::vector<std::pair<size_t,size_t>> runs;
-        for (size_t r0 = 0; r0 < kidx.size(); ) {
-            size_t r1 = r0;
-            while (r1 < kidx.size() && kidx[r1].kmer == kidx[r0].kmer) ++r1;
-            runs.push_back({r0, r1});
-            r0 = r1;
+        {
+            size_t total = 0, kept = 0;
+            for (size_t r0 = 0; r0 < kidx.size(); ) {
+                size_t r1 = r0;
+                while (r1 < kidx.size() && kidx[r1].kmer == kidx[r0].kmer) ++r1;
+                ++total;
+                const size_t occn = r1 - r0;
+                if ((int)occn >= 2 && (int)occn <= MAXOCC) { runs.push_back({r0, r1}); ++kept; }
+                r0 = r1;
+            }
+            fprintf(stderr, "[INDEL-PAR] %zu runs total, %zu carry work (%.2f%%)\n",
+                    total, kept, total ? 100.0*kept/total : 0.0);
+            // Largest first: with O(occ^2) bodies, a big run scheduled last
+            // leaves 11 threads idle waiting for it.
+            // Sorting largest-first changes the ORDER runs are visited, and
+            // the two shared maps are order-sensitive (pairs_ first-wins, im
+            // last-wins). So each run keeps its ORIGINAL index and the merge
+            // replays those semantics explicitly -- which also fixes the
+            // measured content difference from the first attempt (5 records),
+            // where the merge relied on thread-visit order and
+            // schedule(dynamic) does not match serial order.
+            std::sort(runs.begin(), runs.end(),
+                      [](const std::pair<size_t,size_t>& a, const std::pair<size_t,size_t>& b){
+                          return (a.second - a.first) > (b.second - b.first); });
         }
         const bool IND_PAR = std::getenv("CAPS_INDEL_SERIAL") == nullptr;
         int n_thr = 1;
         #ifdef _OPENMP
         if (IND_PAR) n_thr = omp_get_max_threads();
         #endif
-        std::vector<std::map<std::pair<uint32_t,uint32_t>, PairRep>> tp((size_t)n_thr);
-        std::vector<std::map<std::tuple<uint32_t,uint32_t,int,int,std::string>, Agg>> ti((size_t)n_thr);
-        fprintf(stderr, "[INDEL-PAR] %zu anchor runs over %d threads\n", runs.size(), n_thr);
-        #pragma omp parallel for schedule(dynamic, 64) if(IND_PAR)
+        // (payload, original-run-index) so the merge can pick min/max
+        struct PairRepR { PairRep v; size_t run = (size_t)-1; };
+        struct AggR     { Agg v;     size_t run = 0; };
+        std::vector<std::map<std::pair<uint32_t,uint32_t>, PairRepR>> tp((size_t)n_thr);
+        std::vector<std::map<std::tuple<uint32_t,uint32_t,int,int,std::string>, AggR>> ti((size_t)n_thr);
+        std::vector<size_t> run_order(runs.size());
+        {   // map each (sorted) slot back to its position in kidx order
+            std::vector<std::pair<size_t,size_t>> tmp(runs.size());
+            for (size_t i = 0; i < runs.size(); ++i) tmp[i] = {runs[i].first, i};
+            std::sort(tmp.begin(), tmp.end());
+            for (size_t k = 0; k < tmp.size(); ++k) run_order[tmp[k].second] = k;
+        }
+        _iplap("setup: cov+kidx+runs");
+        fprintf(stderr, "[INDEL-PAR] %zu working runs over %d threads\n", runs.size(), n_thr);
+        #pragma omp parallel for schedule(dynamic, 1) if(IND_PAR)
         for (long long ri = 0; ri < (long long)runs.size(); ++ri) {
             int tid = 0;
             #ifdef _OPENMP
             tid = omp_get_thread_num();
             #endif
-            auto& pairs_ = tp[(size_t)tid];
-            auto& im     = ti[(size_t)tid];
+            auto& tpairs = tp[(size_t)tid];
+            auto& tim    = ti[(size_t)tid];
+            const size_t myrun = run_order[(size_t)ri];   // position in ORIGINAL kidx order
             size_t run_i = runs[(size_t)ri].first, run_j = runs[(size_t)ri].second;
             {
             // Materialize this run into the exact type/shape the untouched
@@ -4653,8 +4758,9 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                     rp2 = nrp; qB2 = nqB;
                     b2 = extract_bubble(R, rp2, Aalt, qB2, MAXINDEL, FLANK);
                     if (!b2.ok || b2.apos == 0) break;
-                    auto& a2 = im[std::make_tuple(rc_, b2.apos, b2.type, b2.len, b2.ins)];
-                    a2.anchors++; a2.altcid = ac; a2.altpos = ap;
+                    auto& a2r = tim[std::make_tuple(rc_, b2.apos, b2.type, b2.len, b2.ins)];
+                    a2r.v.anchors++;
+                    if (a2r.v.anchors == 1 || myrun >= a2r.run) { a2r.v.altcid = ac; a2r.v.altpos = ap; a2r.run = myrun; }
                 }
             }
             if (!bub.ok || bub.apos == 0) continue;
@@ -4815,14 +4921,18 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 }
             }
             {   // record the pair for the whole-pair scan (once per anchor)
-                auto& pr_ = pairs_[{rc_, ac}];
-                if (pr_.n == 0) { pr_.rp = rp; pr_.qB = qB; pr_.ap = ap; pr_.opp = opp; }
-                ++pr_.n;
+                auto& prr = tpairs[{rc_, ac}];
+                if (prr.v.n == 0 || myrun < prr.run) {
+                    if (prr.v.n == 0) { prr.v.rp = rp; prr.v.qB = qB; prr.v.ap = ap; prr.v.opp = opp; prr.run = myrun; }
+                    else { prr.v.rp = rp; prr.v.qB = qB; prr.v.ap = ap; prr.v.opp = opp; prr.run = myrun; }
+                }
+                ++prr.v.n;
             }
             if (std::getenv("CAPS_TRACE"))
                 fprintf(stderr, "[trace] AGG cid=%u apos=%u type=%d len=%d\n", rc_, bub.apos, bub.type, bub.len);
-            auto& a = im[std::make_tuple(rc_, bub.apos, bub.type, bub.len, bub.ins)];
-            a.anchors++; a.altcid = ac; a.altpos = ap;
+            auto& ar = tim[std::make_tuple(rc_, bub.apos, bub.type, bub.len, bub.ins)];
+            ar.v.anchors++;
+            if (ar.v.anchors == 1 || myrun >= ar.run) { ar.v.altcid = ac; ar.v.altpos = ap; ar.run = myrun; }
           }
           }
         }
@@ -4848,22 +4958,37 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         // min (first-wins) / max (last-wins) explicitly. Do not assume.
         std::map<std::pair<uint32_t,uint32_t>, PairRep> pairs_;
         std::map<std::tuple<uint32_t,uint32_t,int,int,std::string>, Agg> im;
+        std::map<std::pair<uint32_t,uint32_t>, size_t> pr_run;
+        std::map<std::tuple<uint32_t,uint32_t,int,int,std::string>, size_t> im_run;
         for (int t = 0; t < n_thr; ++t) {
             for (auto& kv : tp[(size_t)t]) {
                 auto it = pairs_.find(kv.first);
-                if (it == pairs_.end()) pairs_.emplace(kv.first, kv.second);
-                else it->second.n += kv.second.n;      // counts add; rep is first-seen
+                if (it == pairs_.end()) { pairs_.emplace(kv.first, kv.second.v); pr_run[kv.first] = kv.second.run; }
+                else {
+                    it->second.n += kv.second.v.n;               // counts are order-free
+                    if (kv.second.run < pr_run[kv.first]) {      // FIRST run wins the rep
+                        const int keep = it->second.n;
+                        it->second = kv.second.v; it->second.n = keep;
+                        pr_run[kv.first] = kv.second.run;
+                    }
+                }
             }
             for (auto& kv : ti[(size_t)t]) {
                 auto it = im.find(kv.first);
-                if (it == im.end()) im.emplace(kv.first, kv.second);
-                else { it->second.anchors += kv.second.anchors;
-                       it->second.altcid = kv.second.altcid;
-                       it->second.altpos = kv.second.altpos; }
+                if (it == im.end()) { im.emplace(kv.first, kv.second.v); im_run[kv.first] = kv.second.run; }
+                else {
+                    it->second.anchors += kv.second.v.anchors;   // order-free
+                    if (kv.second.run >= im_run[kv.first]) {     // LAST run wins altcid/altpos
+                        it->second.altcid = kv.second.v.altcid;
+                        it->second.altpos = kv.second.v.altpos;
+                        im_run[kv.first] = kv.second.run;
+                    }
+                }
             }
         }
-        { std::vector<std::map<std::pair<uint32_t,uint32_t>, PairRep>>().swap(tp);
-          std::vector<std::map<std::tuple<uint32_t,uint32_t,int,int,std::string>, Agg>>().swap(ti); }
+        { std::vector<std::map<std::pair<uint32_t,uint32_t>, PairRepR>>().swap(tp);
+          std::vector<std::map<std::tuple<uint32_t,uint32_t,int,int,std::string>, AggR>>().swap(ti); }
+        _iplap("anchor scan + merge");
         auto covwin = [&](uint32_t ci, uint32_t p) -> int {
             const auto& cv = cov[ci]; if (cv.empty()) return 0;
             int lo = (int)p - 15, hi = (int)p + 15, s = 0, cnt = 0;
@@ -4882,6 +5007,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         // any shared anchor, so events far from every anchor are reachable.
         // Evidence for such an event is the pair's shared-anchor count, which
         // is what MIN_ANCH already judges.
+        _iplap("medcov");
         if (!std::getenv("CAPS_NO_ALIGNPAIR")) {
             int MAXEV = 12;
             if (const char* e = std::getenv("CAPS_ALIGNPAIR_MAXEV")) MAXEV = atoi(e);
@@ -4934,6 +5060,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         std::sort(order_.begin(), order_.end(),
                   [](auto& x, auto& y){ return x.first > y.first; });
         std::unordered_set<uint64_t> used_ref, used_alt;
+        _iplap("scan_pair over pairs_");
         std::unordered_set<const void*> accepted;
         // MEASURED NEUTRAL (five-window mean 0.5976 -> 0.5962; r5 0.623->0.605,
         // HG004 0.515->0.521, HG003 0.672->0.677) and therefore opt-in.
@@ -4957,6 +5084,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 accepted.insert((const void*)e.second);
             }
         }
+        _iplap("matching");
         for (auto& kv : im) {
             uint32_t cid, apos; int type, len; std::string ins;
             std::tie(cid, apos, type, len, ins) = kv.first;
@@ -5081,7 +5209,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                     // only k-mers that actually straddle the junction
                     if (q + 31 <= (size_t)fl_l) continue;
                     if (q >= (size_t)fl_l + (type == 1 ? ins.size() : 0)) break;
-                    uint32_t c1 = kcount(alt_hap.substr(q, 31));
+                    uint32_t c1 = kcount_at(alt_hap.data() + q, alt_hap.size() - q);
                     any_j = true;
                     best_sup = COH ? std::min(best_sup, c1) : std::max(best_sup, c1);
                 }
@@ -5141,7 +5269,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                         for (size_t q = 0; q + 31 <= ref_hap.size(); ++q) {
                             if (q + 31 <= (size_t)fl_l) continue;
                             if (q >= (size_t)fl_l) break;
-                            ref_sup = std::max(ref_sup, kcount(ref_hap.substr(q, 31)));
+                            ref_sup = std::max(ref_sup, kcount_at(ref_hap.data() + q, ref_hap.size() - q));
                         }
                         double tot = (double)ref_sup + (double)best_sup;
                         if (tot > 0 && (double)best_sup / tot < MAF) continue;
@@ -5185,6 +5313,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         // where it placed best, and an alt-haplotype read places perfectly on
         // its OWN contig. Here every read covering an anchor is compared to the
         // SAME contig, so alt-haplotype reads must reveal their gap.
+        _iplap("im emit loop");
         if (!std::getenv("CAPS_NO_PCLUSTER")) {
             const int AK = 25, LW = 40;      // anchor k-mer, left window
             // SUBSTRATE CHOICE. The bubble passes need the two haplotypes to
@@ -5713,6 +5842,14 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
     fclose(f);
     fprintf(stderr, "[CAPS-CALL] contigs=%zu H=%u candidates=%zu SNVs=%zu indels=%zu -> %s\n",
             cd.contigs.size(), H, total_candidates, n_snv, n_indel, out_vcf.c_str());
+    // RECONCILIATION. Six timers previously summed to 75.6 s inside a stage
+    // that ran 1000+ s, and I reported both numbers as findings without
+    // noticing they contradict. A stage total that does not match its parts
+    // means the parts are mis-placed -- which had already happened twice in
+    // this file today. Print the check so it cannot be skipped again.
+    fprintf(stderr, "[INDEL-PROF] === accounted %.2fs of stage; if this differs "
+                    "from the indel_pass total below, the timers are WRONG ===\n",
+            g_ipsum);
     phase("indel_pass", t_mark);
     fprintf(stderr, "[CAPS-CALL-TIMING] %-16s %8.3fs\n", "TOTAL", elapsed_s(t_start, clk::now()));
 
