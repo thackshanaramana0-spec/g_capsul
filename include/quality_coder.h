@@ -502,4 +502,60 @@ static uint64_t decode_to_bitmaps(const std::vector<uint8_t>& body,
     return written.load();
 }
 
+// ── PARALLEL DECODE STRAIGHT TO TEXT STRINGS ──────────────────────────────
+// The full (indel) caller needs quality as TEXT, not as the >=QMIN bitmap the
+// graph path uses, because it reverse-complements quality per base. That route
+// went through decode_to_file: a SERIAL loop over independent blocks, writing
+// ~590 MB to disk, which the caller then read back line by line into 4M
+// std::strings. Measured 10.99 s of a 93.1 s archive-path run on 1 core of 12,
+// plus a full write and re-read of the file.
+//
+// The blocks are independent exactly as decode_to_bitmaps documents, so this
+// is that function with the bitmap packing replaced by a plain copy: same two
+// passes, same disjoint output ranges, no synchronisation, order-independent
+// result. Byte-for-byte the same characters decode_to_file would have written,
+// minus the round trip.
+static uint64_t decode_to_strings(const std::vector<uint8_t>& body,
+                                  const std::vector<uint8_t>& indexRaw,
+                                  const std::vector<uint32_t>& lengths,
+                                  std::vector<std::string>& out)
+{
+    struct Blk { size_t boff, blen, bcnt, first; uint8_t qmin; };
+    std::vector<Blk> blks;
+    {
+        const uint8_t* ip=indexRaw.data(); const uint8_t* iend=ip+indexRaw.size();
+        size_t boff=0; uint64_t li=0;
+        while(ip<iend){
+            const uint64_t blen=gv(ip,iend);
+            const uint64_t bcnt=gv(ip,iend);
+            const uint8_t  qmin=(uint8_t)gv(ip,iend);
+            if(boff+blen>body.size()) break;
+            blks.push_back({boff,(size_t)blen,(size_t)bcnt,(size_t)li,qmin});
+            boff+=blen; li+=bcnt;
+            if(li>=lengths.size()+1) break;
+        }
+    }
+    if(out.size()<lengths.size()) out.resize(lengths.size());
+    std::atomic<uint64_t> written{0};
+    #pragma omp parallel for schedule(dynamic,1)
+    for(long long b=0;b<(long long)blks.size();++b){
+        const Blk& B=blks[(size_t)b];
+        size_t osz=0;
+        char* d=fqz_decompress((char*)body.data()+B.boff,B.blen,&osz,nullptr,0);
+        if(!d) continue;
+        size_t off=0; uint64_t w=0;
+        for(size_t r=0;r<B.bcnt && (B.first+r)<lengths.size();++r){
+            const uint32_t L=lengths[B.first+r];
+            if(off+L>osz) break;
+            std::string t((size_t)L,'\0');
+            for(uint32_t i=0;i<L;++i) t[i]=(char)((unsigned char)d[off+i]+B.qmin);
+            out[B.first+r].swap(t);
+            off+=L; ++w;
+        }
+        free(d);
+        written+=w;
+    }
+    return written.load();
+}
+
 } // namespace qlc
