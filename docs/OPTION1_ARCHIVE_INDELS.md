@@ -50,14 +50,38 @@ Mechanism verified on real data, not inferred:
 Do **not** describe this as identical. Option 0's SNV path is byte-identical;
 this one is not yet.
 
-**Prime suspect: `read_clip` has no archive source.** The encoder derives it
-during placement rather than storing it, so the archive path passes zeros.
-`build_substrate` guards it (`o < cd.read_clip.size() ? ... : 0`) so zero
-degrades gracefully rather than corrupting — which is consistent with a small
-difference rather than a large one.
+### The `read_clip` theory is REFUTED — diagnosed, not guessed
 
-**Fix:** store `read_clip` as a stream (the encoder has it at placement time)
-and re-run. If the 78 vanish, the claim becomes exact.
+`read_clip` does not exist in the encoder at all (zero matches in
+`106_inprocess.cpp`). It is computed INSIDE `build_substrate`
+(`S.read_clip[o] = best_clip`, caps_caller.h:827) during re-placement — an
+OUTPUT, not an input. Both paths therefore generate it identically, and it
+cannot be the cause.
+
+### The real cause: placement CARRY-FORWARD, not correctness
+
+    A (FASTQ):   contigs 334816 -> 140561   placed=1,749,455  re-placed=2,011,297
+    B (archive): contigs 334816 -> 140561   placed=1,689,820  re-placed=2,070,932
+
+* Both collapse **334,816 -> the identical 140,561 contigs**.
+* `H=55` identical. **SNVs identical: 24,769 vs 24,769.** Candidates differ by 1.
+* The 78 differing records are **entirely in the indel channel**.
+
+The only difference is WHICH reads carry their placement forward versus get
+re-placed: A has the encoder's live per-read state, while B reconstructs from
+`pos_abs`, which is stored **per UNIQUE read** — duplicates share one entry.
+The re-placement step recovers them (totals match at ~3.76M either way), but a
+read recovered by mismatch-tolerant search can land a base or two differently
+from one carried forward.
+
+**So this is a fidelity limit of the format, not a bug.** Closing it would mean
+storing placements per ORIGINAL read rather than per unique — which is exactly
+the redundancy the compressor exists to remove. The honest statement is:
+
+> the archive reproduces the call set to within 0.21% (SNVs identical, 78 of
+> 36,638 records differ, all indels)
+
+and NOT "identically".
 
 ## Pre-run audit — 10 checks, 2 real bugs caught before spending machine time
 
