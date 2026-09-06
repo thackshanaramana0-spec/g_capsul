@@ -297,6 +297,61 @@ channel had no denominator at all before.)
 
 Best union at AF 0.25-0.75: F1 = 0.8249 < A's 0.8766.
 
+## The quality + true-VAF lever (built and measured 2026-09-06)
+
+Chasing "the channels carry no base quality" exposed a deeper bug first: the
+`AF` field was **mathematically impossible** -- AF>1 on 43.7% of sites.
+
+**Why, and it is structural, not arithmetic.** `nmcov` counts reads PLACED at a
+pg position; near-miss support counts reads REJECTED there for differing by one
+base. **The pseudogenome never contains a pileup** -- reads matching the
+assembly are chained in, reads carrying the other allele are stitched elsewhere
+-- so the numerator and denominator were measured on two different populations.
+(This is the same structural fact that refuted PG-ANCHOR.)
+
+Reformulated as a genuine variant allele fraction for this data structure:
+
+    REF support = nmcov[p]  (reads placed here, i.e. agreeing with the pg)
+    ALT support = distinct reads rejected here for one mismatch
+    VAF = ALT / (ALT + REF)
+
+bounded in [0,1], with a clean **heterozygous mode at 0.5-0.6 holding 40% of
+sites** -- a signal completely invisible under the old formula. Also fixed:
+support now counts DISTINCT reads, not (a,b) pair observations (one read a
+pairs with many partners b), which removed 4.5% pure inflation.
+
+Base-quality mask: one bit per base, "is this base >= Q20", reusing `woff` (the
+2-bit packing's own offsets) so base j of read u is bit `woff[u]*32+j` -- no
+second index, 240 MB at full chr20, built during the parse that already reads
+the quality line. Built ONLY when `CAPS_NM_VCF` is set. Measured: 92,468 of
+513,342 sites (18%) have NO high-quality observation at all.
+
+| filter | n | TP | FP | P | rescues | marginal P |
+|---|---|---|---|---|---|---|
+| all | 100,200 | 34,456 | 48,349 | 0.416 | 3,910 | 7.5% |
+| VAF 0.30-0.70 | 48,521 | 25,378 | 15,355 | 0.623 | 2,852 | 15.7% |
+| VAF 0.35-0.65 | 32,175 | 19,239 | 7,757 | 0.713 | 2,169 | 21.9% |
+| HQ>=3 alone | 72,082 | 25,303 | 34,754 | 0.421 | 2,752 | 7.3% |
+| HQ>=3 + VAF | 34,055 | 21,596 | 7,510 | 0.742 | 2,316 | 23.6% |
+| **HQ>=3 + VAF_hq** | 26,474 | 17,076 | 5,587 | **0.754** | 1,864 | **25.0%** |
+
+**Marginal precision 7.5% -> 25.0% (3.3x); precision 0.416 -> 0.754.** Best
+union: F1 0.8460 < A's 0.8766. **A still stands.**
+
+**Quality is NOT inert** (a prediction recorded before the run, and wrong):
+adding HQ>=3 to the VAF band moved marginal precision 21.9% -> 25.0%. But
+quality ALONE is useless (7.3%). The two axes are independent and only work
+together -- VAF asks "is the support balanced", quality asks "is the support
+trustworthy". Encoder cost of both: 287.17s/6.03GB -> 279.46s/6.36GB, i.e. no
+time penalty and +0.33 GB.
+
+**Next lever this exposed, unbuilt:** near-miss requires EXACTLY ONE mismatch,
+so a read spanning two nearby het sites is rejected outright -- it is blind to
+clustered variants for the same reason the k-mer graph is, and that is 30.4% of
+A's misses. `nm2 = 5,940,724` two-mismatch observations are counted and
+discarded. Emitting them as candidate PAIRS targets the one failure mode both
+current channels share.
+
 ## Summary of every configuration measured
 
 | config | what | F1 | vs A |
@@ -304,12 +359,12 @@ Best union at AF 0.25-0.75: F1 = 0.8249 < A's 0.8766.
 | **A** bubbles (published) | k-mer graph, DiscoSNP's method | **0.8766** | -- |
 | B pileup on placements | collapse + pileup | 0.8072 | worse |
 | C A+B merged | | 0.8315 | worse |
-| D near-miss, best filter | encoder overlap rejects | union 0.8249 | worse |
+| D near-miss, best filter (VAF+quality) | encoder overlap rejects | union 0.8460 | worse |
 | E mem_extmm, best filter | archive mismatch streams | union 0.8739 | worse |
 | DiscoSNP++ (same box) | | 0.847 | -- |
 
-Best marginal precision achieved by ANY encoder channel: **19.1%**, against a
-**44%** bar. **A stands.**
+Best marginal precision achieved by ANY encoder channel: **25.0%** (near-miss
+with true VAF + base-quality mask), against a **44%** bar. **A stands.**
 
 ## VERDICT
 
