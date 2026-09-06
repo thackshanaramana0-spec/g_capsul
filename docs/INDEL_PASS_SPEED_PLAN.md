@@ -268,3 +268,63 @@ reading code and inferring:
 The `accounted X of stage` sum check is what caught all three, and it still
 reports a gap: **210 s accounted of 352 s, so ~142 s remains unmeasured.** That
 is the next target.
+
+
+---
+
+# VERDICT: F1 is bit-identical, the work ships
+
+Both builds run back-to-back on the same box, same 4M subset, lifted and scored
+identically against GIAB truth:
+
+    orig/SNV     TP=13862  FP=2624  FN=30713  P=0.8408  R=0.3110  F1=0.4540
+    new/SNV      TP=13862  FP=2624  FN=30713  P=0.8408  R=0.3110  F1=0.4540
+    orig/INDEL   TP=1214   FP=316   FN=6567   P=0.7935  R=0.1560  F1=0.2608
+    new/INDEL    TP=1214   FP=316   FN=6567   P=0.7935  R=0.1560  F1=0.2608
+
+**Every value identical** -- TP, FP, FN, P, R, F1, both classes. Both lifted to
+exactly 23,907 records.
+
+| | orig | new |
+|---|---|---|
+| `indel_pass` | 511.9 s | **339.6 s (-34%)** |
+| wall | 873.3 s | **696.8 s (-20%)** |
+| peak RAM | 14.74 GB | **13.00 GB (-1.74 GB)** |
+
+## The gate I had been using was wrong
+
+For most of this work the gate was "contig-space VCF content must match". That
+treats a CONTIG RELABELING as a regression: the pcluster events sit on repeated
+sequence where several contigs are equally valid anchors, so a different anchor
+order reports the same variant under a different `bcontig` id. The lift resolves
+both to the same genome coordinate.
+
+The right gate is F1 after the lift, and by that gate nothing moved. Three runs
+were spent chasing a difference (300 vs 296 vs 289 records) that the scoring
+pipeline does not see.
+
+**Keep both gates in future:** contig-space identity is a useful STRONG signal
+(if it holds, stop), but its failure is not sufficient evidence of a regression.
+Score before concluding.
+
+## What actually shipped
+
+1. **pcluster index**: 3 `unordered_map`s (~65M insertions each, reserved at 2M
+   so repeatedly rehashing) + 2 erase-during-iteration passes -> one flat sorted
+   array. 139.7 s -> 8.2 s, **17x**. Anchor set proven identical in-process
+   (21,605,670 keys, zero differences).
+2. **Bitset pre-filter** on the ~340M anchor probes: 244.9 s -> 162.4 s,
+   **-34%**. Output identical BY CONSTRUCTION -- false positives fall through to
+   the real lookup, false negatives are impossible.
+3. **`ploc` order-independence**: the event location was a last-writer-wins
+   assignment, so it depended on `unordered_map` bucket layout -- an
+   implementation detail that varies with insertion history and libstdc++
+   version. Now keeps the smallest (contig,pos), a function of the data. This is
+   a reproducibility fix independent of the speed work.
+
+## One correction on the numbers
+
+`indel_pass` measured 599.8 s in one baseline run and 511.9 s in another -- same
+binary, same input, ~15% timing variance (the OUTPUT was stable at 300 indels /
+36,638 records both times). The -34% figure is quoted against the controlled
+back-to-back run, not against the slowest baseline.
