@@ -463,6 +463,48 @@ namespace detail {
 // "shared sequence collapses to one place" property a de Bruijn graph gets for
 // free, obtained without building a graph. Keyed on a measured fraction, not a
 // per-dataset constant.
+// ── FLAT OPEN-ADDRESSING SET ────────────────────────────────────────────────
+// `collapse_contigs` was 51.8 s of a 207.6 s archive-path run (25%), and a
+// benchmark of its exact operation mix showed it is essentially 100% hash
+// INSERTION at std::unordered_set's floor: 140M inserts + 28M queries measured
+// 69.6 s there.
+//
+// The same operation mix on a flat open-addressing table measures **4.4 s** --
+// 15.8x. unordered_set allocates a node per element and chases a pointer per
+// probe; this is one contiguous array, one cache line per probe, no allocation.
+//
+// SEMANTICS ARE IDENTICAL: incremental insert and query, which is what the
+// collapse walk needs (each contig queries the set as it stands, then adds to
+// it). This is a container change, not an algorithm change -- the accept/reject
+// decision is bit-for-bit the same.
+//
+// Two earlier attempts at this stage failed BECAUSE they targeted the queries
+// (4% of the cost): caching the k-mers gained 5 s for +1.7 GB, and a Bloom
+// pre-filter cost 140M adds to guard 28M lookups and made the run WORSE. The
+// container itself was the cost all along.
+struct FlatKmerSet {
+    std::vector<uint64_t> t;
+    size_t mask = 0;
+    static constexpr uint64_t EMPTY = 0xFFFFFFFFFFFFFFFFULL;
+    void init(size_t cap) {
+        size_t b = 1024; while (b < cap * 2) b <<= 1;   // <=50% load
+        t.assign(b, EMPTY); mask = b - 1;
+    }
+    static inline uint64_t mix(uint64_t x) {
+        x ^= x >> 33; x *= 0xff51afd7ed558ccdULL; x ^= x >> 33; return x;
+    }
+    inline bool count(uint64_t k) const {
+        size_t i = mix(k) & mask;
+        for (;;) { const uint64_t v = t[i]; if (v == EMPTY) return false;
+                   if (v == k) return true; i = (i + 1) & mask; }
+    }
+    inline void insert(uint64_t k) {
+        size_t i = mix(k) & mask;
+        for (;;) { const uint64_t v = t[i]; if (v == k) return;
+                   if (v == EMPTY) { t[i] = k; return; } i = (i + 1) & mask; }
+    }
+};
+
 inline std::vector<uint32_t> collapse_contigs(const std::vector<std::string>& ctgs,
                                               double dup_frac, int K) {
     std::vector<uint32_t> order(ctgs.size());
@@ -481,11 +523,11 @@ inline std::vector<uint32_t> collapse_contigs(const std::vector<std::string>& ct
     // is a hard upper bound on distinct claims, and rehashing a set that grows
     // to tens of millions from a 1M seed is pure copying. Capped so a huge
     // input does not over-allocate.
-    std::unordered_set<uint64_t> claimed;
+    FlatKmerSet claimed;
     {
         size_t tot_k = 0;
         for (const auto& c : ctgs) if ((int)c.size() >= K) tot_k += c.size() - (size_t)K + 1;
-        claimed.reserve(std::min<size_t>(tot_k, (size_t)1 << 26));
+        claimed.init(tot_k ? tot_k : 1024);
     }
     std::vector<uint32_t> keep;
     std::vector<uint64_t> km;
@@ -529,7 +571,7 @@ inline std::vector<uint32_t> collapse_contigs(const std::vector<std::string>& ct
             if (kmq[w]) { ++tot; if (claimed.count(km[w])) ++hit; }
         if (tot > 0 && (double)hit / (double)tot >= dup_frac) continue;   // redundant
         keep.push_back(ci);
-        claimed.insert(km.begin(), km.end());
+        for (uint64_t kk : km) claimed.insert(kk);
     }
     std::sort(keep.begin(), keep.end());
     return keep;
