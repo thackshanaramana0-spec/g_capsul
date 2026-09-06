@@ -105,3 +105,74 @@ sensitivity.
 1. `indel_pass` parallelisation (the 65%), byte-verified against the current VCF
 2. seed-index exact reserve (applied, untested -- ~1 GB)
 3. re-measure both paths and update the scoreboard
+
+
+---
+
+# indel_pass, fully profiled (2026-09-06, 4M-read subset)
+
+Nine timers plus a sum check that prints `accounted X of stage` and says
+explicitly that a mismatch means the timers are wrong. That check is the single
+most useful thing added, because THREE separate targets in this session were
+identified by reading code and were wrong:
+
+| section | cost | share |
+|---|---|---|
+| anchor scan + merge | 39.0 s | 6% |
+| pcluster: build 3 hash maps | 121.9 s | 20% |
+| pcluster: 2 erase passes | 17.8 s | 3% |
+| pcluster: scan + emit | 251.3 s | 42% |
+| im emit loop | **0.02 s** | 0% |
+| setup / medcov / scan_pair / matching | 1.9 s | 0% |
+| **UNACCOUNTED** | **167.9 s** | **28%** |
+| indel_pass total | 599.8 s | |
+
+**The `im` emit loop is 0.02 s.** A fix for it (`kcount_at`, removing a
+per-probe `substr` allocation) was written and ready to ship as "the answer"
+before the timer showed it costs 20 milliseconds.
+
+## pcluster index: flat sorted array instead of 3 hash maps -- FAST, BUT FAILS THE GATE
+
+    build index       121.9 s -> 0.67 s
+    erase passes       17.8 s -> 7.56 s (sort+select)
+    139.7 s -> 8.2 s = 17x
+    indel_pass        599.8 s -> 443.7 s (-26%)
+    peak RAM         14.75 GB -> 13.00 GB
+    pcluster indels       300 -> 296     <-- FAILS
+    VCF content                DIFFERS   <-- FAILS
+
+**Not shipped.** A faster wrong answer is worthless.
+
+Two hypotheses for the 4 lost indels were tested and REFUTED:
+1. *Selection predicate differs.* Replayed both rules on 400k synthetic
+   entries: same 72 keys kept, same values, ZERO disagreement.
+2. *`pack25` skips create zero-filled holes.* Both the count pass and the fill
+   pass use the same guard, so counts match fills exactly.
+
+Remaining explanation: the flat version keeps **21,605,670 unique forward
+anchors**, where the original's map was seeded at 2M and shrunk by two erase
+passes. More surviving anchors changes which reads hit the `vec.size() < 200`
+cap in `rc_reads` downstream, and 4 indels fall out differently. That is a
+behavioural difference, not a predicate bug -- and it means the ORIGINAL was
+silently capacity-limited.
+
+## The real remaining target: 340M hash probes
+
+`pcluster: scan + emit` (251 s) is dominated by one line:
+
+    if (!pkidx.count(cn)) continue;     // ~340M probes, one per read k-mer
+
+4M reads x ~85 k-mers each, each an `unordered_map` probe. The insertions after
+it ARE filtered (`provably dead otherwise`), so the lookups themselves are the
+cost. Keeping `pkidx` as a sorted array with a Bloom/bitset pre-filter would
+reject the ~99% that miss without touching the map.
+
+Plus **167.9 s still unaccounted** after nine timers, sitting between
+`pcluster: scan + emit` and the stage end. Not yet read.
+
+## Honest projection, corrected twice
+
+I projected "522 -> ~80 s" before the timers split the stage; that was wrong by
+5x. With the index fix alone it is ~460 s. The 419 s of scan + unaccounted tail
+(70% of the stage) is where a drastic cut has to come from, and neither is
+built.

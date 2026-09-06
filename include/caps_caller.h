@@ -5340,40 +5340,84 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             // over whichever substrate it uses.
             std::unordered_map<uint64_t, std::pair<uint32_t,uint32_t>> pkidx;
             {
-                // Count occurrences of the CANONICAL k-mer across BOTH
-                // orientations and keep only those seen exactly once, then use
-                // only the forward-oriented ones. Counting just the
-                // forward-canonical k-mers instead admits anchors that recur in
-                // reverse-complement form elsewhere, which measured as a real
-                // precision loss (r2 indel P 0.760 -> 0.586).
-                std::unordered_map<uint64_t, uint32_t> pcount;
-                std::unordered_map<uint64_t, uint8_t> porient;
-                pcount.reserve(1u << 21); pkidx.reserve(1u << 21);
-                for (uint32_t ci = 0; ci < (uint32_t)pc_cd.contigs.size(); ++ci) {
-                    const std::string& c = pc_cd.contigs[ci];
-                    for (size_t i2 = 0; i2 + 25 <= c.size(); ++i2) {
-                        uint64_t v; if (!pack25(c.data() + i2, v)) continue;
-                        uint64_t rv = rc25(v), cn = v < rv ? v : rv;
-                        if (++pcount[cn] == 1) {
-                            pkidx[cn] = {ci, (uint32_t)i2};
-                            porient[cn] = (uint8_t)(v <= rv ? 0 : 1);
+                // ── FLAT SORTED ARRAY, NOT THREE HASH MAPS ──────────────────
+                // MEASURED: this block is ~92% of indel_pass (480 s of 522 s on
+                // a 4M-read subset), which is itself 84% of the archive-path
+                // caller -- and it yields ~10% of the indels. The cost is
+                // structural, not incidental: three unordered_maps taking ~65M
+                // insertions each (reserved at 2M, so they rehash repeatedly),
+                // followed by two full traversals doing erase() DURING
+                // iteration with extra hash lookups per element.
+                //
+                // Identical semantics, computed by sorting instead:
+                //   * count occurrences of the CANONICAL 25-mer across BOTH
+                //     orientations (counting forward-canonical only measured a
+                //     real precision loss, r2 indel P 0.760 -> 0.586);
+                //   * the FIRST occurrence supplies (contig, pos, orient) --
+                //     the original's `if (++pcount[cn] == 1)` -- and contigs
+                //     are visited in increasing ci, so "first in sort order"
+                //     IS "first seen";
+                //   * survivors are the keys with count 1 that are
+                //     forward-oriented. (The original ran two erase passes; the
+                //     second, `pcount != 1`, subsumes the first at the default
+                //     PUNIQ=1. Both are applied here so any PUNIQ>1 behaves as
+                //     before.)
+                //
+                // Build is the count -> prefix-sum -> parallel-fill-by-index
+                // pattern already used for kidx above, so entry order matches
+                // the serial push order exactly.
+                struct PE { uint64_t k; uint32_t ci, pos; uint8_t fwd; };
+                std::vector<PE> pv;
+                const size_t PNC = pc_cd.contigs.size();
+                {
+                    std::vector<size_t> off(PNC + 1, 0);
+                    #pragma omp parallel for schedule(dynamic, 256)
+                    for (long long ci = 0; ci < (long long)PNC; ++ci) {
+                        const std::string& c = pc_cd.contigs[(size_t)ci];
+                        size_t cnt = 0;
+                        for (size_t i2 = 0; i2 + 25 <= c.size(); ++i2) {
+                            uint64_t v; if (pack25(c.data() + i2, v)) ++cnt;
+                        }
+                        off[(size_t)ci + 1] = cnt;
+                    }
+                    for (size_t i2 = 0; i2 < PNC; ++i2) off[i2 + 1] += off[i2];
+                    pv.resize(off[PNC]);
+                    #pragma omp parallel for schedule(dynamic, 256)
+                    for (long long ci = 0; ci < (long long)PNC; ++ci) {
+                        const std::string& c = pc_cd.contigs[(size_t)ci];
+                        size_t w = off[(size_t)ci];
+                        for (size_t i2 = 0; i2 + 25 <= c.size(); ++i2) {
+                            uint64_t v; if (!pack25(c.data() + i2, v)) continue;
+                            const uint64_t rv = rc25(v), cn = v < rv ? v : rv;
+                            pv[w++] = { cn, (uint32_t)ci, (uint32_t)i2, (uint8_t)(v <= rv ? 0 : 1) };
                         }
                     }
                 }
-                // ANCHOR UNIQUENESS. Originally occ==1 across ALL contigs.
-                // Measured: near the 1bp-homopolymer events we miss this is
-                // starving -- 851 read-level gap votes collapse to only 64
-                // distinct events, 47 with a single supporting read, because
-                // too few anchors survive for several reads to vote on the same
-                // locus. In a fragmented substrate the same 25-mer legitimately
-                // appears in several overlapping contigs without being a
-                // repeat. Relax to occ<=PUNIQ (first-seen contig used).
                 int PUNIQ = 1;
                 if (const char* e = std::getenv("CAPS_PCLUSTER_UNIQ")) PUNIQ = atoi(e);
-                for (auto it = pkidx.begin(); it != pkidx.end(); )
-                    if (porient[it->first] != 0 || (int)pcount[it->first] > PUNIQ) it = pkidx.erase(it); else ++it;
-                for (auto it = pkidx.begin(); it != pkidx.end(); )
-                    if (pcount[it->first] != 1) it = pkidx.erase(it); else ++it;
+                _iplap("pcluster: build flat array");
+                // STABLE sort: ties must keep (ci, pos) ascending so the first
+                // entry of a run is the first-seen occurrence.
+                #if defined(_OPENMP) && defined(_GLIBCXX_PARALLEL_ALGO_H)
+                __gnu_parallel::stable_sort(pv.begin(), pv.end(),
+                    [](const PE& a, const PE& b){ return a.k < b.k; });
+                #else
+                std::stable_sort(pv.begin(), pv.end(),
+                    [](const PE& a, const PE& b){ return a.k < b.k; });
+                #endif
+                pkidx.reserve(pv.size() / 8 + 1);
+                for (size_t a0 = 0; a0 < pv.size(); ) {
+                    size_t b0 = a0;
+                    while (b0 < pv.size() && pv[b0].k == pv[a0].k) ++b0;
+                    const size_t occ = b0 - a0;
+                    // first-seen entry decides contig/pos/orientation
+                    if (pv[a0].fwd == 0 && (int)occ <= PUNIQ && occ == 1)
+                        pkidx[pv[a0].k] = { pv[a0].ci, pv[a0].pos };
+                    a0 = b0;
+                }
+                fprintf(stderr, "[PCLUSTER] %zu 25-mers -> %zu unique forward anchors\n",
+                        pv.size(), pkidx.size());
+                _iplap("pcluster: sort + select");
             }
             std::vector<std::vector<uint16_t>> pcov;
             {
@@ -5583,6 +5627,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             if (std::getenv("CAPS_PCDBG"))
                 fprintf(stderr,"[pc] read-anchor visits=%ld  identical=%ld  no-gap=%ld  GAP-FOUND=%ld\n",
                         g_pc_seen,g_pc_identical,g_pc_nogap,g_pc_found);
+            _iplap("pcluster: scan + emit");
             if (n_pc) fprintf(stderr, "[CAPS-CALL] pcluster indels=%zu\n", n_pc);
         }
 
