@@ -2780,6 +2780,32 @@ int main(int argc,char** argv){
     // resolves to exactly one contig via a binary search over span starts.
     if(CAPS_CALL){
         phase("pre-call");
+        // ── RELEASE ENCODER STATE THE CALLER NEVER READS ────────────────────
+        // Measured at full chr20: 4,235 MB is already resident when the caller
+        // starts, and the caller's own footprint is only ~2.97 GB on top --
+        // itself LIGHTER than DiscoSNP++'s 3.29 GB. The reported peak is
+        // dominated by compression state the caller never touches.
+        //
+        // These eleven are confirmed unread between here and the point where
+        // they are freed anyway (grep for each token AND for every closure
+        // capturing it, over the full range).
+        { std::vector<uint64_t>().swap(pent); std::vector<uint32_t>().swap(ptab); }
+        { std::vector<uint32_t>().swap(nxt);  std::vector<uint32_t>().swap(prv);
+          std::vector<uint32_t>().swap(ovl);  std::vector<uint32_t>().swap(ch_h);
+          std::vector<uint32_t>().swap(ch_t); std::vector<uint32_t>().swap(tails);
+          std::vector<uint64_t>().swap(seed); std::vector<uint8_t>().swap(ok);
+          std::vector<uint8_t>().swap(admit); std::vector<uint8_t>().swap(matched); }
+        // rpk/woff/rlen are read downstream ONLY by the DUMP_MM block, which
+        // calls rseed() -- a lambda capturing them by reference from ~2000
+        // lines earlier. That indirection cost a real SIGSEGV to find (ASan
+        // traced it to w32() at 106_inprocess.cpp:720 via rseed at :2892), so
+        // it is gated rather than assumed: DUMP_MM is NOT set on Claim 2's
+        // official benchmark path (CAPS_CALL=1 CAPS_DBG=1 CAPS_DBG_ONLY=1),
+        // so these are freeable there and stay resident when it is set.
+        if(!getenv("DUMP_MM")){
+            std::vector<uint64_t>().swap(rpk); std::vector<uint64_t>().swap(woff);
+            std::vector<uint16_t>().swap(rlen);
+        }
         capscall::CallData cd;
         cd.contigs.reserve(g_contig_spans.size());
         for(auto& sp:g_contig_spans) cd.contigs.push_back(pg.substr(sp.first, sp.second-sp.first));
