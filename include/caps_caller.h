@@ -5488,6 +5488,11 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 inline bool count(uint64_t key) const {
                     return std::binary_search(k.begin(), k.end(), key);
                 }
+                inline size_t index_of(uint64_t key) const {
+                    auto it = std::lower_bound(k.begin(), k.end(), key);
+                    if (it == k.end() || *it != key) return (size_t)-1;
+                    return (size_t)(it - k.begin());
+                }
                 inline const std::pair<uint32_t,uint32_t>* find_ptr(uint64_t key) const {
                     auto it = std::lower_bound(k.begin(), k.end(), key);
                     if (it == k.end() || *it != key) return nullptr;
@@ -5692,14 +5697,14 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             // ORDER, then by read index. That reproduces the serial insertion
             // order exactly, which matters because `vec.size() < 200` caps each
             // key -- a different arrival order would keep a different 200.
-            std::unordered_map<uint64_t, std::vector<std::pair<uint32_t,uint32_t>>> rc_reads;
-            rc_reads.reserve(pkidx.size() ? pkidx.size() : (size_t)(1u << 20));
+            std::vector<uint32_t> rc_off;                              // CSR offsets, size |pkidx|+1
+            std::vector<std::pair<uint32_t,uint32_t>> rc_val;          // CSR values
             {
                 int nt = 1;
                 #ifdef _OPENMP
                 nt = omp_get_max_threads();
                 #endif
-                std::vector<std::vector<std::pair<uint64_t,std::pair<uint32_t,uint32_t>>>> tb((size_t)nt);
+                std::vector<std::vector<std::pair<uint32_t,std::pair<uint32_t,uint32_t>>>> tb((size_t)nt);
                 #pragma omp parallel for schedule(static)
                 for (long long i = 0; i < (long long)seqs.size(); ++i) {
                     int tid = 0;
@@ -5712,19 +5717,36 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                         uint64_t v; if (!pack25(q.data() + j, v)) continue;
                         uint64_t rv = rc25(v), cn = v < rv ? v : rv;
                         if (!pbf_maybe(cn)) continue;   // definitely absent
-                        if (!pkidx.count(cn)) continue; // provably dead otherwise
-                        buf.push_back({cn, {(uint32_t)i, (uint32_t)j}});
+                        const size_t ai = pkidx.index_of(cn);
+                        if (ai == (size_t)-1) continue; // provably dead otherwise
+                        buf.push_back({(uint32_t)ai, {(uint32_t)i, (uint32_t)j}});
                     }
                 }
-                // Merge in READ ORDER so the 200-cap keeps the same entries the
-                // serial loop kept. schedule(static) gives each thread a
-                // contiguous read range, so concatenating buffers in thread id
-                // order IS read order.
-                for (int t = 0; t < nt; ++t)
-                    for (auto& e : tb[(size_t)t]) {
-                        auto& vec = rc_reads[e.first];
-                        if (vec.size() < 200) vec.push_back(e.second);
-                    }
+                // ── CSR MERGE, NO HASH MAP ──────────────────────────────
+                // rc_reads was an unordered_map<uint64, vector<pair>> filled by
+                // a SERIAL loop -- a hash lookup plus a possible vector
+                // reallocation per entry, tens of millions of times. Now that
+                // pkidx is a sorted array, each key already HAS a dense index,
+                // so the structure can be a flat CSR layout: count per anchor,
+                // prefix-sum to offsets, then fill.
+                //
+                // Read order and the 200-cap are preserved exactly:
+                // schedule(static) gives each thread a contiguous read range,
+                // so visiting thread buffers in id order is read order, and the
+                // count pass applies the same cap the push loop did.
+                {
+                    rc_off.assign(pkidx.size() + 1, 0);
+                    for (int t = 0; t < nt; ++t)
+                        for (auto& e : tb[(size_t)t])
+                            if (rc_off[e.first + 1] < 200) ++rc_off[e.first + 1];
+                    for (size_t i2 = 0; i2 < pkidx.size(); ++i2) rc_off[i2 + 1] += rc_off[i2];
+                    rc_val.resize(rc_off[pkidx.size()]);
+                    std::vector<uint32_t> w(rc_off.begin(), rc_off.end() - 1);
+                    for (int t = 0; t < nt; ++t)
+                        for (auto& e : tb[(size_t)t])
+                            if (w[e.first] < rc_off[e.first + 1]) rc_val[w[e.first]++] = e.second;
+                    decltype(tb)().swap(tb);
+                }
             }
             static long g_pc_identical=0, g_pc_nogap=0, g_pc_found=0, g_pc_seen=0;
             // (contig, pos, signed gap, inserted seq) -> supporting reads
@@ -5783,9 +5805,11 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 uint32_t cpos = pkidx.v[(size_t)ai].second;
                 const std::string& cc2 = pc_cd.contigs[ccid];
                 if (cpos < (uint32_t)LW) continue;
-                auto rit = rc_reads.find(akey);
-                if (rit == rc_reads.end()) continue;
-                for (auto& pr : rit->second) {
+                // CSR: the anchor's own index IS the row, so no lookup at all.
+                const uint32_t rlo = rc_off[(size_t)ai], rhi = rc_off[(size_t)ai + 1];
+                if (rlo == rhi) continue;
+                for (uint32_t rr = rlo; rr < rhi; ++rr) {
+                    const auto& pr = rc_val[rr];
                     if (std::getenv("CAPS_PCDBG")) ++g_pc_seen;
                     const std::string& q = seqs[pr.first];
                     uint32_t rpos = pr.second;
