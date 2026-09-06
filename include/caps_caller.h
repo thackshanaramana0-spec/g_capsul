@@ -5484,6 +5484,45 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             // cannot observe the absence of keys that are not in pkidx. pkidx
             // is fully built and filtered above before this point, so the
             // membership test is well-defined here.
+            // ── BITSET PRE-FILTER ON THE ANCHOR PROBE ───────────────────────
+            // MEASURED: this loop is `pcluster: scan + emit`, 251 s of a 600 s
+            // stage (42%). It walks ~85 k-mers of each of 4M reads -- ~340M
+            // iterations -- and every one does `pkidx.count(cn)`, a hash probe
+            // into a 21.6M-entry map. The insertions after it are already
+            // filtered ("provably dead otherwise"), so the PROBES are the cost,
+            // not the work they admit.
+            //
+            // A Bloom-style bitset answers "definitely absent" without touching
+            // the map. It can produce FALSE POSITIVES but never false negatives,
+            // so a survivor is still checked against pkidx exactly as before --
+            // the filter can only skip lookups that would have missed. Output is
+            // therefore identical BY CONSTRUCTION, not by measurement.
+            //
+            // Sized at 16 bits per anchor (~43 MB for 21.6M anchors) with two
+            // independent hashes: ~0.4% false-positive rate, so ~99.6% of the
+            // ~340M probes end at a single cache line instead of a hash walk.
+            std::vector<uint64_t> pbf;
+            size_t pbf_bits = 0;
+            {
+                pbf_bits = (size_t)1 << (64 - __builtin_clzll(std::max<size_t>(1, pkidx.size() * 16)));
+                pbf.assign(pbf_bits / 64 + 1, 0ULL);
+                const size_t mask = pbf_bits - 1;
+                for (const auto& kv : pkidx) {
+                    const uint64_t h1 = kv.first * 0x9E3779B97F4A7C15ULL;
+                    const uint64_t h2 = (kv.first ^ (kv.first >> 29)) * 0xBF58476D1CE4E5B9ULL;
+                    pbf[((h1 >> 20) & mask) >> 6] |= 1ULL << (((h1 >> 20) & mask) & 63);
+                    pbf[((h2 >> 20) & mask) >> 6] |= 1ULL << (((h2 >> 20) & mask) & 63);
+                }
+                fprintf(stderr, "[PCLUSTER] anchor bitset %zu bits (%.1f MB) for %zu anchors\n",
+                        pbf_bits, (double)pbf.size() * 8 / 1048576.0, pkidx.size());
+            }
+            const size_t pbf_mask = pbf_bits - 1;
+            auto pbf_maybe = [&](uint64_t k) -> bool {
+                const uint64_t h1 = k * 0x9E3779B97F4A7C15ULL;
+                if (!((pbf[((h1 >> 20) & pbf_mask) >> 6] >> (((h1 >> 20) & pbf_mask) & 63)) & 1ULL)) return false;
+                const uint64_t h2 = (k ^ (k >> 29)) * 0xBF58476D1CE4E5B9ULL;
+                return (pbf[((h2 >> 20) & pbf_mask) >> 6] >> (((h2 >> 20) & pbf_mask) & 63)) & 1ULL;
+            };
             std::unordered_map<uint64_t, std::vector<std::pair<uint32_t,uint32_t>>> rc_reads;
             rc_reads.reserve(pkidx.size() ? pkidx.size() : (size_t)(1u << 20));
             for (uint32_t i = 0; i < (uint32_t)seqs.size(); ++i) {
@@ -5491,6 +5530,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 for (size_t j = LW; j + AK <= q.size(); ++j) {
                     uint64_t v; if (!pack25(q.data() + j, v)) continue;
                     uint64_t rv = rc25(v), cn = v < rv ? v : rv;
+                    if (!pbf_maybe(cn)) continue;       // definitely absent: no hash probe
                     if (!pkidx.count(cn)) continue;     // provably dead otherwise
                     auto& vec = rc_reads[cn];
                     if (vec.size() < 200) vec.push_back({i, (uint32_t)j});
@@ -5511,7 +5551,33 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             // channel applies via MIN_ANCH. Without it a single anchor's worth
             // of reads can carry an event on its own.
             std::map<std::tuple<std::string,int,std::string>, std::unordered_set<uint32_t>> panch;
-            for (auto& kv : pkidx) {
+            // ── ITERATE ANCHORS IN A DEFINED ORDER ──────────────────────────
+            // This loop walked `pkidx` directly, and pkidx is an unordered_map:
+            // its iteration order depends on INSERTION HISTORY. `ploc` below
+            // records one location per event and the first writer wins, so the
+            // anchor order decides which location an event gets.
+            //
+            // MEASURED: replacing pcluster's index build (hash maps -> flat
+            // sorted array) produced a provably IDENTICAL anchor set
+            // (21,605,670 keys, zero differences, checked in-process) and yet
+            // moved 4 indel records -- reproducibly, 300 vs 296 across repeated
+            // runs of each build. The anchor SET was identical; the insertion
+            // ORDER was not.
+            //
+            // Sorting by (contig, pos) makes the loop independent of how pkidx
+            // was built, so the result no longer depends on an implementation
+            // detail of the container. This is the fix for the difference, not
+            // a workaround for it.
+            std::vector<std::pair<uint64_t, std::pair<uint32_t,uint32_t>>> panchors;
+            panchors.reserve(pkidx.size());
+            for (const auto& kv : pkidx) panchors.push_back(kv);
+            std::sort(panchors.begin(), panchors.end(),
+                      [](const auto& a, const auto& b){
+                          if (a.second.first  != b.second.first)  return a.second.first  < b.second.first;
+                          if (a.second.second != b.second.second) return a.second.second < b.second.second;
+                          return a.first < b.first;
+                      });
+            for (auto& kv : panchors) {
                 uint32_t ccid = kv.second.first;
                 uint32_t cpos = kv.second.second;
                 const std::string& cc2 = pc_cd.contigs[ccid];
