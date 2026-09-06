@@ -6051,14 +6051,40 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             for (size_t i = 0; i < n_snv; ++i)
                 pileup_keys.insert(colkey(orecs[i].cid, orecs[i].pos));
             struct XsnvAgg { int anchors = 0; uint32_t altcid = 0, altpos = 0; };
-            std::map<std::tuple<uint32_t,uint32_t,char,char>, XsnvAgg> xim;
-            for (size_t xrun_i = 0; xrun_i < kidx.size(); ) {
-                size_t xrun_j = xrun_i;
-                while (xrun_j < kidx.size() && kidx[xrun_j].kmer == kidx[xrun_i].kmer) ++xrun_j;
-                size_t run_len = xrun_j - xrun_i;
-                size_t base = xrun_i;
-                xrun_i = xrun_j;
-                if (run_len != 2) continue;
+            // PARALLEL OVER RUNS, FILTERED FIRST. This walks all ~65M kidx
+            // entries and the body bails immediately unless a run has EXACTLY
+            // two occurrences, so the overwhelming majority are no-ops. That is
+            // the same failure mode that made a first attempt at the anchor
+            // scan deliver 2.9%: threading 86M trivial tasks costs more in
+            // scheduling than the work is worth. Collect the runs that carry
+            // work, then thread only those.
+            //
+            // `xim` accumulates anchors (order-free) but overwrites
+            // altcid/altpos (last writer). Each thread keeps its own map and
+            // they merge afterwards, taking the entry from the LOWEST original
+            // run index so the result does not depend on scheduling.
+            std::vector<std::pair<size_t,size_t>> xruns;
+            for (size_t r0 = 0; r0 < kidx.size(); ) {
+                size_t r1 = r0;
+                while (r1 < kidx.size() && kidx[r1].kmer == kidx[r0].kmer) ++r1;
+                if (r1 - r0 == 2) xruns.push_back({r0, r1});
+                r0 = r1;
+            }
+            int x_nt = 1;
+            #ifdef _OPENMP
+            x_nt = omp_get_max_threads();
+            #endif
+            std::vector<std::map<std::tuple<uint32_t,uint32_t,char,char>, std::pair<XsnvAgg,size_t>>> txim((size_t)x_nt);
+            fprintf(stderr, "[XSNV] %zu runs of exactly 2 over %d threads\n", xruns.size(), x_nt);
+            #pragma omp parallel for schedule(dynamic, 256)
+            for (long long xi = 0; xi < (long long)xruns.size(); ++xi) {
+                int xtid = 0;
+                #ifdef _OPENMP
+                xtid = omp_get_thread_num();
+                #endif
+                auto& xim = txim[(size_t)xtid];
+                const size_t base = xruns[(size_t)xi].first;
+                const size_t myx  = (size_t)xi;
                 uint32_t cax = kidx[base].ci,   pax = kidx[base].pos;   uint8_t oax = kidx[base].orient;
                 uint32_t cbx = kidx[base+1].ci, pbx = kidx[base+1].pos; uint8_t obx = kidx[base+1].orient;
                 if (cax == cbx) continue;
@@ -6077,10 +6103,30 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 uint32_t alt_pos_fwd = oppx
                     ? (uint32_t)(cdb.contigs[acx].size() - 1u) - (qBx + d)
                     : qBx + d;
-                auto& xa = xim[std::make_tuple(rcx, sb.apos, sb.ref_base, sb.alt_base)];
-                xa.anchors++;
-                xa.altcid = acx;
-                xa.altpos = alt_pos_fwd;
+                auto& xe = xim[std::make_tuple(rcx, sb.apos, sb.ref_base, sb.alt_base)];
+                xe.first.anchors++;
+                if (xe.first.anchors == 1 || myx < xe.second) {
+                    xe.first.altcid = acx; xe.first.altpos = alt_pos_fwd; xe.second = myx;
+                }
+            }
+            // merge: anchors sum, altcid/altpos from the lowest run index
+            std::map<std::tuple<uint32_t,uint32_t,char,char>, XsnvAgg> xim;
+            {
+                std::map<std::tuple<uint32_t,uint32_t,char,char>, size_t> xrun_of;
+                for (int t = 0; t < x_nt; ++t)
+                    for (auto& kv : txim[(size_t)t]) {
+                        auto it = xim.find(kv.first);
+                        if (it == xim.end()) { xim.emplace(kv.first, kv.second.first); xrun_of[kv.first] = kv.second.second; }
+                        else {
+                            it->second.anchors += kv.second.first.anchors;
+                            if (kv.second.second < xrun_of[kv.first]) {
+                                it->second.altcid = kv.second.first.altcid;
+                                it->second.altpos = kv.second.first.altpos;
+                                xrun_of[kv.first] = kv.second.second;
+                            }
+                        }
+                    }
+                decltype(txim)().swap(txim);
             }
             for (auto& kv : xim) {
                 uint32_t cid2, apos2; char rb2, ab2;
@@ -6117,6 +6163,13 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
     // the exact sequences each record was called against.
     if (const char* dp = std::getenv("CAPS_DUMP_CONTIGS")) {
         FILE* df = fopen(dp, "w");
+        // Four fprintf loops over ~1.05M contigs, one call each, measured at
+        // ~61 s -- comparable to the whole pcluster scan. It is benchmark-only
+        // (CAPS_DUMP_CONTIGS exists so the lift can map calls to the genome; a
+        // production call does not set it), but it inflated every measurement
+        // in this session and is one setvbuf away from free.
+        static std::vector<char> dumpbuf;
+        if (df) { dumpbuf.resize(1u << 22); setvbuf(df, dumpbuf.data(), _IOFBF, dumpbuf.size()); }
         if (df) {
             for (size_t ci = 0; ci < cd.contigs.size(); ++ci)
                 fprintf(df, ">contig_%zu\n%s\n", ci, cd.contigs[ci].c_str());
