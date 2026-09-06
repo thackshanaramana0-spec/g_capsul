@@ -24,8 +24,50 @@
 
 namespace capspack {
 
+// RANGE OVERLOADS. Calling from a stored archive reads 12.6M lines back with
+// std::getline into a temporary std::string and then packs that -- two heap
+// allocations and two copies per read, 25M allocations for one chr20. The
+// decoder already produced every read in ONE contiguous buffer, so these take
+// (ptr,len) directly and the temporary disappears. The std::string overloads
+// below simply forward, so there is exactly one definition of the format.
+inline std::string pack_seq(const char* b, size_t n);
+inline std::string pack_qual(const char* d, size_t n, int qmin);
+
+inline std::string pack_seq(const char* b, size_t nb){
+    bool pure = true;
+    for(size_t i=0;i<nb;++i){
+        const char c=b[i];
+        if(c!='A'&&c!='C'&&c!='G'&&c!='T'&&c!='a'&&c!='c'&&c!='g'&&c!='t'){ pure=false; break; }
+    }
+    if(!pure){
+        std::string raw; raw.reserve(1+nb);
+        raw.push_back((char)1);
+        raw.append(b, nb);
+        return raw;
+    }
+    std::string pk(3 + (nb+3)/4, '\0');
+    pk[0] = (char)0;
+    pk[1] = (char)(nb & 0xFF);
+    pk[2] = (char)((nb >> 8) & 0xFF);
+    for(size_t i=0;i<nb;++i){
+        int bb;
+        switch(b[i]){ case 'A': case 'a': bb=0; break;
+                      case 'C': case 'c': bb=1; break;
+                      case 'G': case 'g': bb=2; break;
+                      default:            bb=3; }
+        pk[3 + (i>>2)] = (char)(pk[3 + (i>>2)] | (bb << (2*(i&3))));
+    }
+    return pk;
+}
+inline std::string pack_qual(const char* d, size_t nd, int qmin){
+    std::string packed((nd+7)/8, '\0');
+    for(size_t i=0;i<nd;++i)
+        if((int)(d[i]-33) >= qmin) packed[i>>3] |= (char)(1u << (i&7));
+    return packed;
+}
+
 // Sequence -> the caller's packed form. Mirrors caps_caller.h::unpack_read.
-inline std::string pack_seq(const std::string& b){
+inline std::string pack_seq_str(const std::string& b){
     bool pure = true;
     for(size_t i=0;i<b.size();++i){
         const char c=b[i];
@@ -54,10 +96,10 @@ inline std::string pack_seq(const std::string& b){
 
 // Phred string -> one bit per base, set when the base met qmin (phred+33).
 inline std::string pack_qual(const std::string& d, int qmin){
-    std::string packed((d.size()+7)/8, '\0');
-    for(size_t i=0;i<d.size();++i)
-        if((int)(d[i]-33) >= qmin) packed[i>>3] |= (char)(1u << (i&7));
-    return packed;
+    return pack_qual(d.data(), d.size(), qmin);
+}
+inline std::string pack_seq(const std::string& b){
+    return pack_seq(b.data(), b.size());
 }
 
 } // namespace capspack
