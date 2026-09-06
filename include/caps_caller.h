@@ -635,16 +635,75 @@ inline Substrate build_substrate(const std::vector<std::string>& seqs, const Cal
     }
     if (NO_REMAP) return S;
 
-    // 2. seed index over surviving contigs
+    // 2. seed index over surviving contigs.
+    //
+    // PACKED SORTED ARRAY, not a hash map, for the same reason the encoder's
+    // MEM/mapping indices were converted earlier: a hash map here means
+    // pointer-chasing + poor locality on the loop the caller's own comment
+    // calls "the single largest phase" (738 s of the first full-chr20 run).
+    // Sorted-by-key + binary search replaces `cidx.find(can)` with a single
+    // std::lower_bound and a bounded linear scan over the matching run.
+    //
+    // ORDER-PRESERVING BY CONSTRUCTION, which matters: the original capped
+    // each key's hits at 64 with `if (vec.size() < 64) push_back(...)`, so
+    // which 64 survive for a repetitive k-mer depends on INSERTION ORDER
+    // (contig, then position, ascending). A flat array in that same iteration
+    // order, stable_sort'ed by key, reproduces the identical per-key ORDER
+    // (stable_sort preserves relative order of equal keys) -- so truncating
+    // each run to its first 64 entries afterward selects EXACTLY the same 64
+    // the hash map would have, not merely a same-SIZE but different set.
+    std::vector<uint64_t> skey; std::vector<uint32_t> scid, spos;
+    {
+        std::vector<std::pair<uint64_t,uint64_t>> flat;   // (key, ci<<32|pos)
+        flat.reserve(S.contigs.size() * 128);
+        for (uint32_t ci = 0; ci < S.contigs.size(); ++ci) {
+            const std::string& c = S.contigs[ci];
+            for (size_t i = 0; i + (size_t)K <= c.size(); ++i) {
+                uint64_t v; if (!pack25(c.data() + i, v)) continue;
+                uint64_t rcv = rc25(v), can = v < rcv ? v : rcv;
+                flat.push_back({can, ((uint64_t)ci << 32) | (uint32_t)i});
+            }
+        }
+        std::stable_sort(flat.begin(), flat.end(),
+                          [](const auto& a, const auto& b){ return a.first < b.first; });
+        skey.reserve(flat.size()); scid.reserve(flat.size()); spos.reserve(flat.size());
+        size_t i = 0;
+        while (i < flat.size()) {
+            size_t j = i; uint32_t kept = 0;
+            while (j < flat.size() && flat[j].first == flat[i].first) {
+                if (kept < 64) {   // identical cap to the original hash map
+                    skey.push_back(flat[j].first);
+                    scid.push_back((uint32_t)(flat[j].second >> 32));
+                    spos.push_back((uint32_t)flat[j].second);
+                    ++kept;
+                }
+                ++j;
+            }
+            i = j;
+        }
+    }
+    // lookup(k): [first,last) range in skey/scid/spos matching canonical key k,
+    // or (0,0) if absent -- replaces cidx.find(can)/it->second.
+    auto lookup_range = [&](uint64_t k) -> std::pair<size_t,size_t> {
+        auto lo = std::lower_bound(skey.begin(), skey.end(), k) - skey.begin();
+        auto hi = std::upper_bound(skey.begin(), skey.end(), k) - skey.begin();
+        return {(size_t)lo, (size_t)hi};
+    };
+    // idx (the hash map) is now built ONLY for gapped_indel_scan, which is
+    // opt-in (CAPS_GAPSCAN) and not part of any measured pipeline -- building
+    // it unconditionally, every call, for a consumer that is off by default
+    // was pure waste on every production run.
     std::unordered_map<uint64_t, std::vector<std::pair<uint32_t,uint32_t>>> idx;
-    idx.reserve(1u << 21);
-    for (uint32_t ci = 0; ci < S.contigs.size(); ++ci) {
-        const std::string& c = S.contigs[ci];
-        for (size_t i = 0; i + (size_t)K <= c.size(); ++i) {
-            uint64_t v; if (!pack25(c.data() + i, v)) continue;
-            uint64_t rcv = rc25(v), can = v < rcv ? v : rcv;
-            auto& vec = idx[can];
-            if (vec.size() < 64) vec.push_back({ci, (uint32_t)i});   // bound repeat blowup
+    if (std::getenv("CAPS_GAPSCAN")) {
+        idx.reserve(1u << 21);
+        for (uint32_t ci = 0; ci < S.contigs.size(); ++ci) {
+            const std::string& c = S.contigs[ci];
+            for (size_t i = 0; i + (size_t)K <= c.size(); ++i) {
+                uint64_t v; if (!pack25(c.data() + i, v)) continue;
+                uint64_t rcv = rc25(v), can = v < rcv ? v : rcv;
+                auto& vec = idx[can];
+                if (vec.size() < 64) vec.push_back({ci, (uint32_t)i});
+            }
         }
     }
 
@@ -672,7 +731,6 @@ inline Substrate build_substrate(const std::vector<std::string>& seqs, const Cal
     // CONTIGS in the pileup measured slower (+11%, +13%, comment at the top of
     // run_variant_call). That loop has few, wildly unequal items. This one has
     // 12.6M uniform items; dynamic scheduling covers the tail.
-    const auto& cidx = idx;                     // read-only view for the parallel region
     size_t placed = 0, improved = 0;
     #pragma omp parallel for schedule(dynamic, 256) reduction(+:placed,improved)
     for (long long o_ = 0; o_ < (long long)n; ++o_) {
@@ -701,9 +759,9 @@ inline Substrate build_substrate(const std::vector<std::string>& seqs, const Cal
             for (int off = 0; off + K <= rl; off += step) {
                 uint64_t v; if (!pack25(r.data() + off, v)) continue;
                 uint64_t rcv = rc25(v), can = v < rcv ? v : rcv;
-                auto it = cidx.find(can);
-                if (it == cidx.end()) continue;
-                for (auto& pr : it->second) {
+                const auto rng = lookup_range(can);
+                for (size_t ri = rng.first; ri < rng.second; ++ri) {
+                    const std::pair<uint32_t,uint32_t> pr{scid[ri], spos[ri]};
                     const std::string& c = S.contigs[pr.first];
                     // seed may be stored in either orientation; try both implied starts
                     for (int which = 0; which < 2; ++which) {
