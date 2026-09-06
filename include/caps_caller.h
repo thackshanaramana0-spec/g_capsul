@@ -5523,18 +5523,50 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 const uint64_t h2 = (k ^ (k >> 29)) * 0xBF58476D1CE4E5B9ULL;
                 return (pbf[((h2 >> 20) & pbf_mask) >> 6] >> (((h2 >> 20) & pbf_mask) & 63)) & 1ULL;
             };
+            // ── PARALLEL READ SCAN ──────────────────────────────────────────
+            // 4M reads x ~85 k-mers, serial, and the bitset above already
+            // removed ~99% of the hash traffic -- so what remains is a
+            // compute-bound walk over independent reads. Measured 151.4 s of a
+            // 339.6 s stage.
+            //
+            // Reads are independent, so each thread collects (key, read, pos)
+            // into its own buffer and they are merged afterwards IN THREAD
+            // ORDER, then by read index. That reproduces the serial insertion
+            // order exactly, which matters because `vec.size() < 200` caps each
+            // key -- a different arrival order would keep a different 200.
             std::unordered_map<uint64_t, std::vector<std::pair<uint32_t,uint32_t>>> rc_reads;
             rc_reads.reserve(pkidx.size() ? pkidx.size() : (size_t)(1u << 20));
-            for (uint32_t i = 0; i < (uint32_t)seqs.size(); ++i) {
-                const std::string& q = seqs[i];
-                for (size_t j = LW; j + AK <= q.size(); ++j) {
-                    uint64_t v; if (!pack25(q.data() + j, v)) continue;
-                    uint64_t rv = rc25(v), cn = v < rv ? v : rv;
-                    if (!pbf_maybe(cn)) continue;       // definitely absent: no hash probe
-                    if (!pkidx.count(cn)) continue;     // provably dead otherwise
-                    auto& vec = rc_reads[cn];
-                    if (vec.size() < 200) vec.push_back({i, (uint32_t)j});
+            {
+                int nt = 1;
+                #ifdef _OPENMP
+                nt = omp_get_max_threads();
+                #endif
+                std::vector<std::vector<std::pair<uint64_t,std::pair<uint32_t,uint32_t>>>> tb((size_t)nt);
+                #pragma omp parallel for schedule(static)
+                for (long long i = 0; i < (long long)seqs.size(); ++i) {
+                    int tid = 0;
+                    #ifdef _OPENMP
+                    tid = omp_get_thread_num();
+                    #endif
+                    auto& buf = tb[(size_t)tid];
+                    const std::string& q = seqs[(size_t)i];
+                    for (size_t j = LW; j + AK <= q.size(); ++j) {
+                        uint64_t v; if (!pack25(q.data() + j, v)) continue;
+                        uint64_t rv = rc25(v), cn = v < rv ? v : rv;
+                        if (!pbf_maybe(cn)) continue;   // definitely absent
+                        if (!pkidx.count(cn)) continue; // provably dead otherwise
+                        buf.push_back({cn, {(uint32_t)i, (uint32_t)j}});
+                    }
                 }
+                // Merge in READ ORDER so the 200-cap keeps the same entries the
+                // serial loop kept. schedule(static) gives each thread a
+                // contiguous read range, so concatenating buffers in thread id
+                // order IS read order.
+                for (int t = 0; t < nt; ++t)
+                    for (auto& e : tb[(size_t)t]) {
+                        auto& vec = rc_reads[e.first];
+                        if (vec.size() < 200) vec.push_back(e.second);
+                    }
             }
             static long g_pc_identical=0, g_pc_nogap=0, g_pc_found=0, g_pc_seen=0;
             // (contig, pos, signed gap, inserted seq) -> supporting reads
@@ -5757,6 +5789,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         // CAPS_LINKSCAN=1 because the measurement is the useful part.
         if (std::getenv("CAPS_LINKSCAN")) {
             const int TAIL_MIN = 20;          // bases of tail that must re-match
+            _iplap("pcluster: teardown");
             long ls_nocid=0, ls_outside=0, ls_perfect=0, ls_shortleft=0, ls_shorttail=0, ls_nogap=0, ls_hit=0;
             std::map<std::tuple<std::string,int,std::string>, std::unordered_set<uint32_t>> lvotes;
             std::map<std::tuple<std::string,int,std::string>, std::pair<uint32_t,uint32_t>> lloc;
@@ -5817,6 +5850,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             }
             // per-contig coverage of the ORIGINAL substrate, for allele fraction
             std::vector<std::vector<uint16_t>> lcov(cd_in.contigs.size());
+            _iplap("lvotes: read scan");
             for (size_t ci = 0; ci < cd_in.contigs.size(); ++ci)
                 lcov[ci].assign(cd_in.contigs[ci].size(), 0);
             for (size_t oi = 0; oi < n; ++oi) {
@@ -5833,6 +5867,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             int LMIN = MC;
             if (const char* e = std::getenv("CAPS_LINKSCAN_MIN")) LMIN = atoi(e);
             size_t n_ls = 0;
+            _iplap("lvotes: coverage");
             for (auto& kv : lvotes) {
                 const int nsup = (int)kv.second.size();
                 if (nsup < LMIN) continue;
