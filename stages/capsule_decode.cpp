@@ -12,6 +12,10 @@
 #include <cstring>
 #include <cstdlib>
 #include <string>
+#include <chrono>
+#include <unistd.h>
+#include <sys/mman.h>
+#include <fcntl.h>
 #include <vector>
 #include <map>
 #include <lzma.h>
@@ -166,10 +170,22 @@ static std::vector<uint64_t> varints(const std::vector<uint8_t>& v){
 //   query    : pos_abs + pg           -> reads overlapping a range (no full decode)
 // Each stops as soon as the streams it needs are decoded, so none pays for the
 // full reconstruction.
+// IN-MEMORY HANDOFF (out_flat/out_rowoff). The decoder already materialises
+// every read into ONE contiguous buffer; writing that 1.86 GB out just so the
+// caller can read it straight back costs a full write plus a full re-parse for
+// nothing. When these are non-null the buffer is handed over directly and the
+// file is not written at all. Every other caller passes nothing and is
+// byte-for-byte unaffected.
 int capsule_decode_all(const char* arcpath, const std::string& outdir,
                        const std::string& outreads = std::string(),
                        const std::string& mode = std::string(),
-                       const std::string& modearg = std::string()){
+                       const std::string& modearg = std::string(),
+                       std::vector<uint8_t>* out_flat = nullptr,
+                       std::vector<size_t>* out_rowoff = nullptr,
+                       std::vector<uint8_t>* out_qflat = nullptr,
+                       std::vector<std::string>* out_qbits = nullptr,
+                       int qbits_qmin = 20){
+    auto _dt0 = std::chrono::steady_clock::now();
     uint64_t PGLEN=0, MAINEND=0; uint32_t MINMEM=0; std::vector<Stream> ss;
     if(!read_capsule(arcpath,PGLEN,MAINEND,MINMEM,ss)){ fprintf(stderr,"bad archive\n"); return 1; }
     std::map<std::string,std::vector<uint8_t>> S;
@@ -585,9 +601,18 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
               k+=c;
           } }
 
-        FILE* of=fopen(outreads.c_str(),"wb");
-        if(of){ fwrite(flat.data(),1,flat.size(),of); fclose(of); }
-        fprintf(stderr,"  reads written: %zu\n", NO);
+        if(out_flat && out_rowoff){
+            out_flat->swap(flat);          // move, no copy
+            *out_rowoff = rowoff;
+            fprintf(stderr,"  reads handed over in memory: %zu (no file written)\n", NO);
+            fprintf(stderr,"  [dec-timing] read reconstruction %7.2fs\n",
+                    std::chrono::duration<double>(std::chrono::steady_clock::now()-_dt0).count());
+            _dt0 = std::chrono::steady_clock::now();
+        } else {
+            FILE* of=fopen(outreads.c_str(),"wb");
+            if(of){ fwrite(flat.data(),1,flat.size(),of); fclose(of); }
+            fprintf(stderr,"  reads written: %zu\n", NO);
+        }
     }
 
     // ---- names / read-ID column (Phase 2) ----------------------------------
@@ -617,7 +642,21 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
     // boundaries come from `lengths` (per ORIGINAL read, already decoded
     // above) rather than from anything fqzcomp stores, so the two columns
     // cannot disagree about where a read ends.
-    if(has("qual_body")){
+    // Straight to the caller's bitmaps, in parallel, no text and no file. The
+    // consumer reduces quality to one bit per base anyway, so decoding 1.86 GB
+    // of text and writing it out only to re-read it was the wrong
+    // representation as well as the wrong number of cores (1 of 12).
+    if(has("qual_body") && out_qbits && !getenv("CAPS_SKIP_QUAL")){
+        _dt0 = std::chrono::steady_clock::now();
+        auto qindex = dec("qual_index");
+        std::vector<uint32_t> qlens(lengths.begin(), lengths.end());
+        const uint64_t qw = qlc::decode_to_bitmaps(S["qual_body"], qindex, qlens,
+                                                   qbits_qmin, *out_qbits);
+        fprintf(stderr,"  quality -> bitmaps in parallel: %llu\n",(unsigned long long)qw);
+        fprintf(stderr,"  [dec-timing] quality decode     %7.2fs\n",
+                std::chrono::duration<double>(std::chrono::steady_clock::now()-_dt0).count());
+    } else if(has("qual_body") && !getenv("CAPS_SKIP_QUAL")){
+        _dt0 = std::chrono::steady_clock::now();
         const std::string qpath = outreads.empty() ? (outdir+"/qual.txt") : (outreads+".qual");
         FILE* qf=fopen(qpath.c_str(),"wb");
         if(qf){
@@ -626,6 +665,8 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
             const uint64_t qw = qlc::decode_to_file(S["qual_body"], qindex, qf, qlens);
             fclose(qf);
             fprintf(stderr,"  quality written: %llu -> %s\n",(unsigned long long)qw,qpath.c_str());
+            fprintf(stderr,"  [dec-timing] quality decode     %7.2fs\n",
+                    std::chrono::duration<double>(std::chrono::steady_clock::now()-_dt0).count());
         }
     }
 
@@ -688,35 +729,68 @@ static int capsule_call_from_archive(const std::string& in, const std::string& o
 
     setenv("CAPS_DBG", "1", 1);
     setenv("CAPS_DBG_ONLY", "1", 1);
+    // Phase timing. The 4 steps below were reported as bare progress lines, so
+    // "decode+export+pack = 71.95 s" was only knowable by subtracting the
+    // caller's own total from the wall clock -- which says nothing about WHICH
+    // of them to attack.
+    auto _t0 = std::chrono::steady_clock::now();
+    auto _lap = [&](const char* what){
+        auto now = std::chrono::steady_clock::now();
+        fprintf(stderr, "[call-timing] %-22s %7.2fs\n", what,
+                std::chrono::duration<double>(now - _t0).count());
+        _t0 = now;
+    };
     const int QMIN = getenv("CAPS_DBG_MINQ") ? atoi(getenv("CAPS_DBG_MINQ")) : 20;
 
     fprintf(stderr, "[call] 1/4 decoding reads and quality from the archive\n");
-    if(capsule_decode_all(in.c_str(), wd, rp) != 0){ fprintf(stderr,"[call] decode failed\n"); return 1; }
+    // Reads come back IN MEMORY (no 1.86 GB write, no re-parse). Quality still
+    // goes to a file: qlc::decode_to_file writes straight to a FILE*, and
+    // routing it through memory would cost a 1.86 GB copy on top of an already
+    // 5.4 GB peak -- so it is mmap'd below instead, which is page-cache backed.
+    // CAPS_CALL_NOQUAL=1: skip the quality column entirely. The coherence pass
+    // uses quality only to skip low-Q bases when counting per-path read support
+    // (`qs` bitmap); with no quality it counts every read, which is what kc's
+    // own min1/min2 already do. Decoding quality costs 35.25 s of a 147 s run
+    // -- 24% -- so whether that filter is load-bearing is worth one measurement.
+    if(getenv("CAPS_CALL_NOQUAL")) setenv("CAPS_SKIP_QUAL","1",1);
+    std::vector<uint8_t> rflat; std::vector<size_t> rowoff;
+    std::vector<std::string> qbits;
+    if(capsule_decode_all(in.c_str(), wd, rp, std::string(), std::string(),
+                          &rflat, &rowoff, nullptr, &qbits, QMIN) != 0){
+        fprintf(stderr,"[call] decode failed\n"); return 1; }
 
+    _lap("1 decode reads+qual");
     fprintf(stderr, "[call] 2/4 exporting the retained pseudogenome for contigs\n");
     if(capsule_decode_all(in.c_str(), cf, std::string(), "export", std::string()) != 0)
         fprintf(stderr,"[call] export failed -- ploidy gate will see no contigs\n");
 
+    _lap("2 export pseudogenome");
     fprintf(stderr, "[call] 3/4 packing reads and quality (capspack, shared with the encoder)\n");
     std::vector<std::string> seqs, quals;
     {
-        std::ifstream fr(rp);
-        std::ifstream fq(rp + ".qual");
-        if(!fr){ fprintf(stderr,"[call] cannot read %s\n", rp.c_str()); return 1; }
-        std::string a, d;
-        const bool haveq = (bool)fq;
-        while(std::getline(fr, a)){
-            while(!a.empty() && (a.back()=='\n' || a.back()=='\r')) a.pop_back();
-            seqs.push_back(capspack::pack_seq(a));
-            if(haveq && std::getline(fq, d)){
-                while(!d.empty() && (d.back()=='\n' || d.back()=='\r')) d.pop_back();
-                quals.push_back(capspack::pack_qual(d, QMIN));
-            } else quals.push_back(std::string());
+        // Reads: straight out of the handed-over buffer. rowoff[o+1]-rowoff[o]
+        // includes the trailing newline the decoder wrote, hence the -1.
+        const bool haveq = !qbits.empty();
+        const size_t NO = rowoff.empty() ? 0 : rowoff.size() - 1;
+        // Quality already arrived as packed bitmaps (parallel, straight from
+        // the archive), so this loop only packs sequence. Sized up front so
+        // every slot is written exactly once and no two threads share one.
+        seqs.resize(NO);
+        if(haveq && qbits.size() >= NO) quals.swap(qbits);
+        else { quals.assign(NO, std::string());
+               if(haveq) fprintf(stderr,"  [call] quality count %zu < reads %zu\n", qbits.size(), NO); }
+        #pragma omp parallel for schedule(static)
+        for(long long o = 0; o < (long long)NO; ++o){
+            const size_t b = rowoff[o];
+            size_t len = (rowoff[o+1] > b) ? (rowoff[o+1] - b - 1) : 0;
+            if(b + len > rflat.size()) len = (b < rflat.size()) ? (rflat.size() - b) : 0;
+            seqs[o] = capspack::pack_seq((const char*)rflat.data() + b, len);
         }
+        std::vector<uint8_t>().swap(rflat);      // release 1.86 GB before calling
+        std::vector<size_t>().swap(rowoff);
+        std::vector<std::string>().swap(qbits);
     }
-    fprintf(stderr, "[call]     %zu reads, %zu quality records\n", seqs.size(), quals.size());
-    if(seqs.empty()){ fprintf(stderr,"[call] archive yielded no reads\n"); return 1; }
-
+    _lap("3 read back + pack");
     capscall::CallData cd;
     {   // contigs from the exported pseudogenome; the ploidy gate samples these
         std::ifstream fc(cf);
@@ -730,8 +804,10 @@ static int capsule_call_from_archive(const std::string& in, const std::string& o
     cd.valid = true;
     fprintf(stderr, "[call]     %zu contigs from the archive's pseudogenome\n", cd.contigs.size());
 
+    _lap("3b parse contigs");
     fprintf(stderr, "[call] 4/4 calling variants\n");
     const int n = capscall::run_variant_call(seqs, quals, cd, out_vcf);
+    _lap("4 run_variant_call");
     fprintf(stderr, "[call] %d records -> %s\n", n, out_vcf.c_str());
     return n >= 0 ? 0 : 1;
 }

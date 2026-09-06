@@ -30,6 +30,7 @@
 #include <unordered_set>
 #include <map>
 #include <vector>
+#include <sys/mman.h>
 #include <string>
 #include <array>
 #include <tuple>
@@ -1074,6 +1075,34 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         if (nth > 1) BATCH_KMERS = std::max<size_t>(1u << 20, BATCH_KMERS / (size_t)nth);
     }
     struct KC { uint64_t kmer; uint32_t cnt; };
+    // ── HUGE PAGES FOR kc ───────────────────────────────────────────────────
+    // kc reaches ~2.1 GB at full chr20 (140,719,632 x 16 B) and the bubble
+    // traversal BINARY-SEARCHES it, so that walk is dTLB-bound. This box runs
+    // /sys/kernel/mm/transparent_hugepage/enabled = [madvise]: a region gets
+    // huge pages only if it asks, and nothing here ever asked.
+    //
+    // ORDER MATTERS. This project has already shipped an inert huge-page hint
+    // by calling madvise AFTER the array was filled, which does nothing for
+    // pages already faulted in. Every call site below sits immediately after a
+    // reserve() and before the fill, so the hint lands on untouched memory.
+    //
+    // THERE ARE THREE reserve() SITES (in-RAM, spill/superkmer, and the k-way
+    // merge) and the spill path is the one that runs at full scale. Hinting
+    // only one of them is how this silently did nothing the first time.
+    auto kc_hp_hint = [](std::vector<KC>& v){
+        void* base = (void*)v.data();
+        size_t len = v.capacity() * sizeof(KC);
+        if (!base || len < (2u << 20)) return;
+        uintptr_t a0 = ((uintptr_t)base + (2u<<20) - 1) & ~(uintptr_t)((2u<<20) - 1);
+        size_t off = a0 - (uintptr_t)base;
+        if (len <= off) return;
+        size_t l2 = (len - off) & ~(size_t)((2u<<20) - 1);
+        if (!l2) return;
+        if (madvise((void*)a0, l2, MADV_HUGEPAGE) == 0)
+            fprintf(stderr, "[KC-HP] MADV_HUGEPAGE on %.2f GB of kc\n", (double)l2/1073741824.0);
+        else
+            fprintf(stderr, "[KC-HP] madvise failed (errno %d) -- kc stays on 4K pages\n", errno);
+    };
     // Reads arrive 2-bit packed in graph-only mode (see 106_inprocess.cpp
     // SEQ_PACK). Unpack on demand into a caller-supplied buffer so only one
     // read is ever expanded at a time.
@@ -1641,6 +1670,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             if (sf[i].ok) pq.push({sf[i].cur.kmer, (uint32_t)i});
         }
         kc.reserve(total_k);
+        kc_hp_hint(kc);
         while (!pq.empty()) {
             const uint64_t key = pq.top().first;
             uint32_t sum = 0;
@@ -1703,6 +1733,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                     if (part[i].kmer != part[i-1].kmer) ++d0;
                 const size_t est = (size_t)((double)d0 * (1u << SPILL_BITS) * 1.15);
                 kc.reserve(est);
+                kc_hp_hint(kc);
                 fprintf(stderr, "[KC-SPILL] reserve estimate %zu from partition 0\n", est);
             }
             std::sort(part.begin(), part.end(),
@@ -1741,6 +1772,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             return nout;
         };
         kc.reserve(merge_pass(false));
+        kc_hp_hint(kc);
         merge_pass(true);
     }
     kc_runs.clear(); kc_runs.shrink_to_fit();

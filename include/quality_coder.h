@@ -44,6 +44,7 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include <atomic>
 #include <algorithm>
 
 extern "C" {
@@ -436,6 +437,69 @@ static uint64_t decode_to_file(const std::vector<uint8_t>& body,
         boff+=blen;
     }
     return written;
+}
+
+// ── PARALLEL DECODE STRAIGHT TO THE CALLER'S BITMAP ───────────────────────
+// decode_to_file above is a SERIAL loop over blocks that are entirely
+// independent: each carries its own length, count and qmin, is fqz_decompress-ed
+// on its own, and nothing crosses a block boundary. It measured 35.25 s of a
+// 147 s call-from-archive run -- 24% -- on one core of twelve.
+//
+// It is also decoding to the wrong representation for this consumer. The caller
+// reduces every quality string to ONE BIT per base ("is this base >= QMIN"), so
+// materialising 1.86 GB of text, writing it to disk and reading it back to
+// extract those bits is pure overhead. This produces the packed bitmaps
+// directly, in parallel, in the same layout capspack::pack_qual yields.
+//
+// Two passes: the index is walked once to record each block's byte offset and
+// first read index (cheap -- it is a few thousand varints), then the blocks are
+// decompressed concurrently. Every block writes a disjoint range of `out`, so
+// no synchronisation is needed and the result is order-independent.
+static uint64_t decode_to_bitmaps(const std::vector<uint8_t>& body,
+                                  const std::vector<uint8_t>& indexRaw,
+                                  const std::vector<uint32_t>& lengths,
+                                  int qmin_want,
+                                  std::vector<std::string>& out)
+{
+    struct Blk { size_t boff, blen, bcnt, first; uint8_t qmin; };
+    std::vector<Blk> blks;
+    {
+        const uint8_t* ip=indexRaw.data(); const uint8_t* iend=ip+indexRaw.size();
+        size_t boff=0; uint64_t li=0;
+        while(ip<iend){
+            const uint64_t blen=gv(ip,iend);
+            const uint64_t bcnt=gv(ip,iend);
+            const uint8_t  qmin=(uint8_t)gv(ip,iend);
+            if(boff+blen>body.size()) break;
+            blks.push_back({boff,(size_t)blen,(size_t)bcnt,(size_t)li,qmin});
+            boff+=blen; li+=bcnt;
+            if(li>=lengths.size()+1) break;
+        }
+    }
+    if(out.size()<lengths.size()) out.resize(lengths.size());
+    std::atomic<uint64_t> written{0};
+    #pragma omp parallel for schedule(dynamic,1)
+    for(long long b=0;b<(long long)blks.size();++b){
+        const Blk& B=blks[(size_t)b];
+        size_t osz=0;
+        char* d=fqz_decompress((char*)body.data()+B.boff,B.blen,&osz,nullptr,0);
+        if(!d) continue;
+        size_t off=0; uint64_t w=0;
+        for(size_t r=0;r<B.bcnt && (B.first+r)<lengths.size();++r){
+            const uint32_t L=lengths[B.first+r];
+            if(off+L>osz) break;
+            std::string packed((L+7)/8,'\0');
+            for(uint32_t i=0;i<L;++i){
+                const int q=(int)((unsigned char)d[off+i]+B.qmin)-33;
+                if(q>=qmin_want) packed[i>>3]|=(char)(1u<<(i&7));
+            }
+            out[B.first+r].swap(packed);
+            off+=L; ++w;
+        }
+        free(d);
+        written+=w;
+    }
+    return written.load();
 }
 
 } // namespace qlc
