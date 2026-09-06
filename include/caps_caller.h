@@ -410,6 +410,35 @@ inline uint64_t rc25(uint64_t v) {
     return r;
 }
 
+// ── ROLLING CANONICAL 25-MER ────────────────────────────────────────────────
+// Every hot k-mer walk in this file called pack25() and rc25() at each
+// position: 25 loop iterations each, 50 per position, to produce a value that
+// differs from its predecessor by ONE base. The read scan in the indel pass
+// alone walks 4M reads x ~85 positions -- ~17 billion iterations to compute
+// 340M k-mers.
+//
+// A sliding window updates both strands in O(1):
+//   forward  drop the top base, shift in the new one at the bottom
+//   reverse  drop the bottom base, shift in the new complement at the top
+// which is exactly rc25's output for the shifted window.
+//
+// N-HANDLING IS EXACT, not approximate. pack25 fails if ANY of the 25 bases is
+// non-ACGT, so `run` counts consecutive valid bases ending at the current one
+// and ok() requires 25 -- that is the same predicate, position for position.
+struct Roll25 {
+    static constexpr uint64_t M50 = (1ULL << 50) - 1;
+    uint64_t f = 0, r = 0; int run = 0;
+    inline void push(char ch) {
+        const int b = b2i(ch);
+        if (b < 0) { run = 0; f = 0; r = 0; return; }
+        f = ((f << 2) | (uint64_t)b) & M50;
+        r = (r >> 2) | ((uint64_t)(3 - b) << 48);
+        if (run < 25) ++run;
+    }
+    inline bool ok() const { return run >= 25; }
+    inline uint64_t canon() const { return f < r ? f : r; }
+};
+
 inline double loglik(const std::vector<std::pair<int,int>>& rl, const int* al, int m) {
     double ll = 0.0;
     for (auto& bq : rl) {
@@ -560,11 +589,16 @@ inline std::vector<uint32_t> collapse_contigs(const std::vector<std::string>& ct
         // recorded per entry, keeping `hit`/`tot` and the accept/reject
         // decision bit-identical.
         km.clear(); kmq.clear();
-        for (size_t i = 0; i + (size_t)K <= c.size(); ++i) {
-            uint64_t v; if (!pack25(c.data() + i, v)) continue;
-            const uint64_t rcv = rc25(v);
-            km.push_back(v < rcv ? v : rcv);
-            kmq.push_back((uint8_t)(i % 5 == 0));
+        {   // rolling window; identical output to the pack25/rc25 form above
+            Roll25 rw; const size_t cn2 = c.size();
+            for (size_t b2 = 0; b2 < cn2; ++b2) {
+                rw.push(c[b2]);
+                if (b2 + 1 < (size_t)K) continue;
+                if (!rw.ok()) continue;
+                const size_t i = b2 + 1 - (size_t)K;
+                km.push_back(rw.canon());
+                kmq.push_back((uint8_t)(i % 5 == 0));
+            }
         }
         size_t hit = 0, tot = 0;
         for (size_t w = 0; w < km.size(); ++w)
@@ -770,8 +804,10 @@ inline Substrate build_substrate(const std::vector<std::string>& seqs, const Cal
             for (long long ci = 0; ci < (long long)NC; ++ci) {
                 const std::string& c = S.contigs[(size_t)ci];
                 size_t cnt = 0;
-                for (size_t i = 0; i + (size_t)K <= c.size(); ++i) {
-                    uint64_t v; if (pack25(c.data() + i, v)) ++cnt;
+                Roll25 rw; const size_t cn2 = c.size();
+                for (size_t b2 = 0; b2 < cn2; ++b2) {
+                    rw.push(c[b2]);
+                    if (b2 + 1 >= (size_t)K && rw.ok()) ++cnt;
                 }
                 off[(size_t)ci + 1] = cnt;
             }
@@ -781,10 +817,12 @@ inline Substrate build_substrate(const std::vector<std::string>& seqs, const Cal
             for (long long ci = 0; ci < (long long)NC; ++ci) {
                 const std::string& c = S.contigs[(size_t)ci];
                 size_t w = off[(size_t)ci];
-                for (size_t i = 0; i + (size_t)K <= c.size(); ++i) {
-                    uint64_t v; if (!pack25(c.data() + i, v)) continue;
-                    const uint64_t rcv = rc25(v), can = v < rcv ? v : rcv;
-                    flat[w++] = {can, ((uint64_t)ci << 32) | (uint32_t)i};
+                Roll25 rw; const size_t cn2 = c.size();
+                for (size_t b2 = 0; b2 < cn2; ++b2) {
+                    rw.push(c[b2]);
+                    if (b2 + 1 < (size_t)K || !rw.ok()) continue;
+                    const size_t i = b2 + 1 - (size_t)K;
+                    flat[w++] = {rw.canon(), ((uint64_t)ci << 32) | (uint32_t)i};
                 }
             }
         }
@@ -5716,6 +5754,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                     }
                 }
             }
+            _iplap("  pe: pcov build");
             // cluster reads by right-context anchor that is UNIQUE in the contigs
             //
             // ONLY ANCHORS PRESENT IN pkidx ARE EVER LOOKED UP (2026-09-03).
@@ -5768,6 +5807,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 fprintf(stderr, "[PCLUSTER] anchor bitset %zu bits (%.1f MB) for %zu anchors\n",
                         pbf_bits, (double)pbf.size() * 8 / 1048576.0, pkidx.size());
             }
+            _iplap("  pe: bitset build");
             const size_t pbf_mask = pbf_bits - 1;
             auto pbf_maybe = [&](uint64_t k) -> bool {
                 const uint64_t h1 = k * 0x9E3779B97F4A7C15ULL;
@@ -5802,9 +5842,13 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                     #endif
                     auto& buf = tb[(size_t)tid];
                     const std::string& q = seqs[(size_t)i];
-                    for (size_t j = LW; j + AK <= q.size(); ++j) {
-                        uint64_t v; if (!pack25(q.data() + j, v)) continue;
-                        uint64_t rv = rc25(v), cn = v < rv ? v : rv;
+                    Roll25 rw; const size_t qn = q.size();
+                    for (size_t b3 = LW; b3 < qn; ++b3) {
+                        rw.push(q[b3]);
+                        if (b3 + 1 < (size_t)LW + (size_t)AK) continue;
+                        if (!rw.ok()) continue;
+                        const size_t j = b3 + 1 - (size_t)AK;
+                        const uint64_t cn = rw.canon();
                         if (!pbf_maybe(cn)) continue;   // definitely absent
                         const size_t ai = pkidx.index_of(cn);
                         if (ai == (size_t)-1) continue; // provably dead otherwise
@@ -5837,6 +5881,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                     decltype(tb)().swap(tb);
                 }
             }
+            _iplap("  pe: read scan + CSR");
             static long g_pc_identical=0, g_pc_nogap=0, g_pc_found=0, g_pc_seen=0;
             // (contig, pos, signed gap, inserted seq) -> supporting reads
             // DISTINCT reads per event, not votes. A read spanning an indel
@@ -5993,6 +6038,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                     }
                 }
             }
+            _iplap("  pe: anchor loop");
             // MERGE. pvotes/panch are set unions (order-free). ploc keeps the
             // smallest (contig,pos), so the merged value is the minimum over
             // all threads -- identical to the serial minimum regardless of how
