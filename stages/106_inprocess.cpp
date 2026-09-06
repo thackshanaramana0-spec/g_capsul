@@ -315,6 +315,10 @@ static const bool CAPS_CALL  = getenv("CAPS_CALL")  != nullptr;
 // so no default-path or plain-CAPS_CALL run pays its ~222 MB.
 static const bool NM_QUAL    = getenv("CAPS_NM_VCF") != nullptr;
 static const int  NM_MINQ    = getenv("CAPS_NM_MINQ") ? atoi(getenv("CAPS_NM_MINQ")) : 20;
+// Emit 2-mismatch (clustered) partners as candidate pairs. Opt-in: it is a
+// different candidate population and is scored separately before any default
+// changes.
+static const bool NM_PAIRS   = getenv("CAPS_NM_PAIRS") != nullptr;
 static std::vector<std::pair<uint64_t,uint64_t>> g_contig_spans;   // [start,end) in pg coords
 static std::string g_input_path;
 static void phase(const char* name){
@@ -792,18 +796,35 @@ int main(int argc,char** argv){
     // Returns the mismatch count (capped at 2 -- larger values are reported as
     // 3 and are not exact) and, when the count is exactly 1, writes the
     // 0-based offset of the differing base within the overlap into `mmpos`.
-    auto rcmp_mm1=[&](uint32_t a,uint32_t off,uint32_t b,uint32_t L,int& mmpos)->int{
+    // Reports up to TWO differing positions, not one.
+    //
+    // WHY. The one-mismatch rule makes this channel blind to CLUSTERED
+    // variants: a read spanning two nearby heterozygous sites differs at two
+    // positions, scores mm==2, and is discarded. That is the SAME blind spot
+    // the k-mer graph has (a second SNV inside the 31-mer destroys the shared
+    // flank), and it is 30.4% of the graph's missed sites -- measured: A's
+    // misses are 30.4% clustered within 31 bp against 10.2% for its hits. So
+    // the two channels currently fail on the same sites for different reasons,
+    // and neither can rescue the other there.
+    // nm2 = 5,940,724 such observations were already being counted and thrown
+    // away. Capturing both offsets costs nothing extra: the XOR word is
+    // already in a register, and the second position is one more clz.
+    auto rcmp_mm1=[&](uint32_t a,uint32_t off,uint32_t b,uint32_t L,int* mmp)->int{
         uint64_t pa=woff[a]*32ULL+off, pb=woff[b]*32ULL;
-        int mm=0, base=0; mmpos=-1;
+        int mm=0, base=0, nf=0; mmp[0]=-1; mmp[1]=-1;
         const uint64_t LO=0x5555555555555555ULL;
         auto acc=[&](uint64_t x,int blk){
             if(!x) return;
-            const uint64_t nz=((x>>1)|x)&LO;
+            uint64_t nz=((x>>1)|x)&LO;
             mm+=__builtin_popcountll(nz);
-            if(mm==1){
-                // highest set 2-bit group = earliest differing base, because
-                // w32 packs the first base in the most significant bits
-                mmpos=blk+(__builtin_clzll(nz)>>1);
+            // Both mismatches can fall inside ONE 32-base block, in which case
+            // the old code recorded neither (mm jumped 0->2 and its test was
+            // `mm==1`). Drain the mask instead: highest set 2-bit group first,
+            // because w32 packs the first base in the most significant bits.
+            while(nz && nf<2){
+                const int i=(__builtin_clzll(nz)>>1);
+                mmp[nf++]=blk+i;
+                nz &= ~(1ULL<<(62-2*i));
             }
         };
         while(L>=32){ acc(w32(pa)^w32(pb),base); if(mm>2) return 3;
@@ -1071,7 +1092,7 @@ int main(int argc,char** argv){
     // reads supporting the alt, not the number of (a,b) pair observations: one
     // read a pairs with many partners b at the same locus, which inflated the
     // first version of this counter to AF>1 on 43.7% of sites.
-    struct NMObs { uint32_t read_a, pos_in_a, read_b; uint8_t alt; uint8_t hq; };
+    struct NMObs { uint32_t read_a, pos_in_a, read_b; uint8_t alt, hq, pair; };
     std::vector<NMObs> nm_obs;
     // Minimum verified overlap for a near-miss to count, as a FRACTION of Lmax
     // rather than a fixed constant (standing rule 1): at Lmax=148 this is 74
@@ -1309,8 +1330,9 @@ int main(int argc,char** argv){
                         // 20 bases is a coincidence. NMIN is expressed as a
                         // fraction of Lmax, not a constant, per standing rule 1.
                         if(CAPS_CALL && L>=nm_minL){
-                            int mmpos=-1;
-                            const int mm=rcmp_mm1(a,off,b,L,mmpos);
+                            int mmp[2]={-1,-1};
+                            const int mm=rcmp_mm1(a,off,b,L,mmp);
+                            const int mmpos=mmp[0];
                             if(mm==1){
                                 ++nm1;
                                 // Record (tail read, offset of the differing
@@ -1338,9 +1360,29 @@ int main(int argc,char** argv){
                                     hqb=(uint8_t)(((qbi>>6)<qmask.size())
                                           ? ((qmask[qbi>>6]>>(qbi&63))&1ULL) : 0ULL);
                                 }
-                                nm_local.push_back({a,(uint32_t)(off+mmpos),b,altb,hqb});
+                                nm_local.push_back({a,(uint32_t)(off+mmpos),b,altb,hqb,0});
                             }
-                            else if(mm==2) ++nm2;
+                            else if(mm==2){
+                                ++nm2;
+                                // CLUSTERED PAIR (opt-in, CAPS_NM_PAIRS=1).
+                                // Both differing bases are candidate variants
+                                // from the same partner read, so both are
+                                // emitted and both are tagged, letting them be
+                                // scored separately from the 1-mismatch set.
+                                if(NM_PAIRS && mmp[0]>=0 && mmp[1]>=0){
+                                    for(int t=0;t<2;++t){
+                                        const int mp=mmp[t];
+                                        const uint8_t altb2=(uint8_t)((w32(woff[b]*32ULL+(uint32_t)mp)>>62)&3ULL);
+                                        uint8_t hq2=1;
+                                        if(NM_QUAL){
+                                            const uint64_t qb2=woff[b]*32ULL+(uint64_t)mp;
+                                            hq2=(uint8_t)(((qb2>>6)<qmask.size())
+                                                  ? ((qmask[qb2>>6]>>(qb2&63))&1ULL) : 0ULL);
+                                        }
+                                        nm_local.push_back({a,(uint32_t)(off+mp),b,altb2,hq2,1});
+                                    }
+                                }
+                            }
                         }
                         continue;
                     }
@@ -2029,7 +2071,8 @@ int main(int argc,char** argv){
         for(const auto& o : nm_obs){
             if(ppos[o.read_a]==UINT64_MAX){ ++unplaced; continue; }
             sites.emplace_back(((ppos[o.read_a]+o.pos_in_a)<<2)|(uint64_t)o.alt,
-                               ((uint64_t)o.read_b<<1)|(uint64_t)(o.hq?1u:0u));
+                               ((uint64_t)o.read_b<<2)|((uint64_t)(o.hq?1u:0u)<<1)
+                                                      |(uint64_t)(o.pair?1u:0u));
         }
         std::sort(sites.begin(),sites.end());
         size_t distinct=0; size_t d2=0,d3=0,d5=0,d10=0;
@@ -2066,12 +2109,16 @@ int main(int argc,char** argv){
             // ordered by supporting read, so distinct-read support and its
             // high-quality subset are both counted without a set.
             const uint64_t kk=sites[i].first;
-            size_t j=i, depth=0, hqd=0; uint64_t prevb=UINT64_MAX; bool prevhq=false;
+            size_t j=i, depth=0, hqd=0, prd=0;
+            uint64_t prevb=UINT64_MAX; bool prevhq=false, prevpr=false;
             while(j<sites.size()&&sites[j].first==kk){
-                const uint64_t rb=sites[j].second>>1;
-                const bool hq=(sites[j].second&1ULL)!=0;
-                if(rb!=prevb){ ++depth; if(hq) ++hqd; prevb=rb; prevhq=hq; }
-                else if(hq && !prevhq){ ++hqd; prevhq=true; }   // read counts as HQ if ANY obs is
+                const uint64_t rb=sites[j].second>>2;
+                const bool hq=((sites[j].second>>1)&1ULL)!=0;
+                const bool pr=(sites[j].second&1ULL)!=0;
+                if(rb!=prevb){ ++depth; if(hq) ++hqd; if(pr) ++prd;
+                               prevb=rb; prevhq=hq; prevpr=pr; }
+                else { if(hq && !prevhq){ ++hqd; prevhq=true; }   // HQ if ANY obs is
+                       if(pr && !prevpr){ ++prd; prevpr=true; } }
                 ++j;
             }
             ++distinct;
@@ -2107,9 +2154,9 @@ int main(int argc,char** argv){
                         const double dhq = (double)hqd + (double)tot;
                         const double afhq= dhq>0 ? (double)hqd/dhq : 0.0;
                         fprintf(nv,"contig_%zu\t%llu\t.\t%c\t%c\t.\tPASS\t"
-                                   "SVTYPE=SNV;SRC=nearmiss;DP=%zu;COV=%d;AF=%.4f;HQ=%zu;AFHQ=%.4f\n",
+                                   "SVTYPE=SNV;SRC=nearmiss;DP=%zu;COV=%d;AF=%.4f;HQ=%zu;AFHQ=%.4f;PR=%zu\n",
                                 cid,(unsigned long long)(p-it->first+1),pg[p],"ACGT"[alt],depth,
-                                (int)tot,af,hqd,afhq);
+                                (int)tot,af,hqd,afhq,prd);
                     }
                 }
             }
@@ -2138,6 +2185,9 @@ int main(int argc,char** argv){
             fprintf(stderr,"[NEARMISS] quality mask: minQ=%d  qmask=%zu MB  "
                            "sites with >=1 high-quality observation: %zu of %zu\n",
                     NM_MINQ, qmask.size()*8/1048576, hq_sites, distinct);
+        if(NM_PAIRS)
+            fprintf(stderr,"[NEARMISS] clustered-pair channel ON: %zu 2-mismatch "
+                           "observations contributed candidates\n", nm2);
     }
 
     // The prefix index is not consulted anywhere in the mapping stage -- that
