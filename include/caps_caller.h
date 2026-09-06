@@ -111,6 +111,11 @@ inline uint64_t rc31(uint64_t v) {
 }
 // Sum of the indel_pass section timers, checked against the stage total.
 static double g_ipsum = 0.0;
+// Last lap timestamp, published so the segment AFTER the indel block -- the
+// cross-contig SNV pass, which is default-ON and was never instrumented -- can
+// be timed from outside the block where the _iplap lambda lives.
+static std::chrono::steady_clock::time_point g_ip_last;
+static std::chrono::steady_clock::time_point g_ip_start;
 inline uint64_t canon31(uint64_t v) { uint64_t r = rc31(v); return v < r ? v : r; }
 inline uint64_t colkey(uint32_t cid, uint32_t pos) { return ((uint64_t)cid << 32) | pos; }
 
@@ -462,12 +467,30 @@ inline std::vector<uint32_t> collapse_contigs(const std::vector<std::string>& ct
                                               double dup_frac, int K) {
     std::vector<uint32_t> order(ctgs.size());
     for (uint32_t i = 0; i < ctgs.size(); ++i) order[i] = i;
+    // STABLE order: the original used std::sort on a size-only comparator, so
+    // contigs of EQUAL length were visited in an unspecified order -- and the
+    // first to be visited claims its k-mers, deciding which of an equal-length
+    // pair survives. That made the output depend on the sort implementation.
+    // (The same class of latent nondeterminism as the ploc last-writer-wins
+    // fix.) Tie-break on the index to make it a function of the data.
     std::sort(order.begin(), order.end(),
-              [&](uint32_t a, uint32_t b){ return ctgs[a].size() > ctgs[b].size(); });
+              [&](uint32_t a, uint32_t b){
+                  if (ctgs[a].size() != ctgs[b].size()) return ctgs[a].size() > ctgs[b].size();
+                  return a < b;
+              });
+    // Sized from the actual input instead of a fixed 1M: total k-mer positions
+    // is a hard upper bound on distinct claims, and rehashing a set that grows
+    // to tens of millions from a 1M seed is pure copying. Capped so a huge
+    // input does not over-allocate.
     std::unordered_set<uint64_t> claimed;
-    claimed.reserve(1u << 20);
+    {
+        size_t tot_k = 0;
+        for (const auto& c : ctgs) if ((int)c.size() >= K) tot_k += c.size() - (size_t)K + 1;
+        claimed.reserve(std::min<size_t>(tot_k, (size_t)1 << 26));
+    }
     std::vector<uint32_t> keep;
     std::vector<uint64_t> km;
+    std::vector<uint8_t> kmq;   // was this k-mer at a stride-5 position?
     for (uint32_t ci : order) {
         const std::string& c = ctgs[ci];
         if ((int)c.size() < K) { keep.push_back(ci); continue; }
@@ -476,21 +499,38 @@ inline std::vector<uint32_t> collapse_contigs(const std::vector<std::string>& ct
         // sides at the same stride compares disjoint k-mer sets and the
         // duplicate is never detected (measured: only 7.6% of contigs collapsed
         // before this fix).
-        km.clear();
-        size_t hit = 0, tot = 0;
-        for (size_t i = 0; i + (size_t)K <= c.size(); i += 5) {
-            uint64_t v; if (!pack25(c.data() + i, v)) continue;
-            uint64_t rcv = rc25(v), can = v < rcv ? v : rcv;
-            ++tot;
-            if (claimed.count(can)) ++hit;
-        }
-        if (tot > 0 && (double)hit / (double)tot >= dup_frac) continue;   // redundant
-        keep.push_back(ci);
+        // ── COMPUTE THE CANONICAL k-MERS ONCE PER CONTIG ────────────────
+        // This used to walk the contig TWICE -- once on a stride-5 sample to
+        // query, then again over every position to claim -- recomputing
+        // pack25 + rc25 both times. The claim pass is a superset of the query
+        // pass, so one walk produces both: collect the canonical k-mers in
+        // order, and the query is every 5th entry of what was collected.
+        //
+        // Structural, not a tuning change: the SET of k-mers examined and the
+        // SET claimed are unchanged, so `hit`, `tot` and the accept/reject
+        // decision are bit-identical.
+        // ONE walk: collect canonical k-mers AND flag which came from a
+        // stride-5 position. The old code walked twice (stride-5 query, then
+        // full claim), recomputing pack25+rc25 both times.
+        //
+        // Exactness detail: the query loop stepped the CONTIG index by 5 and
+        // skipped positions where pack25 failed, so "every 5th surviving
+        // k-mer" is NOT the same set. The source position is therefore
+        // recorded per entry, keeping `hit`/`tot` and the accept/reject
+        // decision bit-identical.
+        km.clear(); kmq.clear();
         for (size_t i = 0; i + (size_t)K <= c.size(); ++i) {
             uint64_t v; if (!pack25(c.data() + i, v)) continue;
-            uint64_t rcv = rc25(v), can = v < rcv ? v : rcv;
-            claimed.insert(can);
+            const uint64_t rcv = rc25(v);
+            km.push_back(v < rcv ? v : rcv);
+            kmq.push_back((uint8_t)(i % 5 == 0));
         }
+        size_t hit = 0, tot = 0;
+        for (size_t w = 0; w < km.size(); ++w)
+            if (kmq[w]) { ++tot; if (claimed.count(km[w])) ++hit; }
+        if (tot > 0 && (double)hit / (double)tot >= dup_frac) continue;   // redundant
+        keep.push_back(ci);
+        claimed.insert(km.begin(), km.end());
     }
     std::sort(keep.begin(), keep.end());
     return keep;
@@ -4494,6 +4534,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
     // if scoped to verifying rc_/ac are truly the same locus. Recorded here,
     // not silently dropped, per standing rule 5 -- this is a real negative
     // result, not an abandoned draft.
+    g_ip_start = clk::now();
     if (!std::getenv("CAPS_NO_INDELS") && cdb.contigs.size() >= 2) {
         constexpr int BK = 25, FLANK = 15;
         std::vector<std::vector<uint16_t>> cov(cdb.contigs.size());
@@ -4628,10 +4669,17 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         //
         // Verification is by byte-comparing the VCF against the serial build,
         // never by inspection.
-        auto _ip0 = clk::now();
+        // NOTE: g_ip_start is set at the TOP of the indel block so the laps
+        // below cover the same span phase("indel_pass") measures. Without it
+        // the second build_substrate -- which runs before the first lap --
+        // landed in the stage total but in no timer, and 128 s of a 323 s
+        // stage looked "unaccounted" through four wrong guesses at where it
+        // was (im emit loop 0.02 s, lvotes dead code, 6b2 25.6 s, XSNV 14.3 s).
+        auto _ip0 = g_ip_start;
         auto _iplap = [&](const char* what){
             const double d = elapsed_s(_ip0, clk::now());
             g_ipsum += d;
+            g_ip_last = clk::now();
             fprintf(stderr, "[INDEL-PROF] %-24s %8.2fs\n", what, d);
             _ip0 = clk::now();
         };
@@ -4692,7 +4740,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             std::sort(tmp.begin(), tmp.end());
             for (size_t k = 0; k < tmp.size(); ++k) run_order[tmp[k].second] = k;
         }
-        _iplap("setup: cov+kidx+runs");
+        _iplap("2nd build_substrate + setup");
         fprintf(stderr, "[INDEL-PAR] %zu working runs over %d threads\n", runs.size(), n_thr);
         #pragma omp parallel for schedule(dynamic, 1) if(IND_PAR)
         for (long long ri = 0; ri < (long long)runs.size(); ++ri) {
@@ -5902,10 +5950,12 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             if (n_ls) fprintf(stderr, "[CAPS-CALL] linkscan indels=%zu\n", n_ls);
         }
 
+        _iplap("XSNV: second kidx walk");
         // ── 6b2. Cross-contig SNV pass (default ON for CAPSULE; see the
         // struct-level comment on SnvBubble for why this is the primary
         // signal here rather than an experimental extra) ──
         size_t n_xsnv = 0;
+        _iplap("gap before XSNV");
         if (!std::getenv("CAPS_NO_XSNV")) {
             constexpr int XSNV_FLANK = 15, XSNV_MIN_ANCHORS = 15;
             std::unordered_set<uint64_t> pileup_keys;
@@ -6022,6 +6072,9 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 (r.src == 2 ? "lcontig_" : (r.src ? "bcontig_" : "contig_")), r.cid, r.pos,
                 r.ref.c_str(), r.alt.c_str(), r.info.c_str());
     fclose(f);
+    fprintf(stderr, "[INDEL-PROF] %-24s %8.2fs\n", "6b2 cross-contig SNV",
+            elapsed_s(g_ip_last, clk::now()));
+    g_ipsum += elapsed_s(g_ip_last, clk::now());
     fprintf(stderr, "[CAPS-CALL] contigs=%zu H=%u candidates=%zu SNVs=%zu indels=%zu -> %s\n",
             cd.contigs.size(), H, total_candidates, n_snv, n_indel, out_vcf.c_str());
     // RECONCILIATION. Six timers previously summed to 75.6 s inside a stage
