@@ -141,7 +141,22 @@ before the timer showed it costs 20 milliseconds.
     pcluster indels       300 -> 296     <-- FAILS
     VCF content                DIFFERS   <-- FAILS
 
-**Not shipped.** A faster wrong answer is worthless.
+**CORRECTION — it SHIPS. The "gate failure" was my own measurement error.**
+
+An in-process check (`CAPS_PCLUSTER_VERIFY=1`) runs BOTH selections on the SAME
+contigs in the SAME process:
+
+    [PCLUSTER-VERIFY] original=21,605,670  flat=21,605,670
+                      only_orig=0  only_flat=0  value_diff=0
+
+Identical anchor count, identical keys, identical values. The selections are
+equivalent.
+
+The 4-record difference came from comparing two SEPARATE encoder runs, and this
+caller is **nondeterministic run-to-run** -- a fact established earlier the same
+day (bubble ids shift with thread scheduling) and then not applied when reading
+this A/B. Comparing uncontrolled runs and attributing the delta to the patch was
+the error, not the patch.
 
 Two hypotheses for the 4 lost indels were tested and REFUTED:
 1. *Selection predicate differs.* Replayed both rules on 400k synthetic

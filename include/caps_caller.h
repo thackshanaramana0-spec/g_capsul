@@ -5417,6 +5417,36 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 }
                 fprintf(stderr, "[PCLUSTER] %zu 25-mers -> %zu unique forward anchors\n",
                         pv.size(), pkidx.size());
+                // SELF-CHECK (CAPS_PCLUSTER_VERIFY=1): replay the ORIGINAL
+                // hash-map selection on the same data and diff. The synthetic
+                // test said the predicates agree; this says whether they agree
+                // ON THIS INPUT, which is the only question that matters.
+                if (std::getenv("CAPS_PCLUSTER_VERIFY")) {
+                    std::unordered_map<uint64_t,uint32_t> ocount;
+                    std::unordered_map<uint64_t,uint8_t> oorient;
+                    std::unordered_map<uint64_t,std::pair<uint32_t,uint32_t>> ok2;
+                    ocount.reserve(1u<<21); ok2.reserve(1u<<21);
+                    for (uint32_t ci = 0; ci < (uint32_t)pc_cd.contigs.size(); ++ci) {
+                        const std::string& c = pc_cd.contigs[ci];
+                        for (size_t i2 = 0; i2 + 25 <= c.size(); ++i2) {
+                            uint64_t v; if (!pack25(c.data() + i2, v)) continue;
+                            uint64_t rv = rc25(v), cn = v < rv ? v : rv;
+                            if (++ocount[cn] == 1) { ok2[cn] = {ci,(uint32_t)i2};
+                                                     oorient[cn] = (uint8_t)(v <= rv ? 0 : 1); }
+                        }
+                    }
+                    for (auto it=ok2.begin(); it!=ok2.end(); )
+                        if (oorient[it->first]!=0 || (int)ocount[it->first]>PUNIQ) it=ok2.erase(it); else ++it;
+                    for (auto it=ok2.begin(); it!=ok2.end(); )
+                        if (ocount[it->first]!=1) it=ok2.erase(it); else ++it;
+                    size_t onlyA=0, onlyB=0, valdiff=0;
+                    for (auto& kv : ok2) { auto it=pkidx.find(kv.first);
+                        if (it==pkidx.end()) ++onlyA; else if (it->second!=kv.second) ++valdiff; }
+                    for (auto& kv : pkidx) if (!ok2.count(kv.first)) ++onlyB;
+                    fprintf(stderr, "[PCLUSTER-VERIFY] original=%zu flat=%zu | only_orig=%zu "
+                                    "only_flat=%zu value_diff=%zu\n",
+                            ok2.size(), pkidx.size(), onlyA, onlyB, valdiff);
+                }
                 _iplap("pcluster: sort + select");
             }
             std::vector<std::vector<uint16_t>> pcov;
