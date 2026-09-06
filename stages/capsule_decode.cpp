@@ -184,7 +184,8 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
                        std::vector<size_t>* out_rowoff = nullptr,
                        std::vector<uint8_t>* out_qflat = nullptr,
                        std::vector<std::string>* out_qbits = nullptr,
-                       int qbits_qmin = 20){
+                       int qbits_qmin = 20,
+                       std::vector<std::string>* out_qtext = nullptr){
     auto _dt0 = std::chrono::steady_clock::now();
     uint64_t PGLEN=0, MAINEND=0; uint32_t MINMEM=0; std::vector<Stream> ss;
     if(!read_capsule(arcpath,PGLEN,MAINEND,MINMEM,ss)){ fprintf(stderr,"bad archive\n"); return 1; }
@@ -687,7 +688,18 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
     // consumer reduces quality to one bit per base anyway, so decoding 1.86 GB
     // of text and writing it out only to re-read it was the wrong
     // representation as well as the wrong number of cores (1 of 12).
-    if(has("qual_body") && out_qbits && !getenv("CAPS_SKIP_QUAL")){
+    if(has("qual_body") && out_qtext && !getenv("CAPS_SKIP_QUAL")){
+        // Full-caller route: quality as TEXT, in memory, in parallel. Same
+        // characters decode_to_file produced; no 590 MB write and re-read, and
+        // 12 cores instead of 1.
+        _dt0 = std::chrono::steady_clock::now();
+        auto qindex = dec("qual_index");
+        std::vector<uint32_t> qlens(lengths.begin(), lengths.end());
+        const uint64_t qw = qlc::decode_to_strings(S["qual_body"], qindex, qlens, *out_qtext);
+        fprintf(stderr,"  quality -> text in parallel: %llu\n",(unsigned long long)qw);
+        fprintf(stderr,"  [dec-timing] quality decode     %7.2fs\n",
+                std::chrono::duration<double>(std::chrono::steady_clock::now()-_dt0).count());
+    } else if(has("qual_body") && out_qbits && !getenv("CAPS_SKIP_QUAL")){
         _dt0 = std::chrono::steady_clock::now();
         auto qindex = dec("qual_index");
         std::vector<uint32_t> qlens(lengths.begin(), lengths.end());
@@ -830,12 +842,14 @@ static int capsule_call_from_archive(const std::string& in, const std::string& o
     if(getenv("CAPS_CALL_NOQUAL")) setenv("CAPS_SKIP_QUAL","1",1);
     std::vector<uint8_t> rflat; std::vector<size_t> rowoff;
     std::vector<std::string> qbits;
+    std::vector<std::string> qtext_mem;
     // In WANT_INDELS mode the full caller reverses `quals[oi]` PER BASE, so it
     // needs quality as TEXT, not as the Q>=QMIN bitmap the graph path uses.
     // Requesting bitmaps here would be silently wrong rather than an error.
     if(capsule_decode_all(in.c_str(), wd, rp, std::string(), std::string(),
                           &rflat, &rowoff, nullptr,
-                          WANT_INDELS ? nullptr : &qbits, QMIN) != 0){
+                          WANT_INDELS ? nullptr : &qbits, QMIN,
+                          WANT_INDELS ? &qtext_mem : nullptr) != 0){
         fprintf(stderr,"[call] decode failed\n"); return 1; }
 
     _lap("1 decode reads+qual");
@@ -856,13 +870,10 @@ static int capsule_call_from_archive(const std::string& in, const std::string& o
         // WANT_INDELS: quality went to a file as text (no bitmaps requested).
         std::vector<std::string> qtext;
         if (WANT_INDELS) {
-            std::ifstream fq(rp + ".qual");
-            std::string ln;
-            while (std::getline(fq, ln)) {
-                while (!ln.empty() && (ln.back()=='\n' || ln.back()=='\r')) ln.pop_back();
-                qtext.push_back(ln);
-            }
-            fprintf(stderr, "  [call] quality as text: %zu records\n", qtext.size());
+            // Handed over in memory by decode_to_strings; the file round trip
+            // it replaced is gone.
+            qtext.swap(qtext_mem);
+            fprintf(stderr, "  [call] quality as text: %zu records (in memory)\n", qtext.size());
         }
         const bool haveq = WANT_INDELS ? !qtext.empty() : !qbits.empty();
         const size_t NO = rowoff.empty() ? 0 : rowoff.size() - 1;
