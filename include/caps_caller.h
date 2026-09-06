@@ -4537,6 +4537,11 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
     // So build TWO substrates from the one assembly, each at its own optimum.
     // This is the dual view done correctly; an earlier attempt paired the
     // pileup view with the UNCOLLAPSED contigs and was refuted (0.349).
+    // Start the indel_pass accounting HERE, before the second build_substrate.
+    // It was set after that call, so a ~52 s substrate build sat inside the
+    // stage total but outside every lap -- and a timer labelled
+    // "2nd build_substrate + setup" was measuring only the setup after it.
+    g_ip_start = clk::now();
     const bool BUB_UNCOL = std::getenv("CAPS_BUBBLE_UNCOLLAPSED") != nullptr;
     // Swept on the tuning window only: INDEL F1 0.315 (0.65) / 0.413 (0.80) /
     // 0.453 (0.92), and 0.349 with no collapse at all -- a peak near 0.92,
@@ -4553,6 +4558,10 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         cd_bub.read_clip = std::move(B.read_clip);
         cd_bub.valid = true;
     }
+    g_ipsum += elapsed_s(g_ip_start, clk::now());
+    fprintf(stderr, "[INDEL-PROF] %-24s %8.2fs\n", "2nd build_substrate",
+            elapsed_s(g_ip_start, clk::now()));
+    g_ip_last = clk::now();
     const CallData& cdb = BUB_UNCOL ? cd_in : cd_bub;
     const int BUB_SRC = 1;   // bubble records always live in cdb's own contig space
     // A per-candidate "local read realignment" check was drafted here and
@@ -4565,7 +4574,6 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
     // if scoped to verifying rc_/ac are truly the same locus. Recorded here,
     // not silently dropped, per standing rule 5 -- this is a real negative
     // result, not an abandoned draft.
-    g_ip_start = clk::now();
     if (!std::getenv("CAPS_NO_INDELS") && cdb.contigs.size() >= 2) {
         constexpr int BK = 25, FLANK = 15;
         std::vector<std::vector<uint16_t>> cov(cdb.contigs.size());
@@ -4706,7 +4714,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         // landed in the stage total but in no timer, and 128 s of a 323 s
         // stage looked "unaccounted" through four wrong guesses at where it
         // was (im emit loop 0.02 s, lvotes dead code, 6b2 25.6 s, XSNV 14.3 s).
-        auto _ip0 = g_ip_start;
+        auto _ip0 = g_ip_last;   // continue from the 2nd build_substrate lap
         auto _iplap = [&](const char* what){
             const double d = elapsed_s(_ip0, clk::now());
             g_ipsum += d;
@@ -4771,7 +4779,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             std::sort(tmp.begin(), tmp.end());
             for (size_t k = 0; k < tmp.size(); ++k) run_order[tmp[k].second] = k;
         }
-        _iplap("2nd build_substrate + setup");
+        _iplap("indel setup (cov+kidx+runs)");
         fprintf(stderr, "[INDEL-PAR] %zu working runs over %d threads\n", runs.size(), n_thr);
         #pragma omp parallel for schedule(dynamic, 1) if(IND_PAR)
         for (long long ri = 0; ri < (long long)runs.size(); ++ri) {
@@ -5824,6 +5832,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 fprintf(stderr,"\n");
             }
             long pc_drop_min=0, pc_drop_aflo=0, pc_drop_afhi=0, pc_emit=0;
+            _iplap("pcluster: pre-emit");
             int PMIN = MC;
             if (const char* e = std::getenv("CAPS_PCLUSTER_MIN")) PMIN = atoi(e);
             size_t n_pc = 0;
@@ -6038,6 +6047,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             if (n_ls) fprintf(stderr, "[CAPS-CALL] linkscan indels=%zu\n", n_ls);
         }
 
+        _iplap("pcluster: emit loop");
         _iplap("XSNV: second kidx walk");
         // ── 6b2. Cross-contig SNV pass (default ON for CAPSULE; see the
         // struct-level comment on SnvBubble for why this is the primary
