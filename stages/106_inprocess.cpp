@@ -4127,6 +4127,60 @@ int main(int argc,char** argv){
                       return (int64_t)(it-g_contig_spans.begin());
                   };
                   size_t mmi=0, emitted=0;
+                  // ── ALLELE EVIDENCE FOR mem_extmm (opt-in: CAPS_MM_VAF=1) ──
+                  // Every filter tried on this channel described the ANCHOR
+                  // (MLEN/MMCNT/RC) and every one selected for EASY loci --
+                  // long clean anchors sit in unique well-covered sequence,
+                  // exactly where the bubble caller already succeeds. What a
+                  // caller actually asks is whether support at the locus is
+                  // ~50/50, which is what heterozygous MEANS, and that question
+                  // was never put to this channel.
+                  //
+                  // It can be: each Ref covers [dst, dst+len), so a difference
+                  // array over allrefs gives how many references COVER a pg
+                  // position, and the mismatch records give how many DISAGREE
+                  // there. VAF = disagree / cover is the same agree/disagree
+                  // ratio that took the near-miss channel from 7.5% to 25.0%
+                  // marginal precision.
+                  //
+                  // MEASURED AND REFUTED, kept as the evidence. MEM references
+                  // TILE the pseudogenome -- each destination position is
+                  // encoded exactly once, as literal or as one back-reference --
+                  // so refcov is identically 1 and every record scores VAF=1.0
+                  // (measured: 932,236 of 932,990 records at VAF 1.0, from
+                  // 612,053 refs over 93 Mbp). There is no second reference to
+                  // disagree with, so no allele fraction exists to compute.
+                  //
+                  // This closes the question for good: the pseudogenome has no
+                  // READ pileup (the two haplotypes are stitched to different
+                  // places) and MEM references have no REGION pileup either.
+                  // mem_extmm records are region-level relationships, and a VAF
+                  // needs read-level counts at one locus, which this encoding
+                  // does not retain at any level. That is why the near-miss
+                  // channel could be fixed with a real VAF and this one cannot.
+                  // Left opt-in and OFF; enabling it only adds fields that are
+                  // constant.
+                  const bool MMVAF = getenv("CAPS_MM_VAF")!=nullptr;
+                  std::vector<int32_t> refcov;
+                  std::vector<uint64_t> mmpos_sorted;
+                  if(MMVAF){
+                      refcov.assign(pg.size()+1,0);
+                      for(const Ref& r : allrefs){
+                          uint64_t b=r.dst, e=(uint64_t)r.dst+r.len;
+                          if(e>pg.size()) e=pg.size();
+                          if(b<pg.size()){ refcov[b]++; refcov[e]--; }
+                      }
+                      int32_t run=0;
+                      for(size_t q=0;q<refcov.size();++q){ run+=refcov[q]; refcov[q]=run; }
+                      mmpos_sorted.reserve(totalmm);
+                      for(const Ref& r : allrefs)
+                          for(uint8_t k=0;k<r.mmcnt;++k)
+                              mmpos_sorted.push_back((uint64_t)r.dst+r.mmpos[k]);
+                      std::sort(mmpos_sorted.begin(),mmpos_sorted.end());
+                      fprintf(stderr,"[MM-VAF] reference-coverage denominator built over %zu bp"
+                                     " from %zu refs, %zu mismatch positions\n",
+                              pg.size(), allrefs.size(), mmpos_sorted.size());
+                  }
                   // Which pg contigs these records actually reference. The
                   // records are indexed by g_contig_spans, and NOTHING dumped
                   // that contig space -- CAPS_DUMP_CONTIGS writes the caller's
@@ -4146,6 +4200,20 @@ int main(int argc,char** argv){
                           if (cid>=0){
                               uint64_t local = dstpos - g_contig_spans[(size_t)cid].first;
                               char refc_ = (char)ref_mmref[mmi+k], obsc_ = (char)ref_mmobs[mmi+k];
+                              if(MMVAF){
+                                  // ALT = independent references disagreeing here;
+                                  // COV = references covering here. A heterozygous
+                                  // locus should show roughly half disagreeing.
+                                  const auto lo=std::lower_bound(mmpos_sorted.begin(),mmpos_sorted.end(),dstpos);
+                                  const auto hi=std::upper_bound(mmpos_sorted.begin(),mmpos_sorted.end(),dstpos);
+                                  const size_t altn=(size_t)(hi-lo);
+                                  const int32_t cov=(dstpos<refcov.size())?refcov[dstpos]:0;
+                                  const double vaf=cov>0?(double)altn/(double)cov:0.0;
+                                  fprintf(av, "mcontig_%ld\t%zu\t.\t%c\t%c\t.\tPASS\t"
+                                              "SVTYPE=SNV;SRC=mem_extmm;MLEN=%u;MMCNT=%u;ALT=%zu;COV=%d;VAF=%.4f\n",
+                                          (long)cid, (size_t)local+1, refc_, obsc_, r.len, r.mmcnt,
+                                          altn, (int)cov, vaf);
+                              } else
                               fprintf(av, "mcontig_%ld\t%zu\t.\t%c\t%c\t.\tPASS\tSVTYPE=SNV;SRC=mem_extmm;MLEN=%u;MMCNT=%u\n",
                                       (long)cid, (size_t)local+1, refc_, obsc_, r.len, r.mmcnt);
                               ++emitted;
