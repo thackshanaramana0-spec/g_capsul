@@ -467,17 +467,16 @@ inline std::vector<uint32_t> collapse_contigs(const std::vector<std::string>& ct
                                               double dup_frac, int K) {
     std::vector<uint32_t> order(ctgs.size());
     for (uint32_t i = 0; i < ctgs.size(); ++i) order[i] = i;
-    // STABLE order: the original used std::sort on a size-only comparator, so
-    // contigs of EQUAL length were visited in an unspecified order -- and the
-    // first to be visited claims its k-mers, deciding which of an equal-length
-    // pair survives. That made the output depend on the sort implementation.
-    // (The same class of latent nondeterminism as the ploc last-writer-wins
-    // fix.) Tie-break on the index to make it a function of the data.
+    // NOTE: adding an index tie-break here (to remove a dependence on
+    // std::sort's unspecified order for equal-length contigs) was MEASURED and
+    // REVERTED. It is a real latent nondeterminism, but breaking the tie by
+    // index CHANGES WHICH CONTIGS SURVIVE -- 140,561 -> 140,659 on the 4M
+    // subset -- and every downstream stage then does more work, eating ~130 s
+    // of the 152 s this function's other fixes save. Correctness-neutral it is
+    // not, so it is not bundled with a speed change. If it is wanted, it must
+    // be measured on its own against F1.
     std::sort(order.begin(), order.end(),
-              [&](uint32_t a, uint32_t b){
-                  if (ctgs[a].size() != ctgs[b].size()) return ctgs[a].size() > ctgs[b].size();
-                  return a < b;
-              });
+              [&](uint32_t a, uint32_t b){ return ctgs[a].size() > ctgs[b].size(); });
     // Sized from the actual input instead of a fixed 1M: total k-mer positions
     // is a hard upper bound on distinct claims, and rehashing a set that grows
     // to tens of millions from a 1M seed is pure copying. Capped so a huge
@@ -702,17 +701,49 @@ inline Substrate build_substrate(const std::vector<std::string>& seqs, const Cal
     {
         std::vector<std::pair<uint64_t,uint64_t>> flat;   // (key, ci<<32|pos)
         flat.reserve(S.contigs.size() * 128);
-        for (uint32_t ci = 0; ci < S.contigs.size(); ++ci) {
-            const std::string& c = S.contigs[ci];
-            for (size_t i = 0; i + (size_t)K <= c.size(); ++i) {
-                uint64_t v; if (!pack25(c.data() + i, v)) continue;
-                uint64_t rcv = rc25(v), can = v < rcv ? v : rcv;
-                flat.push_back({can, ((uint64_t)ci << 32) | (uint32_t)i});
+        // PARALLEL FILL BY INDEX -- the same count -> prefix-sum -> fill
+        // pattern already proven for kidx. build_substrate is ~52% of the
+        // archive-path run (it is ~all of ridx_build's 101.8 s AND ~128 s
+        // inside indel_pass, since it is called twice), and this loop walks
+        // ~65M contig positions serially.
+        //
+        // Filling BY INDEX rather than concatenating per-thread buffers keeps
+        // the entry order byte-identical to the serial push_back order, which
+        // the stable_sort below depends on: equal keys must retain contig-then-
+        // position order because the 64-cap downstream truncates each key's
+        // list and a different order would keep a different 64.
+        {
+            const size_t NC = S.contigs.size();
+            std::vector<size_t> off(NC + 1, 0);
+            #pragma omp parallel for schedule(dynamic, 256)
+            for (long long ci = 0; ci < (long long)NC; ++ci) {
+                const std::string& c = S.contigs[(size_t)ci];
+                size_t cnt = 0;
+                for (size_t i = 0; i + (size_t)K <= c.size(); ++i) {
+                    uint64_t v; if (pack25(c.data() + i, v)) ++cnt;
+                }
+                off[(size_t)ci + 1] = cnt;
+            }
+            for (size_t i = 0; i < NC; ++i) off[i + 1] += off[i];
+            flat.resize(off[NC]);
+            #pragma omp parallel for schedule(dynamic, 256)
+            for (long long ci = 0; ci < (long long)NC; ++ci) {
+                const std::string& c = S.contigs[(size_t)ci];
+                size_t w = off[(size_t)ci];
+                for (size_t i = 0; i + (size_t)K <= c.size(); ++i) {
+                    uint64_t v; if (!pack25(c.data() + i, v)) continue;
+                    const uint64_t rcv = rc25(v), can = v < rcv ? v : rcv;
+                    flat[w++] = {can, ((uint64_t)ci << 32) | (uint32_t)i};
+                }
             }
         }
-        flat.shrink_to_fit();          // reserve() over-allocated by contigs*128
+        #if defined(_OPENMP) && defined(_GLIBCXX_PARALLEL_ALGO_H)
+        __gnu_parallel::stable_sort(flat.begin(), flat.end(),
+                          [](const auto& a, const auto& b){ return a.first < b.first; });
+        #else
         std::stable_sort(flat.begin(), flat.end(),
                           [](const auto& a, const auto& b){ return a.first < b.first; });
+        #endif
         // COUNT FIRST, THEN RESERVE EXACTLY.
         //
         // `flat` is 16 B per k-mer position over ~65 Mbases -- 0.97 GB -- and
@@ -5637,7 +5668,38 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             // 296 to 289, i.e. FURTHER from the original 300, not closer. That
             // was the fourth failed explanation for those records. Iterate
             // pkidx directly, as the original did.
-            for (auto& kv : pkidx) {
+            // PARALLEL OVER ANCHORS. This loop is the bulk of
+            // `pcluster: scan + emit` (112 s of a ~395 s archive-path run) and
+            // was serial over 21.6M anchors.
+            //
+            // The anchors are flattened into a vector in the map's OWN
+            // iteration order -- NOT sorted. Sorting them was tried and
+            // reverted (it changed which events won ties); preserving the
+            // order means the per-thread results merge back to exactly what
+            // the serial loop produced.
+            //
+            // pvotes/panch are set inserts (order-free) and ploc now keeps the
+            // smallest (contig,pos) rather than the last writer, so all three
+            // merge deterministically regardless of which thread saw an anchor.
+            std::vector<std::pair<uint64_t,std::pair<uint32_t,uint32_t>>> panch_v;
+            panch_v.reserve(pkidx.size());
+            for (const auto& kv : pkidx) panch_v.push_back(kv);
+            int pc_nt = 1;
+            #ifdef _OPENMP
+            pc_nt = omp_get_max_threads();
+            #endif
+            std::vector<std::map<std::tuple<std::string,int,std::string>, std::unordered_set<uint32_t>>> tvotes((size_t)pc_nt), tanch((size_t)pc_nt);
+            std::vector<std::map<std::tuple<std::string,int,std::string>, std::pair<uint32_t,uint32_t>>> tloc((size_t)pc_nt);
+            #pragma omp parallel for schedule(dynamic, 4096)
+            for (long long ai = 0; ai < (long long)panch_v.size(); ++ai) {
+                int ptid = 0;
+                #ifdef _OPENMP
+                ptid = omp_get_thread_num();
+                #endif
+                auto& pvotes = tvotes[(size_t)ptid];
+                auto& panch  = tanch[(size_t)ptid];
+                auto& ploc   = tloc[(size_t)ptid];
+                const auto& kv = panch_v[(size_t)ai];
                 uint32_t ccid = kv.second.first;
                 uint32_t cpos = kv.second.second;
                 const std::string& cc2 = pc_cd.contigs[ccid];
@@ -5649,10 +5711,21 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                     const std::string& q = seqs[pr.first];
                     uint32_t rpos = pr.second;
                     // orient the read so its anchor reads forward like the contig
-                    std::string qq = q; uint32_t qp = rpos;
+                    // AVOID THE COPY IN THE COMMON CASE. `qq` is read-only
+                    // below (verified: no assignment, append, insert, erase,
+                    // resize or clear touches it), and it is either `q` itself
+                    // or its reverse complement. Copying `q` unconditionally
+                    // allocated a full read per CANDIDATE PAIR inside a nested
+                    // loop; only the reverse-complement branch actually needs
+                    // to materialise a new string.
+                    std::string qq_rc;                 // only filled when needed
+                    const std::string* qqp = &q;
+                    uint32_t qp = rpos;
                     { uint64_t v; pack25(q.data() + rpos, v);
                       uint64_t rv = rc25(v);
-                      if (v > rv) { qq = rc_str(q); qp = (uint32_t)(q.size() - rpos - AK); } }
+                      if (v > rv) { qq_rc = rc_str(q); qqp = &qq_rc;
+                                    qp = (uint32_t)(q.size() - rpos - AK); } }
+                    const std::string& qq = *qqp;
                     if (qp < (uint32_t)LW) continue;
                     // walk LEFT from the anchor: contig and read agree, then diverge
                     int d = 0;
@@ -5728,6 +5801,21 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                     }
                 }
             }
+            // MERGE. pvotes/panch are set unions (order-free). ploc keeps the
+            // smallest (contig,pos), so the merged value is the minimum over
+            // all threads -- identical to the serial minimum regardless of how
+            // anchors were distributed.
+            for (int t = 0; t < pc_nt; ++t) {
+                for (auto& kv : tvotes[(size_t)t]) pvotes[kv.first].insert(kv.second.begin(), kv.second.end());
+                for (auto& kv : tanch[(size_t)t])  panch[kv.first].insert(kv.second.begin(), kv.second.end());
+                for (auto& kv : tloc[(size_t)t]) {
+                    auto it = ploc.find(kv.first);
+                    if (it == ploc.end()) ploc.emplace(kv.first, kv.second);
+                    else if (kv.second < it->second) it->second = kv.second;
+                }
+            }
+            { decltype(tvotes)().swap(tvotes); decltype(tanch)().swap(tanch); decltype(tloc)().swap(tloc);
+              decltype(panch_v)().swap(panch_v); }
             if (std::getenv("CAPS_PCDBG")) {
                 std::map<int,int> hist;
                 for (auto& kv : pvotes) hist[(int)kv.second.size()]++;
