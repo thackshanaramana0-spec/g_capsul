@@ -1125,9 +1125,40 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         return avail;
     };
     const size_t MEM_AVAIL_MB = mem_available_mb();
+    // ── AN ABSOLUTE DEFAULT BUDGET, NOT A FRACTION OF WHAT IS FREE ──────────
+    // This defaulted to 60% of MemAvailable, which silently DISABLES the spill
+    // on a large machine: on a 76 GB box the ceiling came out at 45,548 MB, the
+    // 22,695 MB projection fit under it, counting ran in RAM, and the caller
+    // peaked at 28.3 GB taking 191.7 s in kc_H_build -- against 25.4 s and ~7 GB
+    // for the spill path this file already implements. The bigger the machine,
+    // the worse the tool behaved.
+    //
+    // GATB does the opposite, and it is why DiscoSNP++ holds 3.29 GB on this
+    // same box and dataset (measured 2026-09-06, 75.72 s / 3.29 GB, matching
+    // its published 76.5 s / 3.45 GB). ConfigurationAlgorithm.cpp:334-343:
+    //
+    //     if (_max_memory == 0) _max_memory = 5000;                  // MB
+    //     if (_max_memory > (system_mem*2)/3) _max_memory = (system_mem*2)/3;
+    //
+    // An absolute default FIRST, with system memory used only as a CAP. The
+    // budget is a choice the tool makes, not a resource it discovers -- which
+    // is the whole point of the "declared ceiling" this file already argues
+    // for a few lines above, applied to its own default.
+    //
+    // 5000 MB is GATB's value, adopted deliberately rather than invented: it is
+    // the number their partitioning has been tuned against for years, and our
+    // spill derives partition count from the ceiling the same way. Explicit
+    // CAPS_MAXRAM_MB still wins over it.
+    //
+    // THIS CHANGES NO OUTPUT. Spilling alters WHERE k-mers are counted, never
+    // which ones exist -- the merge sums counts per key either way, and the
+    // k-mer-count gate verifies exactly that identity.
+    size_t mem_ceil_default = 5000;
+    if (MEM_AVAIL_MB && mem_ceil_default > (MEM_AVAIL_MB * 2) / 3)
+        mem_ceil_default = (MEM_AVAIL_MB * 2) / 3;
     const size_t MEM_CEIL_MB  = std::getenv("CAPS_MAXRAM_MB")
                               ? (size_t)atoll(std::getenv("CAPS_MAXRAM_MB"))
-                              : (MEM_AVAIL_MB ? (MEM_AVAIL_MB * 3) / 5 : 0);
+                              : mem_ceil_default;
     // Projected in-RAM counting cost: every k-mer of every read becomes one
     // 16-byte KC record in the run buffers before RLE, which is what actually
     // sets the peak. Reads and lengths are already resident and are not part
