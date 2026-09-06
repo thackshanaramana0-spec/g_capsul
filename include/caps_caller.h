@@ -1089,6 +1089,14 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
     // THERE ARE THREE reserve() SITES (in-RAM, spill/superkmer, and the k-way
     // merge) and the spill path is the one that runs at full scale. Hinting
     // only one of them is how this silently did nothing the first time.
+    // NOTE: dropping cnt==1 nodes from kc was implemented and MEASURED here,
+    // and it is a NO-OP at full scale -- kc stayed at exactly 140,719,632 nodes.
+    // The "60.4% of nodes are singletons" figure in the MINC comment below is a
+    // WINDOW-scale measurement; at full chr20 (30x) the superkmer counting path
+    // has already summed duplicate keys before any filter could see them, so
+    // there are essentially no singletons left to drop. Reverted rather than
+    // kept as dead weight. If this is ever revisited, measure the cnt==1
+    // fraction AT THE SCALE YOU RUN, not from the window figure.
     auto kc_hp_hint = [](std::vector<KC>& v){
         void* base = (void*)v.data();
         size_t len = v.capacity() * sizeof(KC);
@@ -2070,12 +2078,58 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
 
         // successors of a FORWARD-oriented 31-mer: shift in each base, test the
         // canonical form against kc. Returns forward-oriented successors.
+        // FOUR SEARCHES, INTERLEAVED, NOT SEQUENTIAL.
+        //
+        // The four successors are known before any lookup starts, and each
+        // lookup is an independent ~27-hop binary search over a 2.1 GB table.
+        // Run back to back, each hop's cache miss is waited out in full; run in
+        // lockstep with a prefetch issued for all four midpoints before any of
+        // them is read, the four latencies OVERLAP.
+        //
+        // This is worth doing only because the loop is LATENCY-bound rather
+        // than bandwidth-bound -- a distinction this project has been burned by
+        // before (a filter that won in a latency-bound loop lost in a
+        // bandwidth-bound one). Verified two ways before writing it: a model of
+        // the access pattern predicts ~113 s of pure latency against an
+        // observed 53.5 s traversal (same order, i.e. latency-dominated), and a
+        // standalone benchmark on a table of the same shape and size measured
+        // 2.123 s sequential vs 1.393 s interleaved -- 1.52x.
+        //
+        // The loop count is fixed rather than data-dependent so all four lanes
+        // step together; a lane whose range has collapsed simply stops
+        // narrowing. Results are identical to four lower_bound calls by
+        // construction: same invariant, same midpoint rule.
         auto succs = [&](uint64_t fwd, uint64_t out[4], uint32_t cnt[4]) -> int {
-            int n = 0;
+            uint64_t key[4]; uint64_t nxs[4];
             for (uint64_t b = 0; b < 4; ++b) {
-                const uint64_t nx = ((fwd << 2) | b) & MASK31;
-                const KC* e = kc_find(canon31(nx));
-                if (e && e->cnt >= MINC) { out[n] = nx; cnt[n] = e->cnt; ++n; }
+                nxs[b] = ((fwd << 2) | b) & MASK31;
+                key[b] = canon31(nxs[b]);
+            }
+            const KC* base = kc.data();
+            const size_t N = kc.size();
+            size_t lo[4] = {0,0,0,0}, hi[4] = {N,N,N,N};
+            for (int step = 0; step < 64; ++step) {
+                bool any = false;
+                size_t mid[4];
+                for (int j = 0; j < 4; ++j) {
+                    if (lo[j] < hi[j]) {
+                        mid[j] = lo[j] + ((hi[j] - lo[j]) >> 1);
+                        __builtin_prefetch(base + mid[j], 0, 1);
+                        any = true;
+                    }
+                }
+                if (!any) break;
+                for (int j = 0; j < 4; ++j) {
+                    if (lo[j] >= hi[j]) continue;
+                    if (base[mid[j]].kmer < key[j]) lo[j] = mid[j] + 1;
+                    else                            hi[j] = mid[j];
+                }
+            }
+            int n = 0;
+            for (int j = 0; j < 4; ++j) {
+                if (lo[j] < N && base[lo[j]].kmer == key[j] && base[lo[j]].cnt >= MINC) {
+                    out[n] = nxs[j]; cnt[n] = base[lo[j]].cnt; ++n;
+                }
             }
             return n;
         };

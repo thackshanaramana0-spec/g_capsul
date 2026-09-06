@@ -187,6 +187,64 @@ caller itself (traversal ~53 s, kc_H_build ~23 s), which is shared with
 configuration A and therefore governed by Claim 2's own tuning, not by the
 archive path.
 
+## Deep pass — the caller itself
+
+With the non-caller phases down to ~26 s, the remaining budget was the caller:
+traversal ~53 s + kc_H_build ~23 s.
+
+### Lever 5 — interleave the four successor probes (KEPT)
+
+`succs()` does FOUR independent `kc_find` binary searches, each ~27 hops over a
+2.1 GB table. Run back to back, every hop's cache miss is waited out in full;
+the four keys are known before any search starts, so the four latencies can
+overlap instead.
+
+Checked it was LATENCY-bound before writing it (this project has been burned by
+a filter that won in a latency-bound loop and lost in a bandwidth-bound one):
+a model of the access pattern predicts ~113 s of pure latency against 53.5 s
+observed -- same order, i.e. latency-dominated -- and a standalone benchmark on
+a table of identical shape measured 2.123 s sequential vs 1.393 s interleaved
+(1.52x).
+
+**MEASURED IN SITU: traversal 53.49 -> 48.21 s (-9.9%), output identical.**
+Well below the 1.52x microbenchmark, because the real loop's `cnt < MINC`
+early-exit already skips most nodes and the surviving probes have better
+locality than synthetic random keys.
+
+### Levers measured and REJECTED
+
+- **Split `KC{kmer,cnt}` into parallel key/count arrays.** The search touches
+  only keys, so the working set halves 2.10 -> 1.05 GB. Benchmarked **1.09x**:
+  at 27 hops the first ~15 are cold regardless of element size, because
+  consecutive midpoints are gigabytes apart. Not worth a ~30-call-site refactor
+  for speed. Remains a 0.52 GB RAM option if RAM ever binds.
+- **Drop `cnt==1` singletons from kc.** Audited all six consumers and every one
+  already requires `cnt >= 2` (`cnt_max` can't be a singleton; the histogram is
+  gated on `>= 2`; `kcount()` feeds a `> 1.5*H` test; `PLMIN = max(2, H/4)`; the
+  dBG probes use MINC=2), so it was provably output-identical and predicted
+  140.7M -> ~56M entries. **MEASURED: a NO-OP -- kc stayed at exactly
+  140,719,632 nodes.** The "60.4% singletons" figure in the MINC comment is a
+  WINDOW-scale measurement; at full chr20 the superkmer path has already summed
+  duplicate keys before any filter sees them. Reverted. Lesson recorded at the
+  site: measure the fraction AT THE SCALE YOU RUN.
+- **Bypassing the k-mer spill** (`CAPS_MAXRAM_MB`). Not pursued. The absolute
+  5000 MB ceiling is what makes full chr20 run at ~6 GB instead of 28.3 GB;
+  the default stays untouched.
+
+## FINAL, ceiling and spill unchanged
+
+    172.34 s / 5.40 GB  ->  111.53 s / 6.21 GB
+    F1 0.8766, TP 36,855 / FN 7,720 -- identical to published
+    (FP 2,654 vs 2,655: the caller's known bubble-ordering nondeterminism)
+
+    decode reads+qual   17.9 s   (reads 8.2 + quality 5.5)
+    export pg            6.8 s
+    read back + pack     1.1 s
+    caller              84-90 s  (traversal ~48, kc_H ~23)
+
+**-35% wall.** Non-caller overhead fell from ~72 s to ~26 s. What remains is the
+caller, shared with configuration A.
+
 ## What this pass got wrong, recorded so it is not repeated
 
 1. **A contaminated baseline.** 254.92 s came from two of my own jobs running
@@ -196,7 +254,11 @@ archive path.
 2. **A silently inert optimisation.** The huge-page hint went to one of three
    `kc.reserve()` sites; at full scale the SPILL path allocates. It now hints at
    all three and logs on FAILURE, so it cannot go quiet again.
-3. **An unmeasured assumption.** Removing a 1.86 GB file write and 12.6M
+3. **A stale marker across sessions.** A follow-up script waited on a `_DONE`
+   marker in a filename that already existed from an EARLIER session, so it
+   fired immediately and ran a second job alongside the first -- the same
+   contention error as (1), from reusing filenames. Use fresh names per session.
+4. **An unmeasured assumption.** Removing a 1.86 GB file write and 12.6M
    getline calls bought ZERO -- the file was page-cache resident and the real
    cost was 12.6M serial string allocations. The phase timers that revealed this
    are now permanent, so phase costs need never be inferred by subtraction.
