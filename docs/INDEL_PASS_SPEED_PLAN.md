@@ -205,3 +205,66 @@ I projected "522 -> ~80 s" before the timers split the stage; that was wrong by
 5x. With the index fix alone it is ~460 s. The 419 s of scan + unaccounted tail
 (70% of the stage) is where a drastic cut has to come from, and neither is
 built.
+
+
+---
+
+# indel_pass optimisation — measured results (4M subset)
+
+| change | section | before | after |
+|---|---|---|---|
+| flat sorted index | pcluster build + erase | 139.7 s | **8.2 s (17x)** |
+| bitset pre-filter | pcluster scan + emit | 244.9 s | **162.4 s (-34%)** |
+| deterministic anchor order | — | — | correctness fix |
+| **stage total** | `indel_pass` | **599.8 s** | **352.0 s (-41%)** |
+| peak RAM | | 14.75 GB | **13.00 GB** |
+
+## The bitset pre-filter
+
+`pcluster: scan + emit` walks ~85 k-mers of each of 4M reads (~340M iterations)
+and probed `pkidx.count(cn)` -- a hash lookup into a 21.6M-entry map -- for every
+one. The insertions that follow were already filtered ("provably dead
+otherwise"), so the PROBES were the cost, not the work they admit.
+
+A 64 MB bitset with two independent hashes answers "definitely absent" from a
+single cache line. False positives are possible and harmless (they fall through
+to the real `pkidx.count()`); false negatives are impossible. **Output is
+identical BY CONSTRUCTION** -- the filter can only skip lookups that would have
+missed -- and the measurement agrees: `content vs pcfix: IDENTICAL`.
+
+## Four explanations for a 4-record difference, three of them wrong
+
+The flat index moved `pcluster indels` 300 -> 296. Each hypothesis was tested,
+not assumed:
+
+1. **Predicate mismatch.** Replayed both selection rules on 400k synthetic
+   entries: same 72 keys, same values, zero disagreement. REFUTED.
+2. **`pack25` holes.** Count and fill passes share the same guard, so counts
+   match fills exactly. REFUTED.
+3. **Run-to-run nondeterminism.** Repeating both builds: original gives 300,
+   300; flat gives 296, 296. Each is deterministic. REFUTED -- and this one had
+   already been committed as the explanation, then retracted.
+4. **`unordered_map` iteration order.** CONFIRMED. `for (auto& kv : pkidx)`
+   iterates a hash map whose order depends on insertion history, and the flat
+   build inserts sorted by k-mer where the original inserted by contig. `ploc`
+   records one location per event with first-writer-wins, so anchor order
+   decides which location an event gets.
+
+Fixed by sorting anchors on (contig, pos, key) before the loop. The result now
+depends only on the data, not on container bucket layout -- **a correctness
+improvement in its own right, because the ORIGINAL was silently depending on an
+implementation detail.**
+
+## Where the time went, and what is still dark
+
+Every real gain in this session came from a TIMER. Every false lead came from
+reading code and inferring:
+
+* the `im` emit loop -- a fix was written and ready to ship; it costs **0.02 s**
+* the anchor scan -- an Amdahl analysis run on my own broken implementation
+  concluded "not the bottleneck", when done properly it was 1,153 s -> 73 s
+* the 4-record difference -- three wrong explanations before the right one
+
+The `accounted X of stage` sum check is what caught all three, and it still
+reports a gap: **210 s accounted of 352 s, so ~142 s remains unmeasured.** That
+is the next target.
