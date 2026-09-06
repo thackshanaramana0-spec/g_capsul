@@ -345,12 +345,63 @@ together -- VAF asks "is the support balanced", quality asks "is the support
 trustworthy". Encoder cost of both: 287.17s/6.03GB -> 279.46s/6.36GB, i.e. no
 time penalty and +0.33 GB.
 
-**Next lever this exposed, unbuilt:** near-miss requires EXACTLY ONE mismatch,
-so a read spanning two nearby het sites is rejected outright -- it is blind to
-clustered variants for the same reason the k-mer graph is, and that is 30.4% of
-A's misses. `nm2 = 5,940,724` two-mismatch observations are counted and
-discarded. Emitting them as candidate PAIRS targets the one failure mode both
-current channels share.
+## The clustered-pair channel: MECHANISM CONFIRMED, utility not achieved
+
+Near-miss required EXACTLY ONE mismatch, so a read spanning two nearby het
+sites was rejected by construction -- blind to clustered variants for the same
+reason the k-mer graph is. `rcmp_mm1` now reports BOTH offsets (the old code
+recorded neither when both fell in one 32-base block, since its test was
+`mm==1`), and `CAPS_NM_PAIRS=1` emits them as candidate pairs. At full chr20
+this turns 5,940,724 discarded observations into candidates:
+
+    observations       13,019,987 -> 24,901,435
+    distinct (pos,alt)    513,342 ->  1,376,516
+    sites (DP>=2)         295,782 ->    802,712
+
+**The prediction, stated before the run with a falsification criterion:** if
+this works by the mechanism claimed, its rescues must be ENRICHED for clustered
+sites above A's own 30.4% baseline; if not, the story is wrong whatever the F1
+does. Measured:
+
+| channel | rescued | clustered |
+|---|---|---|
+| A's missed set (baseline) | 7,720 | **30.4%** |
+| 1-mismatch, all | 5,218 | 21.1% |
+| 1-mismatch, VAF | 3,782 | 19.0% |
+| 1-mismatch, HQ+VAF_hq | 2,480 | 18.7% |
+| **2-mismatch, `pr`** | 2,471 | **41.5%** |
+| **2-mismatch, `prhqv`** | 1,387 | **40.7%** |
+| **2-mismatch, `pronly`** | 1,388 | **63.3%** |
+
+**CONFIRMED, and sharply.** Candidates that exist ONLY because of the
+2-mismatch channel are 63.3% clustered -- a 2.08x enrichment over baseline --
+while every 1-mismatch channel sits BELOW baseline (18.7-21.1%), i.e. they
+demonstrably share the graph's blind spot. The two populations separate cleanly
+in the predicted direction. This is the only mechanistic hypothesis in this
+document that survived measurement; the other two (recurrence as evidence, and
+the clustered story for `mem_extmm`) were refuted.
+
+**But it cannot be used.** Recall rises to 0.8973 and rescues to 5,218, yet
+precision collapses:
+
+| filter | rescues | FP | marginal P with pairs | without pairs |
+|---|---|---|---|---|
+| VAF | 3,782 | 41,879 | 8.3% | 15.7% |
+| HQ>=3+VAF | 3,108 | 25,937 | 10.7% | 23.6% |
+| HQ>=3+VAF_hq | 2,480 | 18,823 | 11.6% | **25.0%** |
+| `pronly` | 1,388 | 60,416 | **2.2%** | -- |
+
+Every filter is roughly HALVED by admitting pairs. Relaxing the mismatch
+constraint admits noise far faster than signal, so the channel that correctly
+targets the graph's blind spot cannot isolate it. **Default stays OFF**
+(`CAPS_NM_PAIRS` opt-in); with it off the near-miss VCF is byte-identical.
+
+**The real finding for the paper:** the graph's structural blind spot is
+REACHABLE -- clustered variants are recoverable from the compressor's own
+rejected overlaps, and nothing else in this project reaches them -- but at
+2 mismatches over a 74-148 bp window the noise floor is ~50x the signal. What
+is missing is not another threshold on the existing evidence; it is evidence
+that distinguishes two real adjacent variants from two coincident errors.
 
 ## Summary of every configuration measured
 
