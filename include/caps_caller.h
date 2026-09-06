@@ -1339,6 +1339,14 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         if (nth > 1) BATCH_KMERS = std::max<size_t>(1u << 20, BATCH_KMERS / (size_t)nth);
     }
     struct KC { uint64_t kmer; uint32_t cnt; };
+    // [KC-SPLIT] temporary internal timers: kc_H_build is the largest single
+    // item left (11.9 s of 81.1 s) and "spill vs partition sort vs k-way
+    // merge" is the split that decides which part of it to attack.
+    using _kcclk = std::chrono::steady_clock;
+    auto _kcl = _kcclk::now();
+    auto _kclap = [&](const char* nm){ auto now=_kcclk::now();
+        fprintf(stderr, "[KC-SPLIT] %-20s %7.2fs\n", nm,
+                std::chrono::duration<double>(now-_kcl).count()); _kcl=now; };
     // ── HUGE PAGES FOR kc ───────────────────────────────────────────────────
     // kc reaches ~2.1 GB at full chr20 (140,719,632 x 16 B) and the bubble
     // traversal BINARY-SEARCHES it, so that walk is dTLB-bound. This box runs
@@ -1832,6 +1840,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
     // runs, and both passes visit keys in the same ascending order and sum the
     // same per-run counts.
     std::vector<KC> kc;
+    _kclap("spill write");
     if (SUPERK) {
         // ── READ BACK SUPERKMERS ────────────────────────────────────────────
         // One partition at a time: read its superkmers, expand each into its L
@@ -1854,6 +1863,21 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         // reverting it removed a correct optimisation. Restored once the N bug
         // was fixed and kc identity (1,063,607) re-verified.
         sorted_parts.resize(1u << SPILL_BITS);
+        // ── PARALLEL MERGE BY KEY RANGE ─────────────────────────────────────
+        // The k-way merge that used to follow this loop was 8.21 s of an
+        // 11.88 s kc_H_build: one serial priority_queue over 256 files with a
+        // 12-byte fread per record, ~100M times.
+        //
+        // Partitions are keyed by minimizer, so they are not key-ranges and a
+        // global ordering did have to come from somewhere. But each partition
+        // file is written in ascending key order, so the records for any given
+        // top-8-bit BIN occupy one contiguous slice of it. Recording those 256
+        // slice boundaries per partition makes bin b's inputs addressable
+        // directly, and bins partition the key space -- so the 256 bins can be
+        // merged independently, in parallel, and concatenated in bin order to
+        // get exactly the globally sorted array the serial merge produced.
+        static constexpr int MB = 256, MSHIFT = 54;   // top 8 bits of a 62-bit k-mer
+        std::vector<std::vector<uint32_t>> bin_off((size_t)1u << SPILL_BITS);
         #pragma omp parallel for schedule(dynamic, 1) reduction(+:total_k)
         for (long long pi_ = 0; pi_ < (long long)(1u << SPILL_BITS); ++pi_) {
             const uint32_t pi = (uint32_t)pi_;
@@ -1916,46 +1940,78 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             snprintf(spath, sizeof spath, "%s/srt%05u.bin", SPILLDIR, pi);
             FILE* sf = fopen(spath, "wb");
             if (sf) {
+                // Records go out in ascending key order, so recording the
+                // record index at which each top-8-bit BIN starts costs one
+                // comparison per record and turns the global merge below into
+                // 256 independent ones. (The bins are the same ones the radix
+                // pre-binning above already sorted by, so they are contiguous.)
+                std::vector<uint32_t>& bo = bin_off[pi];
+                bo.assign(MB + 1, 0);
+                std::vector<KC> outbuf; outbuf.reserve(kms.size() / 4 + 16);
                 for (size_t i = 0; i < kms.size(); ) {
                     size_t j = i; while (j < kms.size() && kms[j] == kms[i]) ++j;
-                    const KC e{ kms[i], (uint32_t)(j - i) };
-                    fwrite(&e, sizeof(KC), 1, sf);
+                    outbuf.push_back(KC{ kms[i], (uint32_t)(j - i) });
                     ++total_k; i = j;
                 }
+                for (const KC& e : outbuf) ++bo[(size_t)(e.kmer >> MSHIFT) + 1];
+                for (int bq = 0; bq < MB; ++bq) bo[bq + 1] += bo[bq];
+                // one bulk write instead of a 12-byte fwrite per record
+                fwrite(outbuf.data(), sizeof(KC), outbuf.size(), sf);
                 fclose(sf);
                 sorted_parts[pi] = spath;
             }
         }
-        {   // partitions that produced nothing leave empty slots
-            std::vector<std::string> nz;
-            for (auto& sp : sorted_parts) if (!sp.empty()) nz.push_back(sp);
-            sorted_parts.swap(nz);
-        }
-        // k-way merge the sorted per-partition files
-        struct SF { FILE* f; KC cur; bool ok; };
-        std::vector<SF> sf(sorted_parts.size());
-        using HE = std::pair<uint64_t, uint32_t>;
-        std::priority_queue<HE, std::vector<HE>, std::greater<HE>> pq;
-        for (size_t i = 0; i < sorted_parts.size(); ++i) {
-            sf[i].f = fopen(sorted_parts[i].c_str(), "rb");
-            sf[i].ok = sf[i].f && fread(&sf[i].cur, sizeof(KC), 1, sf[i].f) == 1;
-            if (sf[i].ok) pq.push({sf[i].cur.kmer, (uint32_t)i});
-        }
-        kc.reserve(total_k);
-        kc_hp_hint(kc);
-        while (!pq.empty()) {
-            const uint64_t key = pq.top().first;
-            uint32_t sum = 0;
-            while (!pq.empty() && pq.top().first == key) {
-                const uint32_t i = pq.top().second; pq.pop();
-                sum += sf[i].cur.cnt;
-                sf[i].ok = fread(&sf[i].cur, sizeof(KC), 1, sf[i].f) == 1;
-                if (sf[i].ok) pq.push({sf[i].cur.kmer, i});
+        _kclap("partition expand+sort");
+        std::vector<uint32_t> live;                 // partitions that produced records
+        for (uint32_t i = 0; i < sorted_parts.size(); ++i)
+            if (!sorted_parts[i].empty()) live.push_back(i);
+        // Merge each key-space bin independently. A bin's inputs are the
+        // corresponding slice of every partition file; each slice is already
+        // ascending, and after concatenating them one sort restores order --
+        // the slices are ~n/256 records, so this sorts cache-resident pieces
+        // rather than streaming 100M records through a heap.
+        std::vector<std::vector<KC>> bout((size_t)MB);
+        #pragma omp parallel for schedule(dynamic, 1)
+        for (int b2 = 0; b2 < MB; ++b2) {
+            std::vector<KC> acc;
+            for (uint32_t pi : live) {
+                const std::vector<uint32_t>& bo = bin_off[pi];
+                if (bo.size() != (size_t)MB + 1) continue;
+                const uint32_t lo = bo[(size_t)b2], hi = bo[(size_t)b2 + 1];
+                if (hi <= lo) continue;
+                FILE* f = fopen(sorted_parts[pi].c_str(), "rb");
+                if (!f) continue;
+                const size_t base = acc.size();
+                acc.resize(base + (size_t)(hi - lo));
+                if (fseek(f, (long)lo * (long)sizeof(KC), SEEK_SET) != 0 ||
+                    fread(acc.data() + base, sizeof(KC), (size_t)(hi - lo), f) != (size_t)(hi - lo))
+                    acc.resize(base);
+                fclose(f);
             }
-            kc.push_back({key, sum});
+            if (acc.empty()) continue;
+            std::sort(acc.begin(), acc.end(),
+                      [](const KC& x, const KC& y){ return x.kmer < y.kmer; });
+            std::vector<KC>& o = bout[(size_t)b2];
+            o.reserve(acc.size());
+            for (size_t i = 0; i < acc.size(); ) {
+                size_t j = i; uint32_t sum = 0;
+                while (j < acc.size() && acc[j].kmer == acc[i].kmer) { sum += acc[j].cnt; ++j; }
+                o.push_back(KC{ acc[i].kmer, sum });
+                i = j;
+            }
         }
-        for (size_t i = 0; i < sf.size(); ++i) if (sf[i].f) fclose(sf[i].f);
-        for (auto& sp : sorted_parts) ::remove(sp.c_str());
+        {
+            size_t tot = 0;
+            for (int b2 = 0; b2 < MB; ++b2) tot += bout[(size_t)b2].size();
+            kc.reserve(tot);
+            kc_hp_hint(kc);
+            for (int b2 = 0; b2 < MB; ++b2) {
+                kc.insert(kc.end(), bout[(size_t)b2].begin(), bout[(size_t)b2].end());
+                std::vector<KC>().swap(bout[(size_t)b2]);
+            }
+        }
+        for (auto& sp : sorted_parts) if (!sp.empty()) ::remove(sp.c_str());
+        _kclap("k-way merge");
         fprintf(stderr, "[KC-SUPERK] partitions=%zu distinct=%zu spill_bytes=%zu bytes/kmer=%.3f freqmin=%d\n",
                 sorted_parts.size(), kc.size(), sk_bytes_total,
                 kc.empty() ? 0.0 : (double)sk_bytes_total / (double)kc.size(), (int)FREQMIN);
