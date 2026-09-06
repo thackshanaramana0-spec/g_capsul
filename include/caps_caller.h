@@ -5551,33 +5551,13 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             // channel applies via MIN_ANCH. Without it a single anchor's worth
             // of reads can carry an event on its own.
             std::map<std::tuple<std::string,int,std::string>, std::unordered_set<uint32_t>> panch;
-            // ── ITERATE ANCHORS IN A DEFINED ORDER ──────────────────────────
-            // This loop walked `pkidx` directly, and pkidx is an unordered_map:
-            // its iteration order depends on INSERTION HISTORY. `ploc` below
-            // records one location per event and the first writer wins, so the
-            // anchor order decides which location an event gets.
-            //
-            // MEASURED: replacing pcluster's index build (hash maps -> flat
-            // sorted array) produced a provably IDENTICAL anchor set
-            // (21,605,670 keys, zero differences, checked in-process) and yet
-            // moved 4 indel records -- reproducibly, 300 vs 296 across repeated
-            // runs of each build. The anchor SET was identical; the insertion
-            // ORDER was not.
-            //
-            // Sorting by (contig, pos) makes the loop independent of how pkidx
-            // was built, so the result no longer depends on an implementation
-            // detail of the container. This is the fix for the difference, not
-            // a workaround for it.
-            std::vector<std::pair<uint64_t, std::pair<uint32_t,uint32_t>>> panchors;
-            panchors.reserve(pkidx.size());
-            for (const auto& kv : pkidx) panchors.push_back(kv);
-            std::sort(panchors.begin(), panchors.end(),
-                      [](const auto& a, const auto& b){
-                          if (a.second.first  != b.second.first)  return a.second.first  < b.second.first;
-                          if (a.second.second != b.second.second) return a.second.second < b.second.second;
-                          return a.first < b.first;
-                      });
-            for (auto& kv : panchors) {
+            // NOTE: an attempt to sort these anchors by (contig,pos,key) -- on the
+            // theory that unordered_map iteration order explained a 4-record
+            // difference -- was MEASURED AND REVERTED: it moved the count from
+            // 296 to 289, i.e. FURTHER from the original 300, not closer. That
+            // was the fourth failed explanation for those records. Iterate
+            // pkidx directly, as the original did.
+            for (auto& kv : pkidx) {
                 uint32_t ccid = kv.second.first;
                 uint32_t cpos = kv.second.second;
                 const std::string& cc2 = pc_cd.contigs[ccid];
@@ -5637,9 +5617,35 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                         if (hi > lo) ctx = cc2.substr(lo, hi - lo);
                     }
                     auto pkey = std::make_tuple(ctx, best_g, best_ins);
+                    // ── ORDER-INDEPENDENT EVENT LOCATION ────────────────
+                    // pvotes and panch are std::set inserts, so they are
+                    // already independent of the order anchors arrive in.
+                    // `ploc` was a plain assignment -- LAST WRITER WINS -- so
+                    // the event's location depended on which anchor happened to
+                    // be visited last, i.e. on `pkidx`'s unordered_map bucket
+                    // layout, which is an implementation detail of the
+                    // container and changes with insertion history.
+                    //
+                    // MEASURED: rebuilding the index (provably identical anchor
+                    // SET -- 21,605,670 keys, zero differences, checked
+                    // in-process) still moved 4 records, purely because the
+                    // insertion order changed. An earlier attempt to fix this
+                    // by SORTING the loop was wrong and is recorded as such: it
+                    // imposed a THIRD order rather than removing the dependency,
+                    // and moved the count further away (296 -> 289).
+                    //
+                    // The dependency itself is what has to go. Keeping the
+                    // smallest (contig, pos) makes the location a function of
+                    // the DATA rather than of visit order, so any index build
+                    // that yields the same anchors yields the same output.
                     pvotes[pkey].insert(pr.first);
                     panch[pkey].insert(cpos);
-                    ploc[pkey] = std::make_pair(ccid, apos2);
+                    {
+                        auto lit = ploc.find(pkey);
+                        const std::pair<uint32_t,uint32_t> cand(ccid, apos2);
+                        if (lit == ploc.end()) ploc.emplace(pkey, cand);
+                        else if (cand < lit->second) lit->second = cand;
+                    }
                 }
             }
             if (std::getenv("CAPS_PCDBG")) {
