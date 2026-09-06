@@ -688,6 +688,14 @@ inline Substrate build_substrate(const std::vector<std::string>& seqs, const Cal
     const bool NO_REMAP    = std::getenv("CAPS_NO_REMAP")    != nullptr;
     const bool NO_COLLAPSE = std::getenv("CAPS_NO_COLLAPSE") != nullptr;
     const int  K           = 25;
+    // [BS-SPLIT] temporary internal timers: build_substrate is 55 s of the
+    // 128 s archive-path run across its two calls, and "collapse vs index vs
+    // place" is the split that decides which lever is real.
+    using _bsclk = std::chrono::steady_clock;
+    auto _bst0 = _bsclk::now(); auto _bsl = _bst0;
+    auto _bslap = [&](const char* nm){ auto now=_bsclk::now();
+        fprintf(stderr, "[BS-SPLIT] %-18s %7.2fs\n", nm,
+                std::chrono::duration<double>(now-_bsl).count()); _bsl=now; };
 
     // 1. contig set
     std::vector<uint32_t> keep;
@@ -704,6 +712,7 @@ inline Substrate build_substrate(const std::vector<std::string>& seqs, const Cal
         if (dup_override > 0) dup = dup_override;
         keep = collapse_contigs(cd.contigs, dup, K);
     }
+    _bslap("collapse");
     std::vector<int32_t> old2new(cd.contigs.size(), -1);
     S.contigs.reserve(keep.size());
     for (uint32_t ci : keep) { old2new[ci] = (int32_t)S.contigs.size(); S.contigs.push_back(cd.contigs[ci]); }
@@ -779,12 +788,29 @@ inline Substrate build_substrate(const std::vector<std::string>& seqs, const Cal
                 }
             }
         }
+        _bslap("idx: flat fill");
+        // ORDER BY (mix(key), key), NOT by key.
+        //
+        // Ordering by the HASH of the key rather than the key itself is what
+        // lets the directory below have uniformly-occupied buckets: raw 25-mer
+        // values are strongly non-uniform (canonicalisation alone biases the
+        // leading base), so a directory keyed on raw prefix bits would have a
+        // few enormous buckets and the search cost would come straight back.
+        //
+        // This does NOT disturb the 64-cap selection the comment above depends
+        // on. Equal keys have equal mix, so they remain adjacent AND retain
+        // their relative order under a stable sort -- the cap still keeps
+        // exactly the first 64 in contig-then-position order. Only the order
+        // BETWEEN distinct keys changes, and every lookup is independent of it.
+        auto _hcmp = [](const std::pair<uint64_t,uint64_t>& a,
+                        const std::pair<uint64_t,uint64_t>& b) {
+            const uint64_t ha = FlatKmerSet::mix(a.first), hb = FlatKmerSet::mix(b.first);
+            return ha != hb ? ha < hb : a.first < b.first;
+        };
         #if defined(_OPENMP) && defined(_GLIBCXX_PARALLEL_ALGO_H)
-        __gnu_parallel::stable_sort(flat.begin(), flat.end(),
-                          [](const auto& a, const auto& b){ return a.first < b.first; });
+        __gnu_parallel::stable_sort(flat.begin(), flat.end(), _hcmp);
         #else
-        std::stable_sort(flat.begin(), flat.end(),
-                          [](const auto& a, const auto& b){ return a.first < b.first; });
+        std::stable_sort(flat.begin(), flat.end(), _hcmp);
         #endif
         // COUNT FIRST, THEN RESERVE EXACTLY.
         //
@@ -798,6 +824,7 @@ inline Substrate build_substrate(const std::vector<std::string>& seqs, const Cal
         //
         // Counting the kept entries first is one extra linear pass over an
         // array already in cache order, and it lets the reserves be exact.
+        _bslap("idx: sort");
         size_t n_keep = 0;
         for (size_t a0 = 0; a0 < flat.size(); ) {
             size_t b0 = a0; uint32_t k0 = 0;
@@ -820,12 +847,47 @@ inline Substrate build_substrate(const std::vector<std::string>& seqs, const Cal
             i = j;
         }
     }
+    _bslap("idx: cap+emit");
+    // HASH-BUCKET DIRECTORY over skey.
+    //
+    // The sorted array removed the hash map's per-node allocation, but left a
+    // SEARCH problem: two binary searches over ~40M keys is ~52 dependent,
+    // uncorrelated memory probes. The placement loop below does 16 of those
+    // per read (2 strands x 8 seed offsets), so ~830 cache misses per read --
+    // and at 4M reads that is 37.3 s of a 128.5 s run, measured, with the
+    // arithmetic (830 x ~80 ns = 66 us/read vs 56 us/read measured) confirming
+    // the loop is latency-bound on exactly this and nothing else.
+    //
+    // sdir[h] is the first index in skey whose key hashes into bucket h.
+    // Because `flat` was ordered by mix(key) above, every bucket is one
+    // contiguous run, so a lookup is: one probe into sdir, then a short linear
+    // scan of ~n/2^BDIR entries (2-3, i.e. one or two cache lines). Two
+    // touches instead of fifty-two.
+    //
+    // BIT-IDENTICAL, not merely equivalent: this returns a range into the SAME
+    // skey/scid/spos arrays with the SAME contents and the SAME per-key order.
+    // Only the way the range is FOUND changes.
+    //
+    // 2^24 x 4 B = 67 MB, independent of input size -- versus ~1.3 GB for a
+    // full key->range hash table, which is why the directory is the right
+    // structure here and not an open-addressing map.
+    static constexpr int BDIR = 24;
+    std::vector<uint32_t> sdir(((size_t)1 << BDIR) + 1, 0);
+    {
+        for (size_t i = 0; i < skey.size(); ++i)
+            ++sdir[(size_t)(FlatKmerSet::mix(skey[i]) >> (64 - BDIR)) + 1];
+        for (size_t i = 0; i < ((size_t)1 << BDIR); ++i) sdir[i + 1] += sdir[i];
+    }
     // lookup(k): [first,last) range in skey/scid/spos matching canonical key k,
     // or (0,0) if absent -- replaces cidx.find(can)/it->second.
     auto lookup_range = [&](uint64_t k) -> std::pair<size_t,size_t> {
-        auto lo = std::lower_bound(skey.begin(), skey.end(), k) - skey.begin();
-        auto hi = std::upper_bound(skey.begin(), skey.end(), k) - skey.begin();
-        return {(size_t)lo, (size_t)hi};
+        const size_t h = (size_t)(FlatKmerSet::mix(k) >> (64 - BDIR));
+        size_t i = sdir[h]; const size_t e = sdir[h + 1];
+        while (i < e && skey[i] != k) ++i;
+        if (i == e) return {0, 0};
+        size_t j = i + 1;
+        while (j < e && skey[j] == k) ++j;
+        return {i, j};
     };
     // idx (the hash map) is now built ONLY for gapped_indel_scan, which is
     // opt-in (CAPS_GAPSCAN) and not part of any measured pipeline -- building
@@ -940,6 +1002,7 @@ inline Substrate build_substrate(const std::vector<std::string>& seqs, const Cal
             S.read_clip[o] = best_clip;
         }
     }
+    _bslap("place reads");
     // REFUTED, and kept only behind an explicit opt-in (CAPS_GAPSCAN=1).
     // The idea: a read spanning an indel should show two different implied
     // contig starts. Measured: 1 event per window with a strict all-seeds-
