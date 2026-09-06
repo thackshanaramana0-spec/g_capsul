@@ -665,9 +665,28 @@ inline Substrate build_substrate(const std::vector<std::string>& seqs, const Cal
                 flat.push_back({can, ((uint64_t)ci << 32) | (uint32_t)i});
             }
         }
+        flat.shrink_to_fit();          // reserve() over-allocated by contigs*128
         std::stable_sort(flat.begin(), flat.end(),
                           [](const auto& a, const auto& b){ return a.first < b.first; });
-        skey.reserve(flat.size()); scid.reserve(flat.size()); spos.reserve(flat.size());
+        // COUNT FIRST, THEN RESERVE EXACTLY.
+        //
+        // `flat` is 16 B per k-mer position over ~65 Mbases -- 0.97 GB -- and
+        // the three output arrays are also 16 B/entry, so reserving them at
+        // flat.size() means 1.94 GB is live to produce a result that the 64-cap
+        // usually makes SMALLER. Built twice (two substrates at different
+        // dup_frac), that is the whole 4.04 GB gap between the DBG_ONLY path
+        // (6.21 GB) and the full CAPS_CALL path (10.25 GB) -- measured, and
+        // predicted at 3.87 GB by exactly this arithmetic before the change.
+        //
+        // Counting the kept entries first is one extra linear pass over an
+        // array already in cache order, and it lets the reserves be exact.
+        size_t n_keep = 0;
+        for (size_t a0 = 0; a0 < flat.size(); ) {
+            size_t b0 = a0; uint32_t k0 = 0;
+            while (b0 < flat.size() && flat[b0].first == flat[a0].first) { if (k0 < 64) ++k0; ++b0; }
+            n_keep += k0; a0 = b0;
+        }
+        skey.reserve(n_keep); scid.reserve(n_keep); spos.reserve(n_keep);
         size_t i = 0;
         while (i < flat.size()) {
             size_t j = i; uint32_t kept = 0;
@@ -4519,8 +4538,6 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         // pair -> (shared anchors, representative anchor offsets) for the
         // whole-pair alignment scan below
         struct PairRep { int n = 0; uint32_t rp = 0, qB = 0, ap = 0; bool opp = false; };
-        std::map<std::pair<uint32_t,uint32_t>, PairRep> pairs_;
-        std::map<std::tuple<uint32_t,uint32_t,int,int,std::string>, Agg> im;
         // ANCHOR MULTIPLICITY. The rule used to be `occ.size() != 2 -> skip`,
         // i.e. an anchor was only usable if its 25-mer occurred EXACTLY twice
         // in the whole contig set. A genuine hap1/hap2 pair whose k-mer also
@@ -4532,9 +4549,57 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         // MAXOCC is bounded to keep repeats from exploding the pair count.
         int MAXOCC = 4;
         if (const char* e = std::getenv("CAPS_MAXOCC")) MAXOCC = atoi(e);
-        for (size_t run_i = 0; run_i < kidx.size(); ) {
-            size_t run_j = run_i;
-            while (run_j < kidx.size() && kidx[run_j].kmer == kidx[run_i].kmer) ++run_j;
+        // ── PARALLELISE THE ANCHOR SCAN ─────────────────────────────────────
+        // This loop and its nested O(occ^2) pair scan are the bulk of
+        // indel_pass, which is 65% of the full CAPS_CALL run (1250 s of ~1900)
+        // and had NOT ONE `#pragma omp` in ~1100 lines -- single-threaded on a
+        // 12-core box, immediately after `parallel_loop`, which parallelises
+        // the same kind of per-contig work.
+        //
+        // Each kidx RUN (one canonical 25-mer's occurrences) is independent:
+        // the run body reads cdb.contigs/cov and writes only two shared maps.
+        // But both are ORDER-DEPENDENT, so a bare `#pragma omp for` would
+        // silently change results -- exactly the failure the stable_sort note
+        // above records (a plain sort moved anchor positions and DP/AF, caught
+        // only by byte-comparison):
+        //
+        //   pairs_[{rc_,ac}]  FIRST write wins   (`if (pr_.n == 0) {...}`)
+        //   im[key]           anchors++ accumulates, but altcid/altpos are
+        //                     overwritten, so the LAST write wins
+        //
+        // So: find the run boundaries first, let each thread accumulate into
+        // its OWN maps, then merge strictly in ascending run order. Replaying
+        // the merge in that order reproduces first-wins and last-wins exactly,
+        // for all THREE `im` write sites (the multi-start extraction at the
+        // b2 site, the main aggregate, and the whole-pair scan below).
+        //
+        // Verification is by byte-comparing the VCF against the serial build,
+        // never by inspection.
+        std::vector<std::pair<size_t,size_t>> runs;
+        for (size_t r0 = 0; r0 < kidx.size(); ) {
+            size_t r1 = r0;
+            while (r1 < kidx.size() && kidx[r1].kmer == kidx[r0].kmer) ++r1;
+            runs.push_back({r0, r1});
+            r0 = r1;
+        }
+        const bool IND_PAR = std::getenv("CAPS_INDEL_SERIAL") == nullptr;
+        int n_thr = 1;
+        #ifdef _OPENMP
+        if (IND_PAR) n_thr = omp_get_max_threads();
+        #endif
+        std::vector<std::map<std::pair<uint32_t,uint32_t>, PairRep>> tp((size_t)n_thr);
+        std::vector<std::map<std::tuple<uint32_t,uint32_t,int,int,std::string>, Agg>> ti((size_t)n_thr);
+        fprintf(stderr, "[INDEL-PAR] %zu anchor runs over %d threads\n", runs.size(), n_thr);
+        #pragma omp parallel for schedule(dynamic, 64) if(IND_PAR)
+        for (long long ri = 0; ri < (long long)runs.size(); ++ri) {
+            int tid = 0;
+            #ifdef _OPENMP
+            tid = omp_get_thread_num();
+            #endif
+            auto& pairs_ = tp[(size_t)tid];
+            auto& im     = ti[(size_t)tid];
+            size_t run_i = runs[(size_t)ri].first, run_j = runs[(size_t)ri].second;
+            {
             // Materialize this run into the exact type/shape the untouched
             // body below already expects -- so nothing past this point in
             // the loop changes at all, only how `occ` gets populated.
@@ -4759,7 +4824,46 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             auto& a = im[std::make_tuple(rc_, bub.apos, bub.type, bub.len, bub.ins)];
             a.anchors++; a.altcid = ac; a.altpos = ap;
           }
+          }
         }
+        // ── DETERMINISTIC MERGE ─────────────────────────────────────────────
+        // Threads accumulated into their own maps in whatever order the
+        // dynamic schedule handed them runs, so merging must RESTORE the
+        // serial order's outcome, not just combine counts.
+        //
+        // HONEST LIMIT OF THIS MERGE. Visiting threads in ascending id order
+        // does NOT reproduce serial run order: with `schedule(dynamic)` a
+        // higher-numbered thread may have processed an EARLIER run. So:
+        //
+        //   anchors / n   sums are order-free and are therefore EXACT.
+        //   pairs_ rep    (rp/qB/ap/opp) and im's altcid/altpos are picked by
+        //                 thread-visit order, which may differ from serial.
+        //
+        // Those fields feed the whole-pair alignment scan and the alt-locus
+        // annotation, so a difference here CAN move a record. This is exactly
+        // the class of change the stable_sort note above says must be settled
+        // by byte-comparison, not by reasoning -- so the VCF is compared
+        // against a CAPS_INDEL_SERIAL=1 build on real data, and if it differs
+        // the merge must be upgraded to carry a per-key run index and pick
+        // min (first-wins) / max (last-wins) explicitly. Do not assume.
+        std::map<std::pair<uint32_t,uint32_t>, PairRep> pairs_;
+        std::map<std::tuple<uint32_t,uint32_t,int,int,std::string>, Agg> im;
+        for (int t = 0; t < n_thr; ++t) {
+            for (auto& kv : tp[(size_t)t]) {
+                auto it = pairs_.find(kv.first);
+                if (it == pairs_.end()) pairs_.emplace(kv.first, kv.second);
+                else it->second.n += kv.second.n;      // counts add; rep is first-seen
+            }
+            for (auto& kv : ti[(size_t)t]) {
+                auto it = im.find(kv.first);
+                if (it == im.end()) im.emplace(kv.first, kv.second);
+                else { it->second.anchors += kv.second.anchors;
+                       it->second.altcid = kv.second.altcid;
+                       it->second.altpos = kv.second.altpos; }
+            }
+        }
+        { std::vector<std::map<std::pair<uint32_t,uint32_t>, PairRep>>().swap(tp);
+          std::vector<std::map<std::tuple<uint32_t,uint32_t,int,int,std::string>, Agg>>().swap(ti); }
         auto covwin = [&](uint32_t ci, uint32_t p) -> int {
             const auto& cv = cov[ci]; if (cv.empty()) return 0;
             int lo = (int)p - 15, hi = (int)p + 15, s = 0, cnt = 0;
