@@ -983,11 +983,37 @@ inline Substrate build_substrate(const std::vector<std::string>& seqs, const Cal
                         int64_t cst  = st < 0 ? 0 : st;
                         int64_t ov_hi = std::min<int64_t>(rl - clip, (int64_t)c.size() - cst);
                         if (ov_hi < K) continue;               // need a real anchor's worth
-                        int mm = 0;
-                        for (int64_t j = 0; j < ov_hi; ++j) {
+                        // BRANCH-AND-BOUND, exact.
+                        //
+                        // This scan was the run's single largest cost: 37.3 s
+                        // of 128.5 s, ~112K base comparisons per read, because
+                        // every one of ~750 candidate placements per read was
+                        // aligned to its full ~148 bp length even when it was
+                        // hopeless after the first mismatch.
+                        //
+                        // The final score is ov_hi - 6*mm and mm only ever
+                        // grows, so ov_hi - 6*mm_so_far is a valid UPPER BOUND
+                        // on what this candidate can still reach. Once that
+                        // bound is <= best_score the candidate provably cannot
+                        // satisfy the strict `score > best_score` test below,
+                        // so abandoning it changes nothing that is kept.
+                        //
+                        // This is a pruning rule, not a heuristic cutoff: it
+                        // is exact for ANY arrival order of candidates, so the
+                        // surviving best is bit-identical to the exhaustive
+                        // scan. Its force comes from the 5x mismatch penalty
+                        // already in the score -- once a perfect ~148 bp
+                        // placement is in hand, a rival of the same length is
+                        // dead at its FIRST mismatch.
+                        int mm = 0; int64_t j = 0;
+                        for (; j < ov_hi; ++j) {
                             char a = r[(size_t)(clip + j)];
-                            if (b2i(a) >= 0 && c[(size_t)(cst + j)] != a) ++mm;
+                            if (b2i(a) >= 0 && c[(size_t)(cst + j)] != a) {
+                                ++mm;
+                                if ((long)ov_hi - 6L * (long)mm <= best_score) break;
+                            }
                         }
+                        if (j < ov_hi) continue;          // provably cannot win
                         const long score = (long)(ov_hi - mm) - 5L * (long)mm;
                         if (score > best_score) { best_score = score; best_mm = mm;
                                                   best_c = pr.first; best_p = (uint32_t)cst;
