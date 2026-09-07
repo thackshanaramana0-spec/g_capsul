@@ -511,13 +511,53 @@ namespace detail {
 // (4% of the cost): caching the k-mers gained 5 s for +1.7 GB, and a Bloom
 // pre-filter cost 140M adds to guard 28M lookups and made the run WORSE. The
 // container itself was the cost all along.
+// Ask for 2 MB pages on a big array that will be probed randomly.
+//
+// ORDER MATTERS, and this project has already shipped an inert version of this
+// hint by calling madvise AFTER the array was filled -- pages already faulted
+// in are not remapped. Every call site must sit immediately after the
+// allocation and before the first write, and the log line says which arrays
+// actually got it.
+inline void hp_hint(void* base, size_t len, const char* what) {
+    if (!base || len < (2u << 20)) return;
+    uintptr_t a0 = ((uintptr_t)base + (2u<<20) - 1) & ~(uintptr_t)((2u<<20) - 1);
+    size_t off = a0 - (uintptr_t)base;
+    if (len <= off) return;
+    size_t l2 = (len - off) & ~(size_t)((2u<<20) - 1);
+    if (!l2) return;
+    if (madvise((void*)a0, l2, MADV_HUGEPAGE) == 0)
+        fprintf(stderr, "[HP] MADV_HUGEPAGE on %.2f GB of %s\n", (double)l2/1073741824.0, what);
+    else
+        fprintf(stderr, "[HP] madvise failed (errno %d) -- %s stays on 4K pages\n", errno, what);
+}
+
 struct FlatKmerSet {
     std::vector<uint64_t> t;
-    size_t mask = 0;
-    static constexpr uint64_t EMPTY = 0xFFFFFFFFFFFFFFFFULL;
+    size_t mask = 0, live = 0, lim = 0;
+    static constexpr uint64_t EMPTY = 0xFFFFFFFFFFFFFFFFULL;   // no 50-bit k-mer is all ones
+    // SIZE FROM WHAT GOES IN, NOT FROM A LOOSE UPPER BOUND.
+    //
+    // `init` used to round total k-mer POSITIONS over ALL contigs up to the
+    // next power of two and double it. On the 4M-read subset that is a 2^29
+    // slot table -- 4.29 GB -- holding only the DISTINCT k-mers of the contigs
+    // that actually survive the collapse. Measured load factor: ~8%. So every
+    // one of ~125M probes was a cold miss over a 4 GB region that is 92% empty,
+    // and 4 GB of RSS was reserved for it, twice.
+    //
+    // Start from a modest table and DOUBLE when it passes 50% load. A hash
+    // set's contents do not depend on its capacity, so the accept/reject
+    // decisions -- and therefore which contigs survive -- are bit-for-bit
+    // unchanged; only the footprint the probes range over shrinks.
+    void alloc(size_t b) {
+        t.assign(b, EMPTY); mask = b - 1; lim = b / 2;
+    }
     void init(size_t cap) {
-        size_t b = 1024; while (b < cap * 2) b <<= 1;   // <=50% load
-        t.assign(b, EMPTY); mask = b - 1;
+        size_t want = 1024;
+        const size_t start = std::min<size_t>(cap * 2, (size_t)1 << 26);
+        while (want < start) want <<= 1;
+        alloc(want);
+        live = 0;
+        hp_hint((void*)t.data(), t.size() * sizeof(uint64_t), "collapse claimed set");
     }
     static inline uint64_t mix(uint64_t x) {
         x ^= x >> 33; x *= 0xff51afd7ed558ccdULL; x ^= x >> 33; return x;
@@ -527,10 +567,22 @@ struct FlatKmerSet {
         for (;;) { const uint64_t v = t[i]; if (v == EMPTY) return false;
                    if (v == k) return true; i = (i + 1) & mask; }
     }
-    inline void insert(uint64_t k) {
+    inline void put(uint64_t k) {                    // no growth check: used by grow()
         size_t i = mix(k) & mask;
         for (;;) { const uint64_t v = t[i]; if (v == k) return;
                    if (v == EMPTY) { t[i] = k; return; } i = (i + 1) & mask; }
+    }
+    void grow() {
+        std::vector<uint64_t> old; old.swap(t);
+        alloc(old.size() * 2);
+        hp_hint((void*)t.data(), t.size() * sizeof(uint64_t), "collapse claimed set (grown)");
+        for (uint64_t v : old) if (v != EMPTY) put(v);
+    }
+    inline void insert(uint64_t k) {
+        size_t i = mix(k) & mask;
+        for (;;) { const uint64_t v = t[i]; if (v == k) return;
+                   if (v == EMPTY) { t[i] = k; if (++live > lim) grow(); return; }
+                   i = (i + 1) & mask; }
     }
 };
 
@@ -607,6 +659,9 @@ inline std::vector<uint32_t> collapse_contigs(const std::vector<std::string>& ct
         keep.push_back(ci);
         for (uint64_t kk : km) claimed.insert(kk);
     }
+    fprintf(stderr, "[COLLAPSE] claimed set: %zu distinct in %zu slots (%.0f MB, load %.0f%%)\n",
+            claimed.live, claimed.t.size(), (double)claimed.t.size() * 8 / 1048576.0,
+            100.0 * (double)claimed.live / (double)claimed.t.size());
     std::sort(keep.begin(), keep.end());
     return keep;
 }
