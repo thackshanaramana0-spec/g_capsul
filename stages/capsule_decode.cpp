@@ -176,6 +176,40 @@ static std::vector<uint64_t> varints(const std::vector<uint8_t>& v){
 // nothing. When these are non-null the buffer is handed over directly and the
 // file is not written at all. Every other caller passes nothing and is
 // byte-for-byte unaffected.
+
+// Rebuild the full per-read position array from the region-split streams.
+// Old archives carry pos_abs alone; new ones carry main positions in pos_abs,
+// second-region zigzag-varint deltas in pos_sec, and a region bitmap prefixed
+// with the exact count in pos_region. Returns the raw uint32 byte vector the
+// rest of the decoder already expects, so nothing downstream changes.
+static std::vector<uint8_t> caps_join_positions(const std::vector<uint8_t>& mainb,
+                                                const std::vector<uint8_t>& secb,
+                                                const std::vector<uint8_t>& regb,
+                                                uint64_t MAINEND)
+{
+    if (regb.size() < 4) return mainb;                 // old format: pos_abs is complete
+    uint32_t np = 0; memcpy(&np, regb.data(), 4);
+    std::vector<uint8_t> out((size_t)np * 4);
+    const uint32_t* mp = reinterpret_cast<const uint32_t*>(mainb.data());
+    const size_t nm = mainb.size() / 4;
+    size_t mi = 0, sp = 0; int64_t prev = (int64_t)MAINEND;
+    for (uint32_t i = 0; i < np; ++i) {
+        const bool is_sec = (regb[4 + (i >> 3)] >> (i & 7)) & 1u;
+        uint32_t v = 0;
+        if (is_sec) {
+            uint64_t z = 0; int sh = 0;
+            while (sp < secb.size()) { const uint8_t b = secb[sp++];
+                z |= (uint64_t)(b & 0x7f) << sh; if (!(b & 0x80)) break; sh += 7; }
+            const int64_t d = (int64_t)((z >> 1) ^ (~(z & 1) + 1));
+            prev += d; v = (uint32_t)prev;
+        } else if (mi < nm) {
+            v = mp[mi++];
+        }
+        memcpy(out.data() + (size_t)i * 4, &v, 4);
+    }
+    return out;
+}
+
 int capsule_decode_all(const char* arcpath, const std::string& outdir,
                        const std::string& outreads = std::string(),
                        const std::string& mode = std::string(),
@@ -273,6 +307,7 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
         // Expand originals through orig2uid, exactly as the read
         // reconstruction path does.
         auto posb2=dec("pos_abs"), lenb2=dec("read_lengths",2);
+        posb2 = caps_join_positions(posb2, dec("pos_sec"), dec("pos_region"), MAINEND);
         auto o2f2=dec("orig2uid_flags"), o2v2=dec("orig2uid_vals");
         std::vector<uint32_t> P(posb2.size()/4);
         memcpy(P.data(),posb2.data(),P.size()*4);
@@ -500,6 +535,7 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
 
     // ---- per-read streams --------------------------------------------------
     auto posb=dec("pos_abs"), lenb=dec("read_lengths",2), strb=dec("pos_strand");
+    posb = caps_join_positions(posb, dec("pos_sec"), dec("pos_region"), MAINEND);
     auto o2f=dec("orig2uid_flags"), o2v=dec("orig2uid_vals");
     auto cf=dec("mm_cnt_flags"), cv=dec("mm_cnt_vals"), cflat=dec("mm_cnt");
 
