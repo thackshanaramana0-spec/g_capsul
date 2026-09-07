@@ -1057,11 +1057,29 @@ static int capsule_call_from_archive(const std::string& in, const std::string& o
         // and the read path at ~line 401): they decode pos_abs as raw bytes and
         // then reinterpret them as uint32_t. Passing w=4 tells the stream
         // decoder a different element width and yields garbage, not an error.
-        auto pb  = arc_stream(in, "pos_abs");
-        auto sbv = arc_stream(in, "pos_strand");
-        auto spb = arc_stream(in, "contig_spans");
-        auto ofl = arc_stream(in, "orig2uid_flags");
-        auto ovl = arc_stream(in, "orig2uid_vals");
+        // READ THE ARCHIVE ONCE, NOT FIVE TIMES.
+        //
+        // arc_stream() calls read_capsule(), which opens and parses the WHOLE
+        // container, and then returns a single stream. Five calls meant five
+        // full passes over a 592 MB archive -- measured as 4.07 s in the
+        // "3b parse contigs" lap, a lap that otherwise does nothing but swap a
+        // vector now that the contigs arrive in memory.
+        //
+        // Same streams, same decode, same order; the file is just read once.
+        std::vector<uint8_t> pb, sbv, spb, ofl, ovl;
+        {
+            uint64_t _pl = 0, _me = 0; uint32_t _mm = 0;
+            std::vector<Stream> _ss;
+            if (read_capsule(in.c_str(), _pl, _me, _mm, _ss)) {
+                for (auto& st : _ss) {
+                    if      (st.name == "pos_abs")        pb  = capsule_decode_stream(st.coded, 1);
+                    else if (st.name == "pos_strand")     sbv = capsule_decode_stream(st.coded, 1);
+                    else if (st.name == "contig_spans")   spb = capsule_decode_stream(st.coded, 1);
+                    else if (st.name == "orig2uid_flags") ofl = capsule_decode_stream(st.coded, 1);
+                    else if (st.name == "orig2uid_vals")  ovl = capsule_decode_stream(st.coded, 1);
+                }
+            }
+        }
         if (pb.empty() || spb.empty()) {
             fprintf(stderr, "[call] ARCHIVE LACKS %s -- indels need it; "
                             "re-compress with CAPS_CALL=1 so contig_spans is written\n",
