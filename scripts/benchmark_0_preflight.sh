@@ -183,6 +183,51 @@ if [ -x "$BEST" ] && [ -s "$REFS/chr20.fa" ]; then
                                       || fail "SNV F1 changed" "F1=${F1_GOT:-NONE}, expected $F1_EXPECT"
 else fail "sanity run" "encoder or chr20.fa unavailable — cannot verify code health"; fi
 
+# ── 6b. ARCHIVE PATH — the dependency Claim 2 now actually measures ────────
+# Phase 2 of benchmark_1 calls variants FROM THE ARCHIVE
+# (`capsule_decode call`), not from the FASTQ. That needs two things a plain
+# compression run does not provide, and BOTH fail silently in ways that look
+# like a scoring problem rather than a missing stream:
+#   * CAPS_CALL=1 at encode time  -> writes contig_spans
+#   * DUMP_PERM=1 at encode time  -> writes pos_abs/pos_strand/read_lengths
+# encode_adaptive.sh sets the DUMP_* flags; benchmark_1 phase 1 sets CAPS_CALL.
+# This verifies the whole chain on a tiny synthetic input rather than trusting
+# either script, because a benchmark that cannot serve `call` wastes hours
+# before failing.
+hdr "6b. ARCHIVE CALLING PATH (Claim 2 depends on this end to end)"
+if [ -x "$BEST" ] && [ -x "$DEC" ]; then
+    AW=$(mktemp -d)
+    python3 - "$AW/a.fq" <<'PYGEN'
+import random,sys
+random.seed(5); G=''.join(random.choice('ACGT') for _ in range(20000))
+with open(sys.argv[1],'w') as f:
+    for i in range(4000):
+        p=random.randrange(0,len(G)-120); s=G[p:p+120]
+        f.write(f"@r{i}\n{s}\n+\n{'I'*len(s)}\n")
+PYGEN
+    ( cd "$AW" && env CAPS_CALL=1 CAPS_NAMES=1 CAPS_QUAL=1 \
+        DUMP_LIT=1 DUMP_PERM=1 DUMP_MM=1 ARCHIVE="$AW/a.capsule" \
+        "$BEST" "$AW/a.fq" 3 16 16 22 16 16 1 24 64 1 >/dev/null 2>"$AW/e.log" )
+    if [ -s "$AW/a.capsule" ]; then
+        if strings -n 6 "$AW/a.capsule" | grep -q '^contig_spans$'; then
+            pass "contig_spans written" "CAPS_CALL=1 is effective"
+        else fail "contig_spans written" "MISSING — Phase 2 will refuse every dataset"; fi
+        if env CAPS_CALL_INDELS=1 "$DEC" call "$AW/a.capsule" "$AW/c.vcf" "$AW/wk" \
+             >/dev/null 2>"$AW/c.log"; then
+            PL=$(grep -oE '[0-9]+/[0-9]+ read placements' "$AW/c.log" | head -1)
+            case "$PL" in
+              "") warn "call from archive" "succeeded but reported no placement count" ;;
+              *) A_=${PL%%/*}; B_=${PL#*/}; B_=${B_%% *}
+                 if [ "$A_" = "$B_" ]; then pass "call from archive" "$PL restored"
+                 else fail "call from archive" "ONLY $PL restored — placements are being dropped"; fi ;;
+            esac
+        else
+            fail "call from archive" "$(grep -oE 'ARCHIVE LACKS [a-z_]+' "$AW/c.log" | head -1)"
+        fi
+    else fail "archive path" "encoder produced no archive — see $AW/e.log"; fi
+    rm -rf "$AW"
+else fail "archive path" "encoder or decoder missing"; fi
+
 # ── 7. CONFIG DRIFT ───────────────────────────────────────────────────────
 hdr "7. CONFIGURATION — the exact values that will run"
 say "  Every value below is a DEFAULT compiled into the binary. If one has"
