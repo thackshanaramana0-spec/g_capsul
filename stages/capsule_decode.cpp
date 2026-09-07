@@ -362,7 +362,26 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
     // span walk, including its skip of empty or out-of-range spans, taking
     // substrings of pg instead of writing 60-column FASTA that the caller
     // would immediately re-concatenate.
-    if(out_contigs && has("contig_spans")){
+    if(out_contigs && !has("contig_spans")){
+        // no per-contig spans in this archive: nothing to hand over, the
+        // caller falls back to the export pass exactly as before.
+    } else if(out_contigs && !getenv("CAPSULE_EXPORT_CONTIGS")){
+        // TWO-RECORD FORM, for the graph (CAPS_DBG_ONLY) path.
+        //
+        // That path does not want the individual contigs -- it wants the
+        // pseudogenome as the two concatenated records `export` writes, which
+        // is what its ploidy gate samples. Handing it 451k separate contigs
+        // instead would be a different input, not a faster route to the same
+        // one. So this mirrors emit("capsule_pg_main", 0, MAINEND) and
+        // emit("capsule_pg_second", MAINEND, pg.size()) exactly, including
+        // their `if (b <= a) return` skip, minus the FASTA round trip.
+        if ((size_t)MAINEND > 0)
+            out_contigs->emplace_back((const char*)pg.data(), (size_t)MAINEND);
+        if (pg.size() > (size_t)MAINEND)
+            out_contigs->emplace_back((const char*)pg.data() + MAINEND, pg.size() - (size_t)MAINEND);
+        fprintf(stderr, "[export] %zu pseudogenome records handed over in memory\n",
+                out_contigs->size());
+    } else if(out_contigs){
         auto sb = dec("contig_spans");
         size_t p2 = 0;
         auto getv = [&]() -> uint64_t {                 // LEB128
@@ -894,6 +913,9 @@ static int capsule_call_from_archive(const std::string& in, const std::string& o
     // own min1/min2 already do. Decoding quality costs 35.25 s of a 147 s run
     // -- 24% -- so whether that filter is load-bearing is worth one measurement.
     if(getenv("CAPS_CALL_NOQUAL")) setenv("CAPS_SKIP_QUAL","1",1);
+    // Set BEFORE step 1 now, because step 1 is what hands the contigs back and
+    // it needs to know which form this mode wants.
+    if (WANT_INDELS) setenv("CAPSULE_EXPORT_CONTIGS", "1", 1);
     std::vector<uint8_t> rflat; std::vector<size_t> rowoff;
     std::vector<std::string> qbits;
     std::vector<std::string> qtext_mem;
@@ -905,14 +927,13 @@ static int capsule_call_from_archive(const std::string& in, const std::string& o
                           &rflat, &rowoff, nullptr,
                           WANT_INDELS ? nullptr : &qbits, QMIN,
                           WANT_INDELS ? &qtext_mem : nullptr,
-                          WANT_INDELS ? &contigs_mem : nullptr) != 0){
+                          &contigs_mem) != 0){
         fprintf(stderr,"[call] decode failed\n"); return 1; }
 
     _lap("1 decode reads+qual");
     // In indel mode the caller needs the INDIVIDUAL assembled contigs, not the
     // two concatenated pseudogenome records -- build_substrate collapses and
     // re-places reads per contig, so 2 giant records is a different operation.
-    if (WANT_INDELS) setenv("CAPSULE_EXPORT_CONTIGS", "1", 1);
     // Step 1 hands the contigs back in memory when the archive carries
     // contig_spans, so the second full archive pass runs only as a fallback.
     if (contigs_mem.empty()) {

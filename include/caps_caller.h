@@ -2106,10 +2106,31 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         // ascending, and after concatenating them one sort restores order --
         // the slices are ~n/256 records, so this sorts cache-resident pieces
         // rather than streaming 100M records through a heap.
-        std::vector<std::vector<KC>> bout((size_t)MB);
-        #pragma omp parallel for schedule(dynamic, 1)
-        for (int b2 = 0; b2 < MB; ++b2) {
-            std::vector<KC> acc;
+        // TWO PASSES, EXACT ALLOCATION.
+        //
+        // The first version of this merge deduped each bin into bout[b] and
+        // then concatenated all of bout into kc, so the merged result existed
+        // TWICE. That is invisible on the indel path, where the peak is
+        // elsewhere, but on the graph-only path (the published Claim 2 config)
+        // kc IS the peak, and it cost +1.25 GB there -- a regression on one
+        // path bought with a win on another.
+        //
+        // Allocating kc at the pre-dedup bound instead was also tried and is
+        // worse: resize() down does not release capacity, so the waste is held
+        // for the rest of the run.
+        //
+        // So: pass A sorts each bin and counts its distinct keys, retaining
+        // nothing; that gives the EXACT final size, so kc is allocated once at
+        // exactly the right size; pass B redoes the read and sort and writes
+        // the deduped run straight into kc's slice. The price is one extra
+        // read+sort of each bin (the bins are ~n/256 and cache-resident, and
+        // the whole merge is ~1 s at full chr20); the gain is that the merged
+        // array is never resident twice.
+        //
+        // Identical contents and order either way: bins partition the key
+        // space and each is sorted by k-mer.
+        auto load_bin = [&](int b2, std::vector<KC>& acc) {
+            acc.clear();
             for (uint32_t pi : live) {
                 const std::vector<uint32_t>& bo = bin_off[pi];
                 if (bo.size() != (size_t)MB + 1) continue;
@@ -2124,26 +2145,48 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                     acc.resize(base);
                 fclose(f);
             }
-            if (acc.empty()) continue;
-            std::sort(acc.begin(), acc.end(),
-                      [](const KC& x, const KC& y){ return x.kmer < y.kmer; });
-            std::vector<KC>& o = bout[(size_t)b2];
-            o.reserve(acc.size());
-            for (size_t i = 0; i < acc.size(); ) {
-                size_t j = i; uint32_t sum = 0;
-                while (j < acc.size() && acc[j].kmer == acc[i].kmer) { sum += acc[j].cnt; ++j; }
-                o.push_back(KC{ acc[i].kmer, sum });
-                i = j;
+            if (!acc.empty())
+                std::sort(acc.begin(), acc.end(),
+                          [](const KC& x, const KC& y){ return x.kmer < y.kmer; });
+        };
+        std::vector<size_t> bkept((size_t)MB, 0);
+        #pragma omp parallel
+        {
+            std::vector<KC> acc;
+            #pragma omp for schedule(dynamic, 1)
+            for (int b2 = 0; b2 < MB; ++b2) {
+                load_bin(b2, acc);
+                size_t d = 0;
+                for (size_t i = 0; i < acc.size(); ) {
+                    size_t j = i;
+                    while (j < acc.size() && acc[j].kmer == acc[i].kmer) ++j;
+                    ++d; i = j;
+                }
+                bkept[(size_t)b2] = d;
             }
         }
+        std::vector<size_t> boff2((size_t)MB + 1, 0);
+        for (int b2 = 0; b2 < MB; ++b2) boff2[(size_t)b2 + 1] = boff2[(size_t)b2] + bkept[(size_t)b2];
+        // reserve -> hint -> resize, in that order: the hint must land on
+        // memory that has not been faulted in yet, and resize() zero-fills.
+        kc.reserve(boff2[(size_t)MB]);
+        kc_hp_hint(kc);
+        kc.resize(boff2[(size_t)MB]);
+        #pragma omp parallel
         {
-            size_t tot = 0;
-            for (int b2 = 0; b2 < MB; ++b2) tot += bout[(size_t)b2].size();
-            kc.reserve(tot);
-            kc_hp_hint(kc);
+            std::vector<KC> acc;
+            #pragma omp for schedule(dynamic, 1)
             for (int b2 = 0; b2 < MB; ++b2) {
-                kc.insert(kc.end(), bout[(size_t)b2].begin(), bout[(size_t)b2].end());
-                std::vector<KC>().swap(bout[(size_t)b2]);
+                if (!bkept[(size_t)b2]) continue;
+                load_bin(b2, acc);
+                size_t o = boff2[(size_t)b2];
+                for (size_t i = 0; i < acc.size(); ) {
+                    size_t j = i; uint32_t sum = 0;
+                    const uint64_t kk = acc[i].kmer;
+                    while (j < acc.size() && acc[j].kmer == kk) { sum += acc[j].cnt; ++j; }
+                    kc[o].kmer = kk; kc[o].cnt = sum; ++o;
+                    i = j;
+                }
             }
         }
         for (auto& sp : sorted_parts) if (!sp.empty()) ::remove(sp.c_str());
