@@ -204,6 +204,38 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
     for(auto& x:ss) S[x.name]=std::move(x.coded);
     auto has=[&](const char* n){ return S.count(n)>0; };
     auto dec=[&](const char* n,size_t w=1){ return has(n)?capsule_decode_stream(S[n],w):std::vector<uint8_t>(); };
+    // ── QUALITY DECODED CONCURRENTLY WITH THE SEQUENCE ──────────────────────
+    //
+    // MEASURED: the literal (sequence) decode runs on 4 threads because the
+    // archive carries 4 chunks, and the quality decode on 3 because
+    // QBLOCK_BYTES yields 3 blocks. Both counts are fixed by the archive and
+    // widening either changes the format, which Claim 1's locked sizes forbid.
+    // But the two were also run BACK TO BACK -- 5.1 s then 5.2 s -- with never
+    // more than 4 of 12 cores busy.
+    //
+    // They are independent: quality needs only the per-read lengths, its own
+    // small stream, not anything the sequence path produces. So it starts here
+    // and is joined where it used to be decoded. Same bytes, same order; the
+    // two costs overlap instead of adding.
+    std::thread qthread; bool qual_async = false; uint64_t qw_async = 0;
+    double qsecs_async = 0.0;
+    if (has("qual_body") && (out_qtext || out_qbits) && !getenv("CAPS_SKIP_QUAL")) {
+        auto lenb_e = dec("read_lengths", 2);
+        std::vector<uint16_t> L16(lenb_e.size()/2);
+        if (!L16.empty()) memcpy(L16.data(), lenb_e.data(), L16.size()*2);
+        std::vector<uint32_t> qlens_e(L16.begin(), L16.end());
+        auto qindex_e = dec("qual_index");
+        if (!qlens_e.empty()) {
+            const std::vector<uint8_t>& qbody = S.find("qual_body")->second;
+            qual_async = true;
+            qthread = std::thread([&, qlens_e, qindex_e]() {
+                auto t0 = std::chrono::steady_clock::now();
+                if (out_qtext) qw_async = qlc::decode_to_strings(qbody, qindex_e, qlens_e, *out_qtext);
+                else           qw_async = qlc::decode_to_bitmaps(qbody, qindex_e, qlens_e, qbits_qmin, *out_qbits);
+                qsecs_async = std::chrono::duration<double>(std::chrono::steady_clock::now()-t0).count();
+            });
+        }
+    }
 
     // ---- literal: 2-bit codes -> ACGT --------------------------------------
     auto litcode = seq_decode_mem(S["literal"].data(), S["literal"].size());
@@ -761,7 +793,12 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
     // of text and writing it out only to re-read it was the wrong
     // representation as well as the wrong number of cores (1 of 12).
     _rss("before quality");
-    if(has("qual_body") && out_qtext && !getenv("CAPS_SKIP_QUAL")){
+    if(qual_async){
+        qthread.join();
+        fprintf(stderr,"  quality -> %s, overlapped with the sequence decode: %llu\n",
+                out_qtext ? "text" : "bitmaps", (unsigned long long)qw_async);
+        fprintf(stderr,"  [dec-timing] quality decode     %7.2fs (overlapped)\n", qsecs_async);
+    } else if(has("qual_body") && out_qtext && !getenv("CAPS_SKIP_QUAL")){
         // Full-caller route: quality as TEXT, in memory, in parallel. Same
         // characters decode_to_file produced; no 590 MB write and re-read, and
         // 12 cores instead of 1.
