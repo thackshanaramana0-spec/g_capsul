@@ -330,3 +330,52 @@ levers are not scheduling: either a cheaper search (fewer probe coders, which
 trades size) or a smaller `pos_abs` (which is what the region split already
 did -- it cut this stream 1,264,855 -> 1,033,835 B and therefore also shortened
 this job).
+
+## 12. The full archive: what actually dominates, and quality checked four ways
+
+Every size measurement in sections 1-11 was taken on a **sequence+order**
+archive. The end-to-end benchmark builds what a deployment actually ships --
+sequence + names + quality -- and the composition is completely different:
+
+| stream | full archive | share |
+|---|---|---|
+| `qual_body` | 11,906,092 B | **76.9%** |
+| `pos_abs` | 1,033,835 B | 6.7% |
+| `names_body` | 991,899 B | 6.4% |
+| `literal` | 654,371 B | 4.2% |
+| `mem_triples` | 448,192 B | 2.9% |
+
+**Same input, two configurations:** sequence-only 2,585,780 B with `pos_abs` at
+40%; full 15,492,420 B with `pos_abs` at 6.7%. So the `pos_abs` region split is
+**-6.18% of a sequence-only archive but -1.09% of a full one**. Both numbers
+are correct; which one to report depends on what ships. (An earlier estimate of
+"-0.4%" in this session was wrong -- it divided by the wrong base.)
+
+### 12.1 Quality is at its bound — verified from four independent directions
+
+Any one check could be a coincidence, so quality was tested from four angles
+that could each falsify it alone.
+
+| direction | measurement | verdict |
+|---|---|---|
+| order-0 entropy | 2.498 b/base bound; we achieve **1.370** | 0.548x -- far below |
+| conditional entropy | order-1 1.578, order-2 1.464, **order-3 1.415** | we BEAT order-3 |
+| independent coders | xz -9e +14.6%, zstd -19 --ultra +21.6%, bzip2 -9 +23.2% | we win all three |
+| coder configuration | `nstrat=4`, `ntrial = nc * nstrat` | already SEARCHES all 4 fqzcomp strategies per block and keeps the best |
+
+Beating order-3 conditional entropy means the coder is exploiting position and
+quality-history context, not just a Markov chain -- which is what fqzcomp is for.
+**There is no headroom here without lossy quality binning, which is a different
+product decision, not an optimisation.**
+
+### 12.2 What this means for where effort should have gone
+
+77% of a shipping archive is a stream that was already at its bound before this
+session started, and the streams this session optimised are 6.7% and 4.2% of it.
+That is not wasted work -- the sequence path is what Claims 2 and 3 are built
+on, and `pos_abs` had a real 18x-entropy-gap defect -- but the honest framing is:
+
+- **for archive SIZE in deployment**, the remaining lever is quality, and quality
+  is closed
+- **for the sequence+order comparison against PgRC2**, which is what Claim 1
+  actually benchmarks, the `pos_abs` split is a genuine -0.52% to -6.18%
