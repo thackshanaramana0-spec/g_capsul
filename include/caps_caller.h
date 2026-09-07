@@ -4982,69 +4982,109 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             inline uint64_t kmer()   const { return kf & ~(uint64_t)ORI; }
             inline uint8_t  orient() const { return (uint8_t)(kf >> 63); }
         };
+        // BUILT IN PLACE, like the seed index above and for the same reason:
+        // kidx is 16 B x ~106M = 1.70 GB and handing it to
+        // __gnu_parallel::stable_sort allocates a full second copy. With the
+        // seed index and pv fixed, THIS was the run's remaining high-water
+        // mark -- measured +2394 MB in one step at `indel setup`.
+        //
+        // Entries are bucketed on the way in by the top bits of the RAW key
+        // (not of mix(key), because this index is binary-searched by key and
+        // must stay in key order), then each bucket is sorted in place with an
+        // explicit (key, ci, pos) comparator. That comparator states what the
+        // stable sort was actually relying on -- the fill is contig-major,
+        // position-minor, so equal keys were already in (ci,pos) order -- so
+        // the sequence is identical and stability is no longer needed.
+        // Unlike the seed index there is no per-key cap here, so buckets stay
+        // contiguous and no compaction pass is required.
         std::vector<KIdxEntry> kidx;
         {
-            // PARALLEL BUILD, ORDER PRESERVED. kidx is ~65M entries x 24 B
-            // (~1.5 GB) built by serial push_back inside the stage that is 64%
-            // of the whole run. Contigs are independent, so each thread fills
-            // its own buffer -- but the stable_sort below depends on the
-            // ORIGINAL insertion order (contig 0,1,2..., each in increasing
-            // position), because "first pair wins" downstream reads it. A
-            // plain concatenation of thread buffers would NOT be that order.
-            //
-            // So: count per contig first, prefix-sum to get each contig's exact
-            // slot, then fill in parallel by INDEX. The result is byte-identical
-            // to the serial push_back order by construction, with no
-            // concatenation step and no per-thread buffers to merge.
             const size_t NC = cdb.contigs.size();
-            std::vector<size_t> off(NC + 1, 0);
+            static constexpr int KBB = 12;
+            const size_t NKB = (size_t)1 << KBB;
+            int T = 1;
+            #ifdef _OPENMP
+            T = omp_get_max_threads();
+            #endif
+            std::vector<size_t> ccnt(NC + 1, 0);
             #pragma omp parallel for schedule(dynamic, 256)
             for (long long ci = 0; ci < (long long)NC; ++ci) {
                 const std::string& c = cdb.contigs[(size_t)ci];
-                size_t cnt = 0;
-                Roll25 rw; const size_t cn2 = c.size();
+                size_t cnt = 0; Roll25 rw; const size_t cn2 = c.size();
                 for (size_t b2 = 0; b2 < cn2; ++b2) {
                     rw.push(c[b2]);
                     if (b2 + 1 >= (size_t)BK && rw.ok()) ++cnt;
                 }
-                off[(size_t)ci + 1] = cnt;
+                ccnt[(size_t)ci + 1] = cnt;
             }
-            for (size_t i = 0; i < NC; ++i) off[i + 1] += off[i];
-            kidx.resize(off[NC]);
-            #pragma omp parallel for schedule(dynamic, 256)
-            for (long long ci = 0; ci < (long long)NC; ++ci) {
-                const std::string& c = cdb.contigs[(size_t)ci];
-                size_t w = off[(size_t)ci];
-                Roll25 rw; const size_t cn2 = c.size();
-                for (size_t b2 = 0; b2 < cn2; ++b2) {
-                    rw.push(c[b2]);
-                    if (b2 + 1 < (size_t)BK || !rw.ok()) continue;
-                    const size_t i = b2 + 1 - (size_t)BK;
-                    kidx[w++] = { rw.canon() | (rw.f <= rw.r ? 0ULL : (uint64_t)KIdxEntry::ORI),
-                                  (uint32_t)ci, (uint32_t)i };
+            for (size_t i = 0; i < NC; ++i) ccnt[i + 1] += ccnt[i];
+            const size_t total = ccnt[NC];
+            std::vector<size_t> tlo((size_t)T + 1, NC);
+            tlo[0] = 0;
+            for (int t = 1; t < T; ++t) {
+                const size_t want = total * (size_t)t / (size_t)T;
+                size_t at = (size_t)(std::lower_bound(ccnt.begin(), ccnt.end(), want) - ccnt.begin());
+                if (at > NC) at = NC;
+                if (at < tlo[(size_t)t - 1]) at = tlo[(size_t)t - 1];
+                tlo[(size_t)t] = at;
+            }
+            tlo[(size_t)T] = NC;
+            std::vector<std::vector<uint32_t>> hist((size_t)T, std::vector<uint32_t>(NKB, 0));
+            #pragma omp parallel for schedule(static, 1)
+            for (int t = 0; t < T; ++t) {
+                std::vector<uint32_t>& h = hist[(size_t)t];
+                for (size_t ci = tlo[(size_t)t]; ci < tlo[(size_t)t + 1]; ++ci) {
+                    const std::string& c = cdb.contigs[ci];
+                    Roll25 rw; const size_t cn2 = c.size();
+                    for (size_t b2 = 0; b2 < cn2; ++b2) {
+                        rw.push(c[b2]);
+                        if (b2 + 1 < (size_t)BK || !rw.ok()) continue;
+                        ++h[(size_t)(rw.canon() >> (50 - KBB))];
+                    }
                 }
             }
+            std::vector<size_t> boff(NKB + 1, 0);
+            for (size_t b = 0; b < NKB; ++b) {
+                size_t sum = 0;
+                for (int t = 0; t < T; ++t) sum += hist[(size_t)t][b];
+                boff[b + 1] = sum;
+            }
+            for (size_t b = 0; b < NKB; ++b) boff[b + 1] += boff[b];
+            std::vector<std::vector<size_t>> wpos((size_t)T, std::vector<size_t>(NKB, 0));
+            for (size_t b = 0; b < NKB; ++b) {
+                size_t cur = boff[b];
+                for (int t = 0; t < T; ++t) { wpos[(size_t)t][b] = cur; cur += hist[(size_t)t][b]; }
+            }
+            kidx.resize(total);
+            hp_hint((void*)kidx.data(), kidx.size() * sizeof(KIdxEntry), "kidx");
+            #pragma omp parallel for schedule(static, 1)
+            for (int t = 0; t < T; ++t) {
+                std::vector<size_t>& w = wpos[(size_t)t];
+                for (size_t ci = tlo[(size_t)t]; ci < tlo[(size_t)t + 1]; ++ci) {
+                    const std::string& c = cdb.contigs[ci];
+                    Roll25 rw; const size_t cn2 = c.size();
+                    for (size_t b2 = 0; b2 < cn2; ++b2) {
+                        rw.push(c[b2]);
+                        if (b2 + 1 < (size_t)BK || !rw.ok()) continue;
+                        const uint64_t kk = rw.canon();
+                        kidx[w[(size_t)(kk >> (50 - KBB))]++] =
+                            KIdxEntry{ kk | (rw.f <= rw.r ? 0ULL : (uint64_t)KIdxEntry::ORI),
+                                       (uint32_t)ci, (uint32_t)(b2 + 1 - (size_t)BK) };
+                    }
+                }
+            }
+            #pragma omp parallel for schedule(dynamic, 8)
+            for (long long b = 0; b < (long long)NKB; ++b) {
+                std::sort(kidx.begin() + (long)boff[(size_t)b],
+                          kidx.begin() + (long)boff[(size_t)b + 1],
+                          [](const KIdxEntry& x, const KIdxEntry& y) {
+                              const uint64_t kx = x.kmer(), ky = y.kmer();
+                              if (kx != ky)       return kx < ky;
+                              if (x.ci != y.ci)   return x.ci < y.ci;
+                              return x.pos < y.pos;
+                          });
+            }
         }
-        // STABLE sort, not plain sort: the original hashmap's per-key vector
-        // preserved insertion order (contig 0,1,2... in sequence, each in
-        // increasing position order), and the whole-pair alignment scan
-        // below has "first pair wins" semantics (pairs_: `if (pr_.n==0) {
-        // pr_.rp=rp; ...}`) that silently depends on that order -- a plain
-        // sort's unspecified tie-break order changed WHICH pair is recorded
-        // first for a given contig pair, which changed downstream anchor
-        // positions and therefore DP/AF for some indel records. Caught by
-        // byte-comparing against the pre-change binary on real data before
-        // trusting this, not by reasoning alone.
-        // Parallel STABLE sort -- stability is load-bearing (see the note
-        // above: a plain sort moved anchor positions and DP/AF). GNU's
-        // __gnu_parallel::stable_sort keeps the same guarantee.
-        #if defined(_OPENMP) && defined(_GLIBCXX_PARALLEL_ALGO_H)
-        __gnu_parallel::stable_sort(kidx.begin(), kidx.end(),
-            [](const KIdxEntry& a, const KIdxEntry& b){ return a.kmer() < b.kmer(); });
-        #else
-        std::stable_sort(kidx.begin(), kidx.end(),
-            [](const KIdxEntry& a, const KIdxEntry& b){ return a.kmer() < b.kmer(); });
-        #endif
         auto kidx_run_len = [&](uint64_t key) -> int {
             auto lo = std::lower_bound(kidx.begin(), kidx.end(), key,
                 [](const KIdxEntry& e, uint64_t k){ return e.kmer() < k; });
