@@ -5676,6 +5676,47 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                     if (it == k.end() || *it != key) return (size_t)-1;
                     return (size_t)(it - k.begin());
                 }
+                // ── ONE-SHOT HASH DIRECTORY ─────────────────────────────────
+                // The indel-pass read scan probes this map ~340M times (4M
+                // reads x ~85 anchors). It did so via a two-hash Bloom filter
+                // -- 2 random touches of a 43 MB bitset -- and then, for every
+                // survivor, index_of, a binary search over 21.6M keys: ~25 more
+                // dependent probes. That pair was 6.66 s of a 73.4 s run.
+                //
+                // This resolves the same query in TWO touches whether it hits
+                // or misses, and needs no filter in front of it: one probe into
+                // a 2^23-entry offset table, then one cache line of a bucket
+                // array holding (key, index) pairs -- ~2.6 entries per bucket,
+                // 32 B, so the scan almost never leaves that line. It strictly
+                // dominates the old path: same cost on a miss, and on a hit it
+                // also returns the index instead of starting a binary search.
+                //
+                // Buckets are taken from mix(key), not the key itself, because
+                // raw canonical k-mers are strongly non-uniform and a
+                // prefix-keyed directory would concentrate into a few huge
+                // buckets. `k` is NOT reordered -- the anchor loop's iteration
+                // order over pkidx is load-bearing and stays exactly as it was.
+                enum { PDB = 23 };   // local class: enum, not a static member
+                std::vector<uint32_t> dir;
+                std::vector<std::pair<uint64_t,uint32_t>> buck;
+                void build_dir() {
+                    const size_t NB = (size_t)1 << PDB;
+                    dir.assign(NB + 1, 0);
+                    for (uint64_t key : k)
+                        ++dir[(size_t)(FlatKmerSet::mix(key) >> (64 - PDB)) + 1];
+                    for (size_t i = 0; i < NB; ++i) dir[i + 1] += dir[i];
+                    buck.resize(k.size());
+                    std::vector<uint32_t> w(dir.begin(), dir.end() - 1);
+                    for (size_t i = 0; i < k.size(); ++i)
+                        buck[w[(size_t)(FlatKmerSet::mix(k[i]) >> (64 - PDB))]++] =
+                            { k[i], (uint32_t)i };
+                }
+                inline size_t lookup(uint64_t key) const {
+                    const size_t h = (size_t)(FlatKmerSet::mix(key) >> (64 - PDB));
+                    for (uint32_t i = dir[h], e = dir[h + 1]; i < e; ++i)
+                        if (buck[i].first == key) return (size_t)buck[i].second;
+                    return (size_t)-1;
+                }
                 inline const std::pair<uint32_t,uint32_t>* find_ptr(uint64_t key) const {
                     auto it = std::lower_bound(k.begin(), k.end(), key);
                     if (it == k.end() || *it != key) return nullptr;
@@ -5847,30 +5888,12 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             // Sized at 16 bits per anchor (~43 MB for 21.6M anchors) with two
             // independent hashes: ~0.4% false-positive rate, so ~99.6% of the
             // ~340M probes end at a single cache line instead of a hash walk.
-            std::vector<uint64_t> pbf;
-            size_t pbf_bits = 0;
-            {
-                pbf_bits = (size_t)1 << (64 - __builtin_clzll(std::max<size_t>(1, pkidx.size() * 16)));
-                pbf.assign(pbf_bits / 64 + 1, 0ULL);
-                const size_t mask = pbf_bits - 1;
-                for (size_t ki = 0; ki < pkidx.k.size(); ++ki) {
-                    const uint64_t key = pkidx.k[ki];
-                    const uint64_t h1 = key * 0x9E3779B97F4A7C15ULL;
-                    const uint64_t h2 = (key ^ (key >> 29)) * 0xBF58476D1CE4E5B9ULL;
-                    pbf[((h1 >> 20) & mask) >> 6] |= 1ULL << (((h1 >> 20) & mask) & 63);
-                    pbf[((h2 >> 20) & mask) >> 6] |= 1ULL << (((h2 >> 20) & mask) & 63);
-                }
-                fprintf(stderr, "[PCLUSTER] anchor bitset %zu bits (%.1f MB) for %zu anchors\n",
-                        pbf_bits, (double)pbf.size() * 8 / 1048576.0, pkidx.size());
-            }
-            _iplap("  pe: bitset build");
-            const size_t pbf_mask = pbf_bits - 1;
-            auto pbf_maybe = [&](uint64_t k) -> bool {
-                const uint64_t h1 = k * 0x9E3779B97F4A7C15ULL;
-                if (!((pbf[((h1 >> 20) & pbf_mask) >> 6] >> (((h1 >> 20) & pbf_mask) & 63)) & 1ULL)) return false;
-                const uint64_t h2 = (k ^ (k >> 29)) * 0xBF58476D1CE4E5B9ULL;
-                return (pbf[((h2 >> 20) & pbf_mask) >> 6] >> (((h2 >> 20) & pbf_mask) & 63)) & 1ULL;
-            };
+            pkidx.build_dir();
+            fprintf(stderr, "[PCLUSTER] anchor directory %zu buckets + %zu entries (%.1f MB) for %zu anchors\n",
+                    pkidx.dir.size() - 1, pkidx.buck.size(),
+                    (double)(pkidx.dir.size() * 4 + pkidx.buck.size() * 12) / 1048576.0,
+                    pkidx.size());
+            _iplap("  pe: anchor directory");
             // ── PARALLEL READ SCAN ──────────────────────────────────────────
             // 4M reads x ~85 k-mers, serial, and the bitset above already
             // removed ~99% of the hash traffic -- so what remains is a
@@ -5905,8 +5928,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                         if (!rw.ok()) continue;
                         const size_t j = b3 + 1 - (size_t)AK;
                         const uint64_t cn = rw.canon();
-                        if (!pbf_maybe(cn)) continue;   // definitely absent
-                        const size_t ai = pkidx.index_of(cn);
+                        const size_t ai = pkidx.lookup(cn);
                         if (ai == (size_t)-1) continue; // provably dead otherwise
                         buf.push_back({(uint32_t)ai, {(uint32_t)i, (uint32_t)j}});
                     }
