@@ -1112,15 +1112,52 @@ inline Substrate build_substrate(const std::vector<std::string>& seqs, const Cal
                         // already in the score -- once a perfect ~148 bp
                         // placement is in hand, a rival of the same length is
                         // dead at its FIRST mismatch.
-                        int mm = 0; int64_t j = 0;
-                        for (; j < ov_hi; ++j) {
-                            char a = r[(size_t)(clip + j)];
-                            if (b2i(a) >= 0 && c[(size_t)(cst + j)] != a) {
+                        // WORD-WISE SKIP over matching stretches.
+                        //
+                        // The scan compared one byte at a time through a b2i()
+                        // call. Where eight bytes are EQUAL they contribute
+                        // zero mismatches no matter what they are -- including
+                        // N, since the test is `read base differs from contig
+                        // base`, which equal bytes never satisfy. So an equal
+                        // 8-byte word can be skipped outright, and only a word
+                        // containing a difference needs the per-byte path.
+                        //
+                        // Mismatches are still found strictly left to right, so
+                        // the sequence of mm values, and therefore the exact
+                        // point the bound below fires, is unchanged. Bounds are
+                        // safe by construction: j + 8 <= ov_hi <= rl - clip and
+                        // <= c.size() - cst, so both loads stay inside their
+                        // strings.
+                        //
+                        // This matters because branch-and-bound already kills
+                        // bad candidates in a few bytes; what is left is the
+                        // long, nearly-perfect alignments, which are exactly
+                        // the ones made of matching words.
+                        int mm = 0; int64_t j = 0; bool dead = false;
+                        const char* rp = r.data() + (size_t)clip;
+                        const char* cp = c.data() + (size_t)cst;
+                        while (j + 8 <= ov_hi) {
+                            uint64_t xw, yw;
+                            memcpy(&xw, rp + j, 8); memcpy(&yw, cp + j, 8);
+                            if (xw == yw) { j += 8; continue; }
+                            const int64_t e8 = j + 8;
+                            for (; j < e8; ++j) {
+                                const char a = rp[j];
+                                if (b2i(a) >= 0 && cp[j] != a) {
+                                    ++mm;
+                                    if ((long)ov_hi - 6L * (long)mm <= best_score) { dead = true; break; }
+                                }
+                            }
+                            if (dead) break;
+                        }
+                        if (!dead) for (; j < ov_hi; ++j) {
+                            const char a = rp[j];
+                            if (b2i(a) >= 0 && cp[j] != a) {
                                 ++mm;
-                                if ((long)ov_hi - 6L * (long)mm <= best_score) break;
+                                if ((long)ov_hi - 6L * (long)mm <= best_score) { dead = true; break; }
                             }
                         }
-                        if (j < ov_hi) continue;          // provably cannot win
+                        if (dead) continue;               // provably cannot win
                         const long score = (long)(ov_hi - mm) - 5L * (long)mm;
                         if (score > best_score) { best_score = score; best_mm = mm;
                                                   best_c = pr.first; best_p = (uint32_t)cst;
