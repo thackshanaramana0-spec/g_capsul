@@ -478,3 +478,73 @@ is the safer of the two; `seqs` is read everywhere and changing it is a wide
 refactor. Neither was done here because the goal was already met and the
 trade -- a signature change across both callers, encoder included -- is not
 worth 600 MB without being asked for.
+
+---
+
+## 12. The full path, taken further
+
+Sections 1-11 ended at 147.26 s / 16.00 GB on the full SNV+indel path. Continued
+work on that path only (Mode A / `CAPS_DBG_ONLY` is a different code route and
+is NOT this deliverable):
+
+| | wall | peak RAM |
+|---|---|---|
+| baseline (`0851692`) | 381.30 s | 33.28 GB |
+| section 11 | 147.26 s | 16.00 GB |
+| **now** | **122.61 s** | **15.24 GB** |
+| **vs baseline** | **3.11x** | **2.18x** |
+
+Three runs at HEAD: 122.40 / 122.81 / 122.61 s and 15.37 / 15.07 / 15.29 GB,
+VCF byte-identical every run at 58,433 records, kc distinct 140,719,632.
+
+### 12.1 What worked
+
+| lever | effect |
+|---|---|
+| exact early-exit at a provably optimal placement | place reads 34.70 -> 19.09 s |
+| quality decode overlapped with the sequence decode | decode 26.41 -> 20.96 s |
+| `kc` record packed 16 -> 12 B | -430 MB |
+| archive read once, not 5x, for the indel streams | -0.6 s, -2.4 GB of I/O |
+
+The placement early-exit is the one worth restating: `score = ov_hi - 6*mm` and
+`ov_hi <= rl`, so `rl` is the ceiling, reached only by a full-length,
+zero-mismatch, zero-clip placement. Once one is found nothing can beat it, and
+the update is a strict `>`, so nothing could displace it even if evaluated --
+abandoning the remaining seed offsets AND the other strand is exact.
+
+### 12.2 What was refuted, with the measurement
+
+| idea | result | why |
+|---|---|---|
+| dedup repeated (contig,start) proposals | skipped **723 M** candidates, placement slightly SLOWER | branch-and-bound already rejects in 19-30 bytes of SEQUENTIAL compare on a loaded cache line; a dedup probe is a fresh random miss. One cache miss traded for another |
+| hoist the per-byte bounds check + table-drive comp() | 16.32 -> 16.39 s | the loop is 0.10 s of its own 6.5 s stage |
+| software prefetch on the collapse probes | 6.83 -> 6.79 s | inside noise |
+| quotient the collapse claimed set (8 -> 4 B/slot) | table halved, peak -50 MB, +6 s | the set is a TRANSIENT freed long before the peak |
+
+### 12.3 Two errors in method, both costly
+
+**Optimising a stage without timing its parts.** The "read reconstruction"
+stage is 16.3 s and I attacked its reconstruct LOOP twice. Instrumenting it
+showed the loop is **0.10 s**; the literal decode inside the same timer is
+5.23 s of 6.52 s. Two changes were wasted on 1.5% of a stage. The same mistake
+appears earlier in this file's history with a 0.02 s loop.
+
+**Optimising the largest STEP instead of what is alive at the PEAK.** The
+quotienting work was correct, halved its table, and bought 50 MB, because the
+claimed set is freed before the peak is reached.
+
+### 12.4 The floor, and what is deliberately not being done
+
+The decode is now bounded by the ARCHIVE FORMAT, not by code: the literal
+stream carries **4 chunks so it decodes on 4 threads**, and quality has 3
+blocks so it gets 3. Measured directly (`chunks=4 threads=4`). Widening either
+means re-chunking at encode time, which changes archive bytes -- and Claim 1's
+sizes are locked. Overlapping the two was the win available without touching
+the format, and it has been taken.
+
+**Deliberately rejected:** the two `build_substrate` calls each run a SERIAL
+collapse (6.29 s and 9.51 s) and are independent pure functions of
+`(contigs, dup_frac, K)`, so running them concurrently would cut 15.80 s to
+~9.5 s. It needs both 2 GB claimed sets resident at once, adding ~2 GB to peak.
+RAM is equally part of the goal, so 6 s for 2 GB is the wrong direction. Not an
+oversight -- a decision.
