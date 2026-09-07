@@ -166,7 +166,11 @@ phase1_one(){                      # $1 = dataset name ; returns 1 on failure
     mark "P1 $DS: CAPSULE compress"
     step "CAPSULE compress (adaptive, 4 candidates in one process)"
     A="$ARCH_DIR/$DS.capsule"; TF="$WD/t_c_$$"
-    /usr/bin/time -v env CAPS_NAMES=1 CAPS_QUAL=1 INPUT="$IN" ARCHIVE="$A" BEST="$BEST" \
+    # CAPS_CALL=1 is REQUIRED, not optional: it writes `contig_spans`, and
+    # without that stream Phase 2 cannot call from the archive at all -- the
+    # decoder refuses with "ARCHIVE LACKS contig_spans". Phase 1 archives are
+    # KEPT and reused by Phases 2 and 3, so this flag has to be set here.
+    /usr/bin/time -v env CAPS_CALL=1 CAPS_NAMES=1 CAPS_QUAL=1 INPUT="$IN" ARCHIVE="$A" BEST="$BEST" \
         bash "$HERE/scripts/encode_adaptive.sh" >/dev/null 2>"$TF"
     read -r CW CR <<< "$(parse_time_v "$TF")"
     if [ ! -s "$A" ]; then err "$DS: CAPSULE produced no archive"; debug_dump "$DS encode" "${A}.log"; rm -f "$IN" "$TF"; return 1; fi
@@ -315,12 +319,23 @@ run_phase2(){
         [ -s "$fq" ] || { err "$IND: $fq missing — skipping"; printf "%s,CAPSULE,,,,,,MISSING_INPUT\n" "$IND" >> "$CSV2"; continue; }
         inf "  input $(gbs $(stat -c%s "$fq"))"
 
-        mark "P2 $IND: our caller"
-        step "our caller (full chr20, SNV configuration)"
+        mark "P2 $IND: our caller (FROM THE ARCHIVE)"
+        step "our caller: capsule_decode call <archive> -- no FASTQ is read"
         d="$OUT_DIR/c2_$IND"; mkdir -p "$d"
-        CAPS_DBG=1 CAPS_DBG_ONLY=1 \
-          bash "$HERE/scripts/run_fullchr20_bench_capsule.sh" \
-               "$BEST" "$HERE/scripts" "$REFS/chr20.fa" "$fq" "$IND" "$d" > "$d.log" 2>&1
+        # THE ARCHIVE PATH IS WHAT CLAIM 2 ASSERTS. Phase 1 already built and
+        # KEPT this archive with CAPS_CALL=1, so calling from it here is both
+        # the honest measurement and free of a second compression pass.
+        # The FASTQ runner (run_fullchr20_bench_capsule.sh) measures the encoder
+        # assembling and calling in one pass -- a different, much heavier
+        # operation -- and is retained for comparison, not used here.
+        c2arc="$ARCH_DIR/$IND.capsule"
+        if [ ! -s "$c2arc" ]; then
+            err "$IND: no archive at $c2arc -- Phase 1 must run first (it is KEPT for this)"
+            printf "%s,CAPSULE,,,,,,NO_ARCHIVE\n" "$IND" >> "$CSV2"
+            continue
+        fi
+        bash "$HERE/scripts/run_fullchr20_archive_capsule.sh" \
+               "$DEC" "$HERE/scripts" "$REFS/chr20.fa" "$c2arc" "$IND" "$d" > "$d.log" 2>&1
         f1=$(grep -aE '^SNV ' "$d.log" | tail -1 | grep -oP 'F1=\K[0-9.]+')
         p=$(grep -aE '^SNV ' "$d.log" | tail -1 | grep -oP ' P=\K[0-9.]+')
         r=$(grep -aE '^SNV ' "$d.log" | tail -1 | grep -oP ' R=\K[0-9.]+')
