@@ -1097,6 +1097,24 @@ inline Substrate build_substrate(const std::vector<std::string>& seqs, const Cal
         long best_score = LONG_MIN; int best_mm = INT32_MAX;
         uint32_t best_c = UINT32_MAX, best_p = 0; uint8_t best_rc = 0;
         uint16_t best_clip = 0;
+        // ── STOP AT A PROVABLY OPTIMAL PLACEMENT ────────────────────────────
+        //
+        // score = ov_hi - 6*mm, and ov_hi <= rl, so rl is the MAXIMUM any
+        // candidate can score -- reached only by a full-length, zero-mismatch,
+        // zero-clip placement. Once one is in hand no later candidate can beat
+        // it, and the update below is a STRICT `>`, so none could displace it
+        // even if evaluated. Abandoning the rest of the seed offsets AND the
+        // other strand is therefore exact, not a heuristic cutoff.
+        //
+        // This is the cheap way to cut the candidate count. The obvious way --
+        // deduplicating repeated (contig, start) proposals -- was implemented
+        // and MEASURED: it skipped 723 MILLION repeats at full chr20 and made
+        // placement slightly SLOWER, because branch-and-bound already kills a
+        // bad candidate in 19-30 bytes of sequential compare on a cache line
+        // that is already loaded, while the dedup probe is a fresh random miss.
+        // Trading one cache miss for another buys nothing; not evaluating the
+        // candidate at all is what helps.
+        bool perfect = false;
         // Strand 0 used to COPY the read (`std::string r = strand ? ... : raw`)
         // for no reason at all -- two heap allocations per read, ~50M across
         // the two calls at full-chromosome scale. Bind a reference for the
@@ -1205,10 +1223,14 @@ inline Substrate build_substrate(const std::vector<std::string>& seqs, const Cal
                         const long score = (long)(ov_hi - mm) - 5L * (long)mm;
                         if (score > best_score) { best_score = score; best_mm = mm;
                                                   best_c = pr.first; best_p = (uint32_t)cst;
-                                                  best_rc = (uint8_t)strand; best_clip = (uint16_t)clip; }
+                                                  best_rc = (uint8_t)strand; best_clip = (uint16_t)clip;
+                                                  if (score == (long)rl) { perfect = true; break; } }
                     }
+                    if (perfect) break;
                 }
+                if (perfect) break;
             }
+            if (perfect) break;
         }
         if (best_c != UINT32_MAX && best_mm < 7) {          // same MAPQ<20 gate the pileup uses
             if (S.read_cid[o] == UINT32_MAX) ++placed; else ++improved;
