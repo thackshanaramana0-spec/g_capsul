@@ -416,3 +416,65 @@ count of 47,332 against 47,334.
    here must key on contig sequence, not on `dcontig_N`, or it will chase this
    artefact. `docs/` already warned that VCF byte-identity is not a valid gate;
    this is the concrete mechanism.
+
+---
+
+## 11. Did it halve both axes? Mode B, full chr20
+
+The stated goal was to halve BOTH wall time and RAM on the full SNV+indel
+caller. Against the pre-session baseline on the full chr20 archive:
+
+| | baseline (`0851692`) | half of it | at HEAD | factor |
+|---|---|---|---|---|
+| wall | 381.30 s | 190.65 s | **147.26 s** | **2.59x** |
+| peak RSS | 33.28 GB | 16.64 GB | **16.00 GB** | **2.08x** |
+
+**Both halved**, with the VCF byte-identical to the pre-fix run (58,433
+records, kc distinct 140,719,632). Time clears its target by 43 s; RAM clears
+its by 0.64 GB, which is real but thin -- so it was confirmed over three runs
+at HEAD rather than claimed off one:
+
+    run1  147.26 s / 16.00 GB   2.59x / 2.08x
+    run2  148.27 s / 16.04 GB   2.57x / 2.07x
+    run3  144.26 s / 15.97 GB   2.64x / 2.08x
+
+all three VCF byte-identical. The RAM spread is +/-0.04 GB, so the margin is
+stable rather than a lucky run.
+
+The kc two-pass fix (10.2) shows up here exactly where predicted: the kc merge
+step went **+2209 -> +882 MB** on this path too, which is what moved RAM from
+16.21 GB to 16.00 GB and put clear air under the target.
+
+### 11.1 Why RAM stops here without a redesign
+
+Peak growth at full chr20, current HEAD:
+
+    decode leftovers (seqs + quals, both text)   4134 MB
+    collapse #1                                 +3611 MB
+    kc merge                                     +882 MB
+    collapse #2                                 +1853 MB
+    seed index                                  +2853 MB
+    indel setup (cov + kidx)                    +1616 MB
+    anchor directory                             +430 MB
+                                               --------
+                                                16378 MB
+
+The two biggest are now at their floor for an EXACT result:
+
+- **The collapse claimed set is correctly sized.** 90,074,328 distinct in
+  268,435,456 slots (34% load) on the first call and 128,239,470 (48%) on the
+  second, with no growth transient. Halving the table to 2^27 would put the
+  second call at **96% load**, where linear probing degrades badly -- so the
+  2048 MB is bought, not wasted.
+- **The seed index and kidx are already built in place** (sections 3, 10), so
+  they cost their contents and nothing more.
+
+What is left is not an allocation to shave but a representation to change:
+`seqs` and `quals` are `vector<std::string>` holding 12.6M records each. At
+~150 bytes of payload per record, `std::string` costs a 32 B object plus a
+~176 B heap block, so ~2.6 GB is spent to hold ~1.9 GB. A flat buffer plus
+offsets would return ~600 MB per array. `quals` is read in only two places and
+is the safer of the two; `seqs` is read everywhere and changing it is a wide
+refactor. Neither was done here because the goal was already met and the
+trade -- a signature change across both callers, encoder included -- is not
+worth 600 MB without being asked for.
