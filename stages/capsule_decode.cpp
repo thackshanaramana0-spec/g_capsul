@@ -271,31 +271,21 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
         }
     }
 
-    // ---- literal: 2-bit codes -> ACGT --------------------------------------
-    auto litcode = seq_decode_mem(S["literal"].data(), S["literal"].size());
-    std::vector<uint8_t> literal(litcode.size());
-    { const char M[4]={'A','C','G','T'};
-      for(size_t i=0;i<litcode.size();++i) literal[i]=(uint8_t)M[litcode[i]&3]; }
-
-    // ---- references --------------------------------------------------------
-    auto gaps = varints(dec("mem_dstgap"));
-    auto lraw = varints(dec("mem_len"));
-    auto rcb  = dec("mem_rc");
-    const size_t NR = gaps.size();
-    std::vector<uint32_t> dst(NR), mlen(NR);
-    { uint64_t prev=0;
-      for(size_t i=0;i<NR;++i){ uint64_t d=prev+gaps[i]; dst[i]=(uint32_t)d;
-          mlen[i]=(uint32_t)(lraw[i]+MINMEM); prev=d+mlen[i]; } }
-    // mem_self marks references whose source lives in the second region; their
-    // sources were coded relative to main_pg_end. Absent stream == none.
-    auto selfflags = has("mem_self") ? dec("mem_self") : std::vector<uint8_t>();
-    auto src = refc::decode(S["mem_triples"].data(), S["mem_triples"].size(), dst, MAINEND, selfflags);
-
-    // ── CLAIM 3 / coverage — hoisted ABOVE the pseudogenome rebuild ─────────
-    // Per-base depth needs only the pseudogenome LENGTH (already in the header)
-    // and the per-read placements. It does NOT need pg CONTENT, so decoding the
-    // literal stream and replaying every reference is pure waste for this
-    // operation. Doing it here skips both.
+    // ── COVERAGE EXITS BEFORE THE ASSEMBLY LAYER ────────────────────────────
+    //
+    // MEASURED: coverage was the SLOWEST of the three Claim 3 modes (0.26 s vs
+    // export 0.18 s and query 0.20 s) despite doing the least work -- it needs
+    // no pseudogenome and peaks at 4 MB against their 36 MB. The cause was
+    // placement: its early exit sat AFTER seq_decode_mem (the context-mixing
+    // literal decode, the most expensive stream in the archive), after
+    // refc::decode, and after mem_dstgap/mem_len/mem_rc/mem_self -- the entire
+    // assembly layer, none of which it reads.
+    //
+    // It needs only pos_abs, read_lengths, orig2uid, and the scalars PGLEN and
+    // MAINEND from the header. Moving the exit above the assembly layer is what
+    // makes the claim's own architectural statement -- "coverage is served
+    // without reconstructing the assembly" -- true of the code as well as the
+    // prose.
     if(mode=="coverage"){
         // INDEXING: pos_abs is per-UNIQUE read, read_lengths is per-ORIGINAL
         // read (see 106_inprocess.cpp's "read_lengths is indexed by ORIGINAL
@@ -360,6 +350,32 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
                 placed,(unsigned long long)PGLEN,outdir.c_str());
         return 0;
     }
+    // ---- literal: 2-bit codes -> ACGT --------------------------------------
+    auto litcode = seq_decode_mem(S["literal"].data(), S["literal"].size());
+    std::vector<uint8_t> literal(litcode.size());
+    { const char M[4]={'A','C','G','T'};
+      for(size_t i=0;i<litcode.size();++i) literal[i]=(uint8_t)M[litcode[i]&3]; }
+
+    // ---- references --------------------------------------------------------
+    auto gaps = varints(dec("mem_dstgap"));
+    auto lraw = varints(dec("mem_len"));
+    auto rcb  = dec("mem_rc");
+    const size_t NR = gaps.size();
+    std::vector<uint32_t> dst(NR), mlen(NR);
+    { uint64_t prev=0;
+      for(size_t i=0;i<NR;++i){ uint64_t d=prev+gaps[i]; dst[i]=(uint32_t)d;
+          mlen[i]=(uint32_t)(lraw[i]+MINMEM); prev=d+mlen[i]; } }
+    // mem_self marks references whose source lives in the second region; their
+    // sources were coded relative to main_pg_end. Absent stream == none.
+    auto selfflags = has("mem_self") ? dec("mem_self") : std::vector<uint8_t>();
+    auto src = refc::decode(S["mem_triples"].data(), S["mem_triples"].size(), dst, MAINEND, selfflags);
+
+    // ── CLAIM 3 / coverage — hoisted ABOVE the pseudogenome rebuild ─────────
+    // Per-base depth needs only the pseudogenome LENGTH (already in the header)
+    // and the per-read placements. It does NOT need pg CONTENT, so decoding the
+    // literal stream and replaying every reference is pure waste for this
+    // operation. Doing it here skips both.
+
 
     // ---- rebuild the pseudogenome -----------------------------------------
     // Extension mismatches: a reference may carry positions where the plain
