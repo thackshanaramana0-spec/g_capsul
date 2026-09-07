@@ -851,149 +851,163 @@ inline Substrate build_substrate(const std::vector<std::string>& seqs, const Cal
     // (stable_sort preserves relative order of equal keys) -- so truncating
     // each run to its first 64 entries afterward selects EXACTLY the same 64
     // the hash map would have, not merely a same-SIZE but different set.
-    std::vector<uint64_t> skey; std::vector<uint32_t> scid, spos;
+    // ── SEED INDEX BUILT IN PLACE ───────────────────────────────────────────
+    //
+    // This was the run's high-water mark. The old shape was: fill `flat`
+    // (16 B x ~106M = 1.70 GB), hand it to __gnu_parallel::stable_sort -- which
+    // allocates a FULL second copy, measured +2.43 GB -- and then copy the
+    // survivors out into three more arrays.
+    //
+    // Now there is ONE array. Entries are bucketed on the way in, each bucket
+    // is sorted in place, and the 64-cap compacts in place. No sort temporary,
+    // no second copy.
+    //
+    // The stable sort's guarantee was only ever "equal keys keep contig-then-
+    // position order", because that is the order the fill produces. Saying that
+    // outright in the comparator -- (mix, key, ci, pos) -- yields the identical
+    // sequence without needing stability, which is what lets each bucket use
+    // in-place std::sort. The 64-cap therefore still keeps exactly the same 64.
+    struct SIdx { uint64_t key; uint32_t ci, pos; };
+    std::vector<SIdx> sidx;
+    static constexpr int BDIR = 24;          // directory bits (unchanged)
+    static constexpr int SBB  = 12;          // scatter buckets: a prefix of BDIR,
+                                             // so a directory group never straddles two
+    std::vector<uint32_t> sdir;
     {
-        std::vector<std::pair<uint64_t,uint64_t>> flat;   // (key, ci<<32|pos)
-        flat.reserve(S.contigs.size() * 128);
-        // PARALLEL FILL BY INDEX -- the same count -> prefix-sum -> fill
-        // pattern already proven for kidx. build_substrate is ~52% of the
-        // archive-path run (it is ~all of ridx_build's 101.8 s AND ~128 s
-        // inside indel_pass, since it is called twice), and this loop walks
-        // ~65M contig positions serially.
-        //
-        // Filling BY INDEX rather than concatenating per-thread buffers keeps
-        // the entry order byte-identical to the serial push_back order, which
-        // the stable_sort below depends on: equal keys must retain contig-then-
-        // position order because the 64-cap downstream truncates each key's
-        // list and a different order would keep a different 64.
-        {
-            const size_t NC = S.contigs.size();
-            std::vector<size_t> off(NC + 1, 0);
-            #pragma omp parallel for schedule(dynamic, 256)
-            for (long long ci = 0; ci < (long long)NC; ++ci) {
-                const std::string& c = S.contigs[(size_t)ci];
-                size_t cnt = 0;
-                Roll25 rw; const size_t cn2 = c.size();
-                for (size_t b2 = 0; b2 < cn2; ++b2) {
-                    rw.push(c[b2]);
-                    if (b2 + 1 >= (size_t)K && rw.ok()) ++cnt;
-                }
-                off[(size_t)ci + 1] = cnt;
+        const size_t NC = S.contigs.size();
+        const size_t NSB = (size_t)1 << SBB;
+        int T = 1;
+        #ifdef _OPENMP
+        T = omp_get_max_threads();
+        #endif
+        // 1. per-contig k-mer counts -> a balanced contig range per thread.
+        // The ranges are EXPLICIT rather than an OpenMP schedule because the
+        // histogram pass and the scatter pass must see the same contig->thread
+        // map; a dynamic schedule does not promise that.
+        std::vector<size_t> ccnt(NC + 1, 0);
+        #pragma omp parallel for schedule(dynamic, 256)
+        for (long long ci = 0; ci < (long long)NC; ++ci) {
+            const std::string& c = S.contigs[(size_t)ci];
+            size_t cnt = 0; Roll25 rw; const size_t cn2 = c.size();
+            for (size_t b2 = 0; b2 < cn2; ++b2) {
+                rw.push(c[b2]);
+                if (b2 + 1 >= (size_t)K && rw.ok()) ++cnt;
             }
-            for (size_t i = 0; i < NC; ++i) off[i + 1] += off[i];
-            flat.resize(off[NC]);
-            #pragma omp parallel for schedule(dynamic, 256)
-            for (long long ci = 0; ci < (long long)NC; ++ci) {
-                const std::string& c = S.contigs[(size_t)ci];
-                size_t w = off[(size_t)ci];
+            ccnt[(size_t)ci + 1] = cnt;
+        }
+        for (size_t i = 0; i < NC; ++i) ccnt[i + 1] += ccnt[i];
+        const size_t total = ccnt[NC];
+        std::vector<size_t> tlo((size_t)T + 1, NC);
+        tlo[0] = 0;
+        for (int t = 1; t < T; ++t) {
+            const size_t want = total * (size_t)t / (size_t)T;
+            size_t at = (size_t)(std::lower_bound(ccnt.begin(), ccnt.end(), want) - ccnt.begin());
+            if (at > NC) at = NC;
+            if (at < tlo[(size_t)t - 1]) at = tlo[(size_t)t - 1];
+            tlo[(size_t)t] = at;
+        }
+        tlo[(size_t)T] = NC;
+        // 2. per-thread bucket histogram over its own contig range
+        std::vector<std::vector<uint32_t>> hist((size_t)T, std::vector<uint32_t>(NSB, 0));
+        #pragma omp parallel for schedule(static, 1)
+        for (int t = 0; t < T; ++t) {
+            std::vector<uint32_t>& h = hist[(size_t)t];
+            for (size_t ci = tlo[(size_t)t]; ci < tlo[(size_t)t + 1]; ++ci) {
+                const std::string& c = S.contigs[ci];
                 Roll25 rw; const size_t cn2 = c.size();
                 for (size_t b2 = 0; b2 < cn2; ++b2) {
                     rw.push(c[b2]);
                     if (b2 + 1 < (size_t)K || !rw.ok()) continue;
-                    const size_t i = b2 + 1 - (size_t)K;
-                    flat[w++] = {rw.canon(), ((uint64_t)ci << 32) | (uint32_t)i};
+                    ++h[(size_t)(FlatKmerSet::mix(rw.canon()) >> (64 - SBB))];
+                }
+            }
+        }
+        // 3. bucket-major, thread-minor write offsets
+        std::vector<size_t> boff(NSB + 1, 0);
+        for (size_t b = 0; b < NSB; ++b) {
+            size_t sum = 0;
+            for (int t = 0; t < T; ++t) sum += hist[(size_t)t][b];
+            boff[b + 1] = sum;
+        }
+        for (size_t b = 0; b < NSB; ++b) boff[b + 1] += boff[b];
+        std::vector<std::vector<size_t>> wpos((size_t)T, std::vector<size_t>(NSB, 0));
+        for (size_t b = 0; b < NSB; ++b) {
+            size_t cur = boff[b];
+            for (int t = 0; t < T; ++t) { wpos[(size_t)t][b] = cur; cur += hist[(size_t)t][b]; }
+        }
+        sidx.resize(total);
+        hp_hint((void*)sidx.data(), sidx.size() * sizeof(SIdx), "seed index");
+        // 4. scatter
+        #pragma omp parallel for schedule(static, 1)
+        for (int t = 0; t < T; ++t) {
+            std::vector<size_t>& w = wpos[(size_t)t];
+            for (size_t ci = tlo[(size_t)t]; ci < tlo[(size_t)t + 1]; ++ci) {
+                const std::string& c = S.contigs[ci];
+                Roll25 rw; const size_t cn2 = c.size();
+                for (size_t b2 = 0; b2 < cn2; ++b2) {
+                    rw.push(c[b2]);
+                    if (b2 + 1 < (size_t)K || !rw.ok()) continue;
+                    const uint64_t kk = rw.canon();
+                    sidx[w[(size_t)(FlatKmerSet::mix(kk) >> (64 - SBB))]++] =
+                        SIdx{ kk, (uint32_t)ci, (uint32_t)(b2 + 1 - (size_t)K) };
                 }
             }
         }
         _bslap("idx: flat fill");
-        // ORDER BY (mix(key), key), NOT by key.
-        //
-        // Ordering by the HASH of the key rather than the key itself is what
-        // lets the directory below have uniformly-occupied buckets: raw 25-mer
-        // values are strongly non-uniform (canonicalisation alone biases the
-        // leading base), so a directory keyed on raw prefix bits would have a
-        // few enormous buckets and the search cost would come straight back.
-        //
-        // This does NOT disturb the 64-cap selection the comment above depends
-        // on. Equal keys have equal mix, so they remain adjacent AND retain
-        // their relative order under a stable sort -- the cap still keeps
-        // exactly the first 64 in contig-then-position order. Only the order
-        // BETWEEN distinct keys changes, and every lookup is independent of it.
-        auto _hcmp = [](const std::pair<uint64_t,uint64_t>& a,
-                        const std::pair<uint64_t,uint64_t>& b) {
-            const uint64_t ha = FlatKmerSet::mix(a.first), hb = FlatKmerSet::mix(b.first);
-            return ha != hb ? ha < hb : a.first < b.first;
-        };
-        #if defined(_OPENMP) && defined(_GLIBCXX_PARALLEL_ALGO_H)
-        __gnu_parallel::stable_sort(flat.begin(), flat.end(), _hcmp);
-        #else
-        std::stable_sort(flat.begin(), flat.end(), _hcmp);
-        #endif
-        // COUNT FIRST, THEN RESERVE EXACTLY.
-        //
-        // `flat` is 16 B per k-mer position over ~65 Mbases -- 0.97 GB -- and
-        // the three output arrays are also 16 B/entry, so reserving them at
-        // flat.size() means 1.94 GB is live to produce a result that the 64-cap
-        // usually makes SMALLER. Built twice (two substrates at different
-        // dup_frac), that is the whole 4.04 GB gap between the DBG_ONLY path
-        // (6.21 GB) and the full CAPS_CALL path (10.25 GB) -- measured, and
-        // predicted at 3.87 GB by exactly this arithmetic before the change.
-        //
-        // Counting the kept entries first is one extra linear pass over an
-        // array already in cache order, and it lets the reserves be exact.
+        // 5. sort inside each bucket, in place
+        #pragma omp parallel for schedule(dynamic, 8)
+        for (long long b = 0; b < (long long)NSB; ++b) {
+            std::sort(sidx.begin() + (long)boff[(size_t)b],
+                      sidx.begin() + (long)boff[(size_t)b + 1],
+                      [](const SIdx& x, const SIdx& y) {
+                          const uint64_t hx = FlatKmerSet::mix(x.key), hy = FlatKmerSet::mix(y.key);
+                          if (hx != hy)      return hx < hy;
+                          if (x.key != y.key) return x.key < y.key;
+                          if (x.ci  != y.ci)  return x.ci  < y.ci;
+                          return x.pos < y.pos;
+                      });
+        }
         _bslap("idx: sort");
-        size_t n_keep = 0;
-        for (size_t a0 = 0; a0 < flat.size(); ) {
-            size_t b0 = a0; uint32_t k0 = 0;
-            while (b0 < flat.size() && flat[b0].first == flat[a0].first) { if (k0 < 64) ++k0; ++b0; }
-            n_keep += k0; a0 = b0;
-        }
-        skey.reserve(n_keep); scid.reserve(n_keep); spos.reserve(n_keep);
-        size_t i = 0;
-        while (i < flat.size()) {
-            size_t j = i; uint32_t kept = 0;
-            while (j < flat.size() && flat[j].first == flat[i].first) {
-                if (kept < 64) {   // identical cap to the original hash map
-                    skey.push_back(flat[j].first);
-                    scid.push_back((uint32_t)(flat[j].second >> 32));
-                    spos.push_back((uint32_t)flat[j].second);
-                    ++kept;
+        // 6. 64-cap, compacting in place inside each bucket (a key never
+        //    straddles buckets: equal keys have equal mix), then one
+        //    left-moving pass in ascending bucket order to close the gaps.
+        std::vector<size_t> kept(NSB, 0);
+        #pragma omp parallel for schedule(dynamic, 8)
+        for (long long b = 0; b < (long long)NSB; ++b) {
+            const size_t lo0 = boff[(size_t)b], hi0 = boff[(size_t)b + 1];
+            size_t w = lo0, i = lo0;
+            while (i < hi0) {
+                size_t j = i; uint32_t k0 = 0;
+                while (j < hi0 && sidx[j].key == sidx[i].key) {
+                    if (k0 < 64) { sidx[w++] = sidx[j]; ++k0; }
+                    ++j;
                 }
-                ++j;
+                i = j;
             }
-            i = j;
+            kept[(size_t)b] = w - lo0;
         }
-    }
-    _bslap("idx: cap+emit");
-    // HASH-BUCKET DIRECTORY over skey.
-    //
-    // The sorted array removed the hash map's per-node allocation, but left a
-    // SEARCH problem: two binary searches over ~40M keys is ~52 dependent,
-    // uncorrelated memory probes. The placement loop below does 16 of those
-    // per read (2 strands x 8 seed offsets), so ~830 cache misses per read --
-    // and at 4M reads that is 37.3 s of a 128.5 s run, measured, with the
-    // arithmetic (830 x ~80 ns = 66 us/read vs 56 us/read measured) confirming
-    // the loop is latency-bound on exactly this and nothing else.
-    //
-    // sdir[h] is the first index in skey whose key hashes into bucket h.
-    // Because `flat` was ordered by mix(key) above, every bucket is one
-    // contiguous run, so a lookup is: one probe into sdir, then a short linear
-    // scan of ~n/2^BDIR entries (2-3, i.e. one or two cache lines). Two
-    // touches instead of fifty-two.
-    //
-    // BIT-IDENTICAL, not merely equivalent: this returns a range into the SAME
-    // skey/scid/spos arrays with the SAME contents and the SAME per-key order.
-    // Only the way the range is FOUND changes.
-    //
-    // 2^24 x 4 B = 67 MB, independent of input size -- versus ~1.3 GB for a
-    // full key->range hash table, which is why the directory is the right
-    // structure here and not an open-addressing map.
-    static constexpr int BDIR = 24;
-    std::vector<uint32_t> sdir(((size_t)1 << BDIR) + 1, 0);
-    {
-        for (size_t i = 0; i < skey.size(); ++i)
-            ++sdir[(size_t)(FlatKmerSet::mix(skey[i]) >> (64 - BDIR)) + 1];
+        size_t out = 0;
+        for (size_t b = 0; b < NSB; ++b) {
+            if (kept[b] && out != boff[b])
+                memmove(&sidx[out], &sidx[boff[b]], kept[b] * sizeof(SIdx));
+            out += kept[b];
+        }
+        sidx.resize(out);
+        // 7. directory over the final array
+        sdir.assign(((size_t)1 << BDIR) + 1, 0);
+        for (size_t i = 0; i < sidx.size(); ++i)
+            ++sdir[(size_t)(FlatKmerSet::mix(sidx[i].key) >> (64 - BDIR)) + 1];
         for (size_t i = 0; i < ((size_t)1 << BDIR); ++i) sdir[i + 1] += sdir[i];
     }
-    // lookup(k): [first,last) range in skey/scid/spos matching canonical key k,
-    // or (0,0) if absent -- replaces cidx.find(can)/it->second.
+    _bslap("idx: cap+emit");
+    // lookup(k): [first,last) range in sidx matching canonical key k, or (0,0).
     auto lookup_range = [&](uint64_t k) -> std::pair<size_t,size_t> {
         const size_t h = (size_t)(FlatKmerSet::mix(k) >> (64 - BDIR));
         size_t i = sdir[h]; const size_t e = sdir[h + 1];
-        while (i < e && skey[i] != k) ++i;
+        while (i < e && sidx[i].key != k) ++i;
         if (i == e) return {0, 0};
         size_t j = i + 1;
-        while (j < e && skey[j] == k) ++j;
+        while (j < e && sidx[j].key == k) ++j;
         return {i, j};
     };
     // idx (the hash map) is now built ONLY for gapped_indel_scan, which is
@@ -1068,7 +1082,7 @@ inline Substrate build_substrate(const std::vector<std::string>& seqs, const Cal
                 uint64_t rcv = rc25(v), can = v < rcv ? v : rcv;
                 const auto rng = lookup_range(can);
                 for (size_t ri = rng.first; ri < rng.second; ++ri) {
-                    const std::pair<uint32_t,uint32_t> pr{scid[ri], spos[ri]};
+                    const std::pair<uint32_t,uint32_t> pr{sidx[ri].ci, sidx[ri].pos};
                     const std::string& c = S.contigs[pr.first];
                     // seed may be stored in either orientation; try both implied starts
                     for (int which = 0; which < 2; ++which) {
