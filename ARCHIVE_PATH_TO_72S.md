@@ -1,3 +1,10 @@
+> **SUPERSEDED by `ARCHIVE_CALLER_SPEED_RAM.md`.** The numbers below were
+> correct when written (71.9 s / 10.5 GB) but further work took the same
+> pipeline to 55.1 s / 7.06 GB, and the RAM axis is only covered there. Kept in
+> place per CLAUDE.md rule 5 rather than deleted, because the "two recurring
+> shapes" section and the measurement notes are what the later work was built
+> on.
+
 # Archive-path caller: 128.5 s -> 71.9 s, 13.3 GB -> 10.5 GB
 
 Target was 100 s. Final is **71.9 s**. Every number below is `capsule_decode
