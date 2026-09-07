@@ -1118,13 +1118,22 @@ static int capsule_call_from_archive(const std::string& in, const std::string& o
         // vector now that the contigs arrive in memory.
         //
         // Same streams, same decode, same order; the file is just read once.
-        std::vector<uint8_t> pb, sbv, spb, ofl, ovl;
+        // pos_sec/pos_region are REQUIRED here: pos_abs alone carries only the
+        // MAIN-region positions since the region split, so reading it without
+        // joining silently drops every second-region read's placement. This was
+        // measured, not assumed -- the end-to-end benchmark reported
+        // 371,009/460,501 placements, and the missing 89,492 is exactly the
+        // second-region read count.
+        std::vector<uint8_t> pb, psec, preg, sbv, spb, ofl, ovl;
+        uint64_t _pl = 0, _me = 0;          // pg length / main-region end, needed by the join below
         {
-            uint64_t _pl = 0, _me = 0; uint32_t _mm = 0;
+            uint32_t _mm = 0;
             std::vector<Stream> _ss;
             if (read_capsule(in.c_str(), _pl, _me, _mm, _ss)) {
                 for (auto& st : _ss) {
                     if      (st.name == "pos_abs")        pb  = capsule_decode_stream(st.coded, 1);
+                    else if (st.name == "pos_sec")        psec = capsule_decode_stream(st.coded, 1);
+                    else if (st.name == "pos_region")     preg = capsule_decode_stream(st.coded, 1);
                     else if (st.name == "pos_strand")     sbv = capsule_decode_stream(st.coded, 1);
                     else if (st.name == "contig_spans")   spb = capsule_decode_stream(st.coded, 1);
                     else if (st.name == "orig2uid_flags") ofl = capsule_decode_stream(st.coded, 1);
@@ -1138,6 +1147,10 @@ static int capsule_call_from_archive(const std::string& in, const std::string& o
                     spb.empty() ? "contig_spans" : "pos_abs");
             return 1;
         }
+        // Restore the full position array: pos_abs holds only main-region
+        // positions since the split, and reading it alone silently drops every
+        // second-region read.
+        pb = caps_join_positions(pb, psec, preg, _me);
         // spans -> a sorted table of contig starts
         std::vector<uint64_t> cstart, cend;
         { size_t p2 = 0;
