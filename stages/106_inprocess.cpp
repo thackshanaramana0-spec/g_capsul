@@ -334,7 +334,16 @@ static void phase(const char* name){
     g_tp = now;
 }
 
+#ifndef CAPS_VERSION
+#define CAPS_VERSION "1.0.0"
+#endif
+
 int main(int argc,char** argv){
+    // --version must be answered BEFORE any argument parsing, or it is
+    // treated as an input filename.
+    if(argc>=2 && (!strcmp(argv[1],"--version")||!strcmp(argv[1],"-V"))){
+        printf("g_capsul encoder %s (archive format v2)\n", CAPS_VERSION);
+        return 0; }
     phase_init();
     if(argc>1) g_input_path = argv[1];
     // Resolve to absolute IMMEDIATELY, before any candidate/GSEARCH fork can

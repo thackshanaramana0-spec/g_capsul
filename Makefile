@@ -18,10 +18,14 @@ check-deps:
 	@echo '#include <lzma.h>' | g++ -E -x c++ - >/dev/null 2>&1 || \
 	  { echo "FATAL: liblzma headers not found (apt install liblzma-dev)"; exit 1; }
 
-$(BIN)/capsule_encode: | $(BIN)
+# Depend on the actual sources, or make will happily hand back a stale binary.
+ENC_SRC := stages/106_inprocess.cpp $(wildcard include/*.h)
+DEC_SRC := stages/capsule_decode.cpp $(wildcard include/*.h)
+
+$(BIN)/capsule_encode: $(ENC_SRC) scripts/build106.sh | $(BIN)
 	bash scripts/build106.sh $@
 
-$(BIN)/capsule_decode: | $(BIN)
+$(BIN)/capsule_decode: $(DEC_SRC) scripts/build_decode.sh | $(BIN)
 	bash scripts/build_decode.sh $@
 
 $(BIN):

@@ -1216,7 +1216,16 @@ static int capsule_call_from_archive(const std::string& in, const std::string& o
 }
 
 #ifndef CAPSULE_NO_MAIN
+#ifndef CAPS_VERSION
+#define CAPS_VERSION "1.0.0"
+#endif
+
 int main(int argc,char** argv){
+    // --version must be answered BEFORE any argument parsing, or it is
+    // treated as an input filename.
+    if(argc>=2 && (!strcmp(argv[1],"--version")||!strcmp(argv[1],"-V"))){
+        printf("g_capsul decoder %s (archive format v2)\n", CAPS_VERSION);
+        return 0; }
     // Claim 2 from a STORED archive: capsule_decode call <in.capsule> <out.vcf> [workdir]
     if(argc>=4 && !strcmp(argv[1],"call"))
         return capsule_call_from_archive(argv[2], argv[3], argc>4?argv[4]:std::string());
