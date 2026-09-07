@@ -277,3 +277,56 @@ measurement. **`literal` is closed by evidence, with nothing shipped from it.**
 The structural win in Claim 1 remains the `pos_abs` region split (section 2):
 not a tuned constant, but a decomposition keyed on a measured property of each
 read, separating two populations with an 18x entropy gap.
+
+## 11. Encoder speed and RAM
+
+Same method as the size work: profile, sub-divide, act only on structure.
+
+### 11.1 The one change that shipped
+
+The stage profile shows RAM more than DOUBLING in a single stage (296 -> 624 MB)
+which is also the largest time item. That stage is the stream-coding pool, and
+the pool is **already perfect**: wall 2.06 s against an Amdahl floor of 2.06 s.
+So only the LONGEST job can matter.
+
+`mm_pos` was that job, and it is pathological: 2.06 s for 693 KB of input, while
+`pos_abs` codes 6.2 MB in 1.88 s -- 15x slower per byte. Instrumented:
+
+    flat encode      0.56 s -> 491,597 B
+    bucket encode    1.58 s -> 422,073 B     <- 74% of the encoder's critical path
+
+`mmpos_encode_buckets` is a NESTED search: per bucket it builds two layouts
+(row-major and transposed) and probes FOUR coders on each, all serial. Buckets
+are independent, so they are now coded concurrently with results emitted in the
+original map order.
+
+    SRR554369    7.24 -> 6.92 s  (-4.4%)
+    SRR29296997  3.02 -> 2.83 s  (-6.3%)
+    ERR552797    5.31 -> 5.17 s  (-2.6%)
+
+Archive BYTE-IDENTICAL on all three, three runs each.
+
+### 11.2 Three things measured and REJECTED
+
+| idea | measurement | why it failed |
+|---|---|---|
+| run mm_pos/mm_cnt CANDIDATE searches concurrently | -3.1% on one dataset, +0.4% and +0.7% on two others, +30 MB | the pool was a flat PLATEAU (mm_pos 2.06 s, pos_abs 1.88 s); shortening the top job merely exposes the next |
+| finer chunking of `pos_abs` (CHUNK_TARGET 2 MB -> 1 MB -> 512 KB) | archive +302 B then +6,718 B, and `pos_abs` got SLOWER: 1.84 -> 2.37 s | more concurrent LZMA states thrash cache and bandwidth. **Idle threads are not free capacity when the work is bandwidth-bound** |
+| parallelise `mm_cnt`'s three searches | 7.07->7.09, 2.88->2.90, 5.34->5.28 s -- all noise, RAM worse on one | it was not the bottleneck. The target came from ONE run of a DIFFERENT binary; on the committed state `pos_abs` is longest in every run |
+
+The third is worth stating plainly: the same change is right or wrong depending
+on which job is currently longest, and that must be re-read from the CURRENT
+binary, not carried over from an earlier profile.
+
+### 11.3 The floor
+
+At the committed state the pool's longest job is `pos_abs` on every dataset
+measured -- 1.85 s of a 1.85 s pool on SRR554369, 0.85 s of 0.85 s on
+SRR29296997. It is one `best_encode_chunked` over 6.2 MB at 2 chunks, and
+finer chunking is refuted above on BOTH axes.
+
+So the encoder is bounded by a single stream's coder search, and the remaining
+levers are not scheduling: either a cheaper search (fewer probe coders, which
+trades size) or a smaller `pos_abs` (which is what the region split already
+did -- it cut this stream 1,264,855 -> 1,033,835 B and therefore also shortened
+this job).
