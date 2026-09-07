@@ -651,3 +651,65 @@ MAY NOT:
 
 That last clause matters: it is true, it is checkable, and omitting it invites
 a reviewer to find the instability and assume it is a defect.
+
+---
+
+## 14. The novelty claim, as the code actually supports it
+
+Not "one tool does two things" -- that is a packaging claim and a reviewer will
+say so. The claim is about **where the calls come from**, and it is checkable
+in the code.
+
+### 14.1 What the full path takes from the archive
+
+Verified in `stages/capsule_decode.cpp` and confirmed in a full chr20 run log:
+
+    [call]  2,013,550 contigs from the archive's pseudogenome
+    [call]  12,604,917/12,604,917 read placements rebuilt from the archive
+            (2,013,550 contig spans)
+
+**Every read's placement** is recovered from `pos_abs` + `pos_strand` +
+`contig_spans` -- streams the compressor wrote because it needed them to encode
+the reads, not because a caller wanted them. The pseudogenome is the assembly
+the compressor built to compress against. Calling reuses both.
+
+### 14.2 It is not a graph caller — this is the part to state plainly
+
+The de Bruijn traversal is gated on `CAPS_DBG` (`include/caps_caller.h`, the
+`if (std::getenv("CAPS_DBG") && ...)` guard before the bubble loop).
+`capsule_decode.cpp` sets `CAPS_DBG` **only** when `CAPS_CALL_INDELS` is unset,
+and explicitly unsets it otherwise. So in the SNV+indel configuration:
+
+- **no de Bruijn graph is built**
+- **no bubbles are enumerated**
+- the full-path run log contains **zero** `[DBG]` traversal lines
+
+Calls come from a **pileup over the archive's own read placements** against the
+retained pseudogenome. The k-mer counter that is built is used only as a
+support oracle (`kcount_at`) to score candidate haplotypes in the indel pass --
+it is a counting table, not a graph.
+
+### 14.3 The honest boundary
+
+The caller does not merely read the archive's placements and stop. It collapses
+duplicate contigs and RE-places reads against that collapsed substrate
+(`build_substrate`), starting from the encoder's placement and keeping it
+wherever the contig survives. State it that way: **the archive supplies the
+assembly and an initial placement for every read; the caller refines those
+placements and calls from them.** Do not claim zero recomputation -- the k-mer
+counts and the re-placement are real work, and the profile shows their cost.
+
+### 14.4 How to phrase it
+
+> Variants are called directly from the compressed archive. The pseudogenome
+> assembled during compression, and the per-read placements onto it that the
+> encoder stores in order to code the reads, are reused as the calling
+> substrate: every one of the 12.6 M reads is restored to its position without
+> alignment to any reference and without constructing an assembly graph.
+> Contrast this with bubble-enumeration callers, which build a de Bruijn graph
+> de novo, and with alignment-based callers, which require an external
+> reference; here the structures the calls are made from are a by-product of
+> lossless compression.
+
+The distinguishing sentence is the last one. Everything else in this document
+is engineering; that is the claim.
