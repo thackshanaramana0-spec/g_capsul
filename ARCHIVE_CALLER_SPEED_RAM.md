@@ -382,3 +382,37 @@ The RAM gap has the same shape: DiscoSNP holds 3.29 GB because GATB streams its
 k-mer partitions and never materialises the whole counter set, while `kc` here
 is 140,719,632 x 16 B = 2.25 GB resident plus ~4.4 GB of decoded reads and
 quality. Closing that means streaming kc, not shaving allocations.
+
+### 10.5 The 1-FP difference: chased to the end, and it is not a call change
+
+The F1 gate showed one extra false positive (2655 -> 2656) with TP and FN
+identical. The tempting reading was "nondeterminism, ignore it". That was
+tested and REFUTED -- repeat runs are stable per binary (2655/2655 and
+2656/2656), so the difference is real and attributable.
+
+The chase, each step measured rather than argued:
+
+| step | result |
+|---|---|
+| Is it the kc merge? | **No.** `dec_final` (has the merge, not the handover) gives 2655, same as pre-session |
+| Did kc change? | **No.** kc nodes 140,719,632, branching 1,226,535, bubbles 115,842, anchored 591,248 -- identical |
+| Did emission change? | **No.** emitted=101,984 with identical filter drops (covcap dropped=13,858) |
+| Is the FASTA round trip lossy? | **No.** 2 records, 457,043,834 bytes = PG_LEN exactly, zero non-ACGT |
+| Are the dcontig sequences the same? | **Yes as a SET** (sorted md5 identical, 115,842 both) but in a **different ORDER** (unsorted md5 differs) |
+| Is the call set the same? | **YES, proven.** Keying every record by its contig's SEQUENCE instead of its label: 111,766 records each, exact match including INFO |
+
+So the caller's output is unchanged. What differs is only the `dcontig_N`
+numbering, which changes the order contigs reach `bwa`, which changes which
+duplicate `lift_vcf.py` keeps at 2-3 positions -- visible as ALT disagreements
+at the SAME coordinate (e.g. 20:26,260,686 C>A against C>T) and a lifted record
+count of 47,332 against 47,334.
+
+**Two things follow, and the second matters beyond this change.**
+
+1. The change is output-preserving at the strongest level this path admits.
+2. **The published F1 on this path carries a +/-1-FP sensitivity to bubble
+   enumeration order that is inherent to the tool.** The baseline binary has it
+   too -- it differs from ITSELF in 223,524 VCF records. Any future comparison
+   here must key on contig sequence, not on `dcontig_N`, or it will chase this
+   artefact. `docs/` already warned that VCF byte-identity is not a valid gate;
+   this is the concrete mechanism.
