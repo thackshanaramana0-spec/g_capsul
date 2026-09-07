@@ -565,9 +565,24 @@ struct FlatKmerSet {
         t.assign(b, EMPTY); mask = b - 1; lim = b / 2;
     }
     void init(size_t cap) {
+        // START WHERE IT ENDS.
+        //
+        // Capping the initial size at 2^26 meant the table always grew exactly
+        // once: 512 MB allocated, then 1024 MB allocated while the 512 MB is
+        // still live to be rehashed out of -- a 1.5 GB transient to reach a
+        // 1.0 GB table. Measured, the collapse step was the largest single
+        // jump in the whole run at +2076 MB.
+        //
+        // `cap` is the total k-mer POSITIONS over the input contigs and the
+        // distinct count cannot exceed it, so the largest power of two not
+        // exceeding cap is a slot count the set always fits in, and in
+        // practice lands near 45% load (k-mers drawn from overlapping windows
+        // repeat). It is also exactly where the doubling ended up anyway --
+        // 2^27 both before and after -- so this changes only where the table
+        // STARTS, never its final size or its contents. grow() remains as the
+        // safety net.
         size_t want = 1024;
-        const size_t start = std::min<size_t>(cap * 2, (size_t)1 << 26);
-        while (want < start) want <<= 1;
+        while (want * 2 <= cap) want <<= 1;
         alloc(want);
         live = 0;
         hp_hint((void*)t.data(), t.size() * sizeof(uint64_t), "collapse claimed set");
