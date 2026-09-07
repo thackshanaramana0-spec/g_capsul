@@ -74,3 +74,64 @@ Claim 3 is intact after the split. All three operations verified exact against
 independent ground truth, the architectural distinction between them is visible
 in the measurements, and `query`'s known weak result now has a measured
 structural explanation rather than an open question.
+
+## 5. Component-level optimisation — what was found and what remains
+
+After verification, each mode was audited at the STREAM level: list what the
+block actually references, compare against what has already been decoded when
+control reaches it. Three instances of one defect class -- work done before an
+early exit that does not need it -- with three different outcomes.
+
+### 5.1 `coverage` — 2.43x, shipped
+
+Its exit sat BELOW the entire assembly layer: `seq_decode_mem` (the
+context-mixing literal decode, the most expensive stream in the archive),
+`refc::decode`, and `mem_dstgap`/`mem_len`/`mem_rc`/`mem_self`. It reads none
+of them -- only `pos_abs`, `read_lengths`, `orig2uid`, and the scalars `PGLEN`
+and `MAINEND`.
+
+    coverage  0.260 -> 0.107 s   (2.43x)
+    output byte-identical, covered-bases identity still exact
+
+Claim 3 asserts coverage is "served without reconstructing the assembly". That
+was true of the design and false of the code path; it is now true of both. The
+published speedup against bwa+samtools+mosdepth moves from 23-33x to ~56-80x.
+
+### 5.2 `query` — measured, REJECTED
+
+`pos_strand` and the three `mm_cnt` streams are decoded before the query exit
+and referenced zero times by it. Deferring them was correct -- query output
+byte-identical AND the full round trip still lossless -- and **neutral**:
+0.200 -> 0.200 s. Those streams are small and the pg rebuild dominates.
+Reverted rather than kept as harmless.
+
+### 5.3 `export` — no defect, an earlier suspicion CORRECTED
+
+A first pass suggested export decodes read-level streams (`pos_abs`,
+`read_lengths`, `orig2uid`, `qual_index`) it does not need. Checking precisely,
+only `contig_spans` lies between the pg completing and the export exit, and
+export genuinely uses it for the per-contig path. Everything else it decodes IS
+the assembly. No change made.
+
+## 6. Final state, three runs each, verified against independent ground truth
+
+| operation | time | peak | pg rebuilds | correctness |
+|---|---|---|---|---|
+| `export` | 0.183 s | 36 MB | 1 | 18,002,109 bases = PG_LEN **exact** |
+| `coverage` | **0.110 s** | 85 MB | **0** | 69,535,651 = sum(read_lengths) **exact** |
+| `query` | 0.200 s | 42 MB | 1 | 7,785 reads, 0 outside range **exact** |
+
+## 7. Verdict on Claim 3
+
+**Closed.** One real optimisation found and shipped (2.43x on coverage), one
+measured and rejected, one suspicion corrected. Every remaining cost has a
+stated structural cause:
+
+- `export` and `query` rebuild the pseudogenome because they need its CONTENT,
+  and the rebuild cannot be windowed -- 99.7% of references reach back more than
+  100 kb (§3).
+- `coverage` now touches nothing but the streams it reads.
+
+No further optimisation is available without an archive-format change (periodic
+self-contained restart points), which would cost the compression ratio Claim 1
+defends.
