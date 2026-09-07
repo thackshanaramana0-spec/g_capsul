@@ -124,3 +124,65 @@ Either `decode_105.py` is stale relative to the encoder for those parameters,
 or a real defect exists at `MINOV=105`. Do not treat it as cleared just because
 the archive path round-trips; and do not treat the archive path as suspect just
 because this script fails -- they are different code.
+
+## 7. `literal` (25%): investigated to the end, and it is DONE
+
+The stated lever was "a DNA-specific context model". **That premise was wrong:
+one already exists.** `run_chunk` in `include/seqpar_core.h` is a
+context-mixing coder of the GeCo/XM class -- ten hashed context orders
+(`ORD = {1,2,3,4,6,8,11,14,18,22}`), logistic mixing with weights learned per
+(node, history) context, an APM/SSE refinement stage, a match model for
+LZ-style repeats, and binary arithmetic coding at 2 bits/base.
+
+### 7.1 It beats every general-purpose coder available
+
+On the 3,148,818-base literal, ours codes 654,371 B (1.663 b/base):
+
+| coder | bytes | vs ours |
+|---|---|---|
+| **ours (CM)** | **654,371** | -- |
+| xz -9e | 713,472 | +9.0% |
+| zstd -19 --ultra --long | 727,204 | +11.1% |
+| bzip2 -9 | 751,246 | +14.8% |
+
+### 7.2 Table size: refuted twice, at two scales
+
+`TBITS=16` gives each order 65,536 slots while `ORD` reaches 22, so the high
+orders collide heavily. That looked like an obvious defect. It is not worth
+fixing:
+
+| TBITS | archive (3.1 Mbase literal) | delta | enc peak |
+|---|---|---|---|
+| 16 | 2,585,780 | -- | 318 MB |
+| 18 | 2,584,917 | -863 | 332 MB |
+| 20 | 2,583,757 | -2,023 | 422 MB |
+| 22 | 2,582,909 | -2,871 (**0.11%**) | **795 MB** |
+
+The first explanation was that the model is DATA-starved rather than
+table-starved -- 3.1 Mbases cannot populate order-11+ statistics. That makes a
+falsifiable prediction: the gain should grow with literal size. **It was tested
+at 10x scale and the prediction FAILED:**
+
+| TBITS | archive (chr20 4M subset) | literal | enc s | peak |
+|---|---|---|---|---|
+| 16 | 34,775,005 | 15,625,547 | 52.69 | 1,265 MB |
+| 22 | 34,730,681 | 15,581,223 | 65.99 | 1,660 MB |
+
+**-0.13% for +25% encode time and +31% RAM.** Flat against the 0.11% at small
+scale. So the high orders carry little information on this data at any size
+tested, and `TBITS=16` is the correct setting on the three-axis trade. Reverted.
+
+### 7.3 Chunk count: already at its knee
+
+The chunk count is a COMPRESSION parameter, not only a threading one, because
+the model tables are allocated per chunk and restart with each. This was
+already measured and is documented in the source: E. coli literal at 12 chunks
+1,809,073 B, 4 chunks 1,804,223 B, 1 chunk 1,801,710 B. Four costs 2.5 KB
+against the single-chunk optimum while staying parallel. `SEQT` tunes it.
+
+### 7.4 Verdict
+
+`literal` is at its practical bound. The model is the right class, its table
+size is correct on the three-axis trade at two scales, and its chunking is at
+the documented knee. No further work here without a fundamentally different
+model, and general-purpose coders are already 9-15% behind.
