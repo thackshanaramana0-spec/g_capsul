@@ -188,6 +188,16 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
                        std::vector<std::string>* out_qtext = nullptr,
                        std::vector<std::string>* out_contigs = nullptr){
     auto _dt0 = std::chrono::steady_clock::now();
+    // [DEC-RSS] temporary: the run's PEAK is 13.2 GB while the caller's own
+    // RSS is 4.8 GB, so ~8.4 GB is transient in here. Find out where.
+    auto _rssmb = []() -> long { FILE* f=fopen("/proc/self/status","r"); if(!f) return -1;
+        char l[256]; long kb=-1; while(fgets(l,sizeof l,f)) if(!strncmp(l,"VmRSS:",6)){sscanf(l+6,"%ld",&kb);break;}
+        fclose(f); return kb/1024; };
+    auto _rsspk = []() -> long { FILE* f=fopen("/proc/self/status","r"); if(!f) return -1;
+        char l[256]; long kb=-1; while(fgets(l,sizeof l,f)) if(!strncmp(l,"VmHWM:",6)){sscanf(l+6,"%ld",&kb);break;}
+        fclose(f); return kb/1024; };
+    auto _rss = [&](const char* where){ fprintf(stderr,"[DEC-RSS] %-26s rss=%ldMB peak=%ldMB\n", where, _rssmb(), _rsspk()); };
+    _rss("entry");
     uint64_t PGLEN=0, MAINEND=0; uint32_t MINMEM=0; std::vector<Stream> ss;
     if(!read_capsule(arcpath,PGLEN,MAINEND,MINMEM,ss)){ fprintf(stderr,"bad archive\n"); return 1; }
     std::map<std::string,std::vector<uint8_t>> S;
@@ -334,10 +344,12 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
       if(applied) fprintf(stderr,"  extension mismatches applied: %zu\n", applied);
     }
     fprintf(stderr,"  pg rebuilt: %llu bytes from %zu refs\n",(unsigned long long)PGLEN,NR);
+    _rss("after read_capsule / pg built");
     if(getenv("DUMP_PG")){
         FILE* f=fopen("pg_full_dec.txt","wb"); fwrite(pg.data(),1,pg.size(),f); fclose(f);
     }
 
+    _rss("after quality");
     // ── CONTIGS HANDED BACK IN MEMORY ───────────────────────────────────────
     // The caller used to get its contigs by invoking this whole function a
     // SECOND time in "export" mode: re-open the archive, re-decode the ref and
@@ -602,7 +614,9 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
           }
           off+=cnt;
       } }
+    _rss("before mm_sym decode");
     auto obs = mmc::decode(S["mm_sym"].data(), S["mm_sym"].size(), refs);
+    _rss("after mm_sym decode");
 
     // ---- reconstruct the reads (was decode_105.py) -------------------------
     // That script was 80% of decompression wall clock and set the memory peak
@@ -619,7 +633,9 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
         // so the layout is computed up front and filled in parallel.
         std::vector<size_t> rowoff(NO+1,0);
         for(size_t o=0;o<NO;++o) rowoff[o+1]=rowoff[o]+(o<lengths.size()?lengths[o]:0)+1;
+        _rss("before flat alloc");
         std::vector<uint8_t> flat(rowoff[NO], '\n');
+        _rss("after flat alloc");
 
         std::atomic<size_t> nxo{0};
         unsigned T=std::max(1u,std::thread::hardware_concurrency());
@@ -725,6 +741,7 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
     // consumer reduces quality to one bit per base anyway, so decoding 1.86 GB
     // of text and writing it out only to re-read it was the wrong
     // representation as well as the wrong number of cores (1 of 12).
+    _rss("before quality");
     if(has("qual_body") && out_qtext && !getenv("CAPS_SKIP_QUAL")){
         // Full-caller route: quality as TEXT, in memory, in parallel. Same
         // characters decode_to_file produced; no 590 MB write and re-read, and

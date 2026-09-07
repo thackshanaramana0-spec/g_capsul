@@ -518,6 +518,19 @@ namespace detail {
 // in are not remapped. Every call site must sit immediately after the
 // allocation and before the first write, and the log line says which arrays
 // actually got it.
+inline long caps_hwm_mb() {
+    FILE* f = fopen("/proc/self/status", "r"); if (!f) return -1;
+    char l[256]; long kb = -1;
+    while (fgets(l, sizeof l, f)) if (!strncmp(l, "VmHWM:", 6)) { sscanf(l + 6, "%ld", &kb); break; }
+    fclose(f); return kb / 1024;
+}
+inline long caps_rss_mb() {
+    FILE* f = fopen("/proc/self/status", "r"); if (!f) return -1;
+    char l[256]; long kb = -1;
+    while (fgets(l, sizeof l, f)) if (!strncmp(l, "VmRSS:", 6)) { sscanf(l + 6, "%ld", &kb); break; }
+    fclose(f); return kb / 1024;
+}
+
 inline void hp_hint(void* base, size_t len, const char* what) {
     if (!base || len < (2u << 20)) return;
     uintptr_t a0 = ((uintptr_t)base + (2u<<20) - 1) & ~(uintptr_t)((2u<<20) - 1);
@@ -783,8 +796,9 @@ inline Substrate build_substrate(const std::vector<std::string>& seqs, const Cal
     using _bsclk = std::chrono::steady_clock;
     auto _bst0 = _bsclk::now(); auto _bsl = _bst0;
     auto _bslap = [&](const char* nm){ auto now=_bsclk::now();
-        fprintf(stderr, "[BS-SPLIT] %-18s %7.2fs\n", nm,
-                std::chrono::duration<double>(now-_bsl).count()); _bsl=now; };
+        fprintf(stderr, "[BS-SPLIT] %-18s %7.2fs  rss=%ldMB peak=%ldMB\n", nm,
+                std::chrono::duration<double>(now-_bsl).count(),
+                caps_rss_mb(), caps_hwm_mb()); _bsl=now; };
 
     // 1. contig set
     std::vector<uint32_t> keep;
@@ -1400,8 +1414,9 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
     using _kcclk = std::chrono::steady_clock;
     auto _kcl = _kcclk::now();
     auto _kclap = [&](const char* nm){ auto now=_kcclk::now();
-        fprintf(stderr, "[KC-SPLIT] %-20s %7.2fs\n", nm,
-                std::chrono::duration<double>(now-_kcl).count()); _kcl=now; };
+        fprintf(stderr, "[KC-SPLIT] %-20s %7.2fs  rss=%ldMB peak=%ldMB\n", nm,
+                std::chrono::duration<double>(now-_kcl).count(),
+                caps_rss_mb(), caps_hwm_mb()); _kcl=now; };
     // ── HUGE PAGES FOR kc ───────────────────────────────────────────────────
     // kc reaches ~2.1 GB at full chr20 (140,719,632 x 16 B) and the bubble
     // traversal BINARY-SEARCHES it, so that walk is dTLB-bound. This box runs
@@ -4999,7 +5014,8 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             const double d = elapsed_s(_ip0, clk::now());
             g_ipsum += d;
             g_ip_last = clk::now();
-            fprintf(stderr, "[INDEL-PROF] %-24s %8.2fs\n", what, d);
+            fprintf(stderr, "[INDEL-PROF] %-24s %8.2fs  rss=%ldMB peak=%ldMB\n", what, d,
+                    caps_rss_mb(), caps_hwm_mb());
             _ip0 = clk::now();
         };
         // KEEP ONLY THE RUNS THAT DO WORK.
@@ -5806,7 +5822,26 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 // Build is the count -> prefix-sum -> parallel-fill-by-index
                 // pattern already used for kidx above, so entry order matches
                 // the serial push order exactly.
-                struct PE { uint64_t k; uint32_t ci, pos; uint8_t fwd; };
+                // 16 BYTES, NOT 24.
+                //
+                // {uint64 k; uint32 ci, pos; uint8 fwd} pads to 24 B, and this
+                // array holds one entry per contig k-mer position -- 106.4M on
+                // the 4M-read subset, so 2.55 GB, which the parallel stable_sort
+                // then copies. That pair is the run's memory PEAK: 13.54 GB,
+                // measured, with the sort alone adding 3.3 GB.
+                //
+                // A canonical 25-mer occupies 50 bits, so the orientation flag
+                // rides in bit 63 of the key and the record is exactly two
+                // 8-byte words: 1.70 GB, and 1.70 GB for the sort's temporary.
+                // The sort masks the flag off, so the ordering -- and the
+                // stability the run-grouping below depends on -- is unchanged.
+                struct PE {
+                    uint64_t kf;                       // bit 63 = fwd, bits 49..0 = key
+                    uint32_t ci, pos;
+                    enum : uint64_t { FWD = 1ULL << 63 };   // local class: enum, not a static member
+                    inline uint64_t key() const { return kf & ~(uint64_t)FWD; }
+                    inline uint8_t  fwd() const { return (uint8_t)(kf >> 63); }
+                };
                 std::vector<PE> pv;
                 const size_t PNC = pc_cd.contigs.size();
                 {
@@ -5829,7 +5864,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                         for (size_t i2 = 0; i2 + 25 <= c.size(); ++i2) {
                             uint64_t v; if (!pack25(c.data() + i2, v)) continue;
                             const uint64_t rv = rc25(v), cn = v < rv ? v : rv;
-                            pv[w++] = { cn, (uint32_t)ci, (uint32_t)i2, (uint8_t)(v <= rv ? 0 : 1) };
+                            pv[w++] = { cn | (v <= rv ? 0ULL : (uint64_t)PE::FWD), (uint32_t)ci, (uint32_t)i2 };
                         }
                     }
                 }
@@ -5840,19 +5875,19 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 // entry of a run is the first-seen occurrence.
                 #if defined(_OPENMP) && defined(_GLIBCXX_PARALLEL_ALGO_H)
                 __gnu_parallel::stable_sort(pv.begin(), pv.end(),
-                    [](const PE& a, const PE& b){ return a.k < b.k; });
+                    [](const PE& a, const PE& b){ return a.key() < b.key(); });
                 #else
                 std::stable_sort(pv.begin(), pv.end(),
-                    [](const PE& a, const PE& b){ return a.k < b.k; });
+                    [](const PE& a, const PE& b){ return a.key() < b.key(); });
                 #endif
                 pkidx.reserve(pv.size() / 8 + 1);
                 for (size_t a0 = 0; a0 < pv.size(); ) {
                     size_t b0 = a0;
-                    while (b0 < pv.size() && pv[b0].k == pv[a0].k) ++b0;
+                    while (b0 < pv.size() && pv[b0].key() == pv[a0].key()) ++b0;
                     const size_t occ = b0 - a0;
                     // first-seen entry decides contig/pos/orientation
-                    if (pv[a0].fwd == 0 && (int)occ <= PUNIQ && occ == 1)
-                        pkidx.append(pv[a0].k, pv[a0].ci, pv[a0].pos);
+                    if (pv[a0].fwd() == 0 && (int)occ <= PUNIQ && occ == 1)
+                        pkidx.append(pv[a0].key(), pv[a0].ci, pv[a0].pos);
                     a0 = b0;
                 }
                 fprintf(stderr, "[PCLUSTER] %zu 25-mers -> %zu unique forward anchors\n",
