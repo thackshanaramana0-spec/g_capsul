@@ -6196,158 +6196,101 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             // ORDER, then by read index. That reproduces the serial insertion
             // order exactly, which matters because `vec.size() < 200` caps each
             // key -- a different arrival order would keep a different 200.
-            std::vector<uint32_t> rc_off;                              // CSR offsets, size |pkidx|+1
-            std::vector<std::pair<uint32_t,uint32_t>> rc_val;          // CSR values
-            {
-                int nt = 1;
-                #ifdef _OPENMP
-                nt = omp_get_max_threads();
-                #endif
-                std::vector<std::vector<std::pair<uint32_t,std::pair<uint32_t,uint32_t>>>> tb((size_t)nt);
-                #pragma omp parallel for schedule(static)
-                for (long long i = 0; i < (long long)seqs.size(); ++i) {
-                    int tid = 0;
-                    #ifdef _OPENMP
-                    tid = omp_get_thread_num();
-                    #endif
-                    auto& buf = tb[(size_t)tid];
-                    const std::string& q = seqs[(size_t)i];
-                    Roll25 rw; const size_t qn = q.size();
-                    for (size_t b3 = LW; b3 < qn; ++b3) {
-                        rw.push(q[b3]);
-                        if (b3 + 1 < (size_t)LW + (size_t)AK) continue;
-                        if (!rw.ok()) continue;
-                        const size_t j = b3 + 1 - (size_t)AK;
-                        const uint64_t cn = rw.canon();
-                        const size_t ai = pkidx.lookup(cn);
-                        if (ai == (size_t)-1) continue; // provably dead otherwise
-                        buf.push_back({(uint32_t)ai, {(uint32_t)i, (uint32_t)j}});
-                    }
-                }
-                // ── CSR MERGE, NO HASH MAP ──────────────────────────────
-                // rc_reads was an unordered_map<uint64, vector<pair>> filled by
-                // a SERIAL loop -- a hash lookup plus a possible vector
-                // reallocation per entry, tens of millions of times. Now that
-                // pkidx is a sorted array, each key already HAS a dense index,
-                // so the structure can be a flat CSR layout: count per anchor,
-                // prefix-sum to offsets, then fill.
-                //
-                // Read order and the 200-cap are preserved exactly:
-                // schedule(static) gives each thread a contiguous read range,
-                // so visiting thread buffers in id order is read order, and the
-                // count pass applies the same cap the push loop did.
-                {
-                    rc_off.assign(pkidx.size() + 1, 0);
-                    for (int t = 0; t < nt; ++t)
-                        for (auto& e : tb[(size_t)t])
-                            if (rc_off[e.first + 1] < 200) ++rc_off[e.first + 1];
-                    for (size_t i2 = 0; i2 < pkidx.size(); ++i2) rc_off[i2 + 1] += rc_off[i2];
-                    rc_val.resize(rc_off[pkidx.size()]);
-                    std::vector<uint32_t> w(rc_off.begin(), rc_off.end() - 1);
-                    for (int t = 0; t < nt; ++t)
-                        for (auto& e : tb[(size_t)t])
-                            if (w[e.first] < rc_off[e.first + 1]) rc_val[w[e.first]++] = e.second;
-                    decltype(tb)().swap(tb);
-                }
-            }
-            _iplap("  pe: read scan + CSR");
+            // ── READ SCAN AND ANCHOR WORK, FUSED ────────────────────────────
+            //
+            // This used to be two passes with a CSR between them: scan every
+            // read, buffer every (anchor, read, pos) hit per thread, merge the
+            // buffers into rc_off/rc_val grouped by anchor, then walk the
+            // anchors and do the indel comparison. That intermediate cost
+            // 81.3M x 12 B of per-thread buffers plus a 650 MB value array plus
+            // an 86 MB offset array -- measured as the run's largest single
+            // allocation step at +1710 MB.
+            //
+            // The grouping bought exactly one thing: a 200-hits-per-anchor cap,
+            // which is the only part of this that depends on the order hits
+            // arrive. MEASURED, it never binds -- the longest row over
+            // 21,605,670 anchors is 70 hits and at_cap is 0, at 30x coverage on
+            // contig-UNIQUE 25-mers, which is what an anchor is. With the cap
+            // inert, nothing downstream can observe the order: pvotes and panch
+            // are set inserts and ploc keeps the smallest (contig,pos), so all
+            // three are order-free and merge by union/min.
+            //
+            // So the comparison is done inline as each hit is found. Same work,
+            // same per-thread accumulators, same merge -- with no intermediate
+            // at all, and one less pass over 81.3M hits.
             static long g_pc_identical=0, g_pc_nogap=0, g_pc_found=0, g_pc_seen=0;
             // (contig, pos, signed gap, inserted seq) -> supporting reads
             // DISTINCT reads per event, not votes. A read spanning an indel
             // matches many anchors (every unique 25-mer in its right context),
             // so a raw vote count multiplies one read into dozens and is not a
-            // read count at all -- which is why an absolute threshold kept
-            // rising without saturating. Counting distinct read ids makes the
-            // support interpretable and lets it be compared against coverage.
+            // read count at all.
             std::map<std::tuple<std::string,int,std::string>, std::unordered_set<uint32_t>> pvotes;
             std::map<std::tuple<std::string,int,std::string>, std::pair<uint32_t,uint32_t>> ploc;
-            // Distinct ANCHORS backing each event. Independent right-context
+            // Distinct ANCHORS backing each event -- independent right-context
             // anchors are independent evidence, the same standard the bubble
-            // channel applies via MIN_ANCH. Without it a single anchor's worth
-            // of reads can carry an event on its own.
+            // channel applies via MIN_ANCH.
             std::map<std::tuple<std::string,int,std::string>, std::unordered_set<uint32_t>> panch;
-            // NOTE: an attempt to sort these anchors by (contig,pos,key) -- on the
-            // theory that unordered_map iteration order explained a 4-record
-            // difference -- was MEASURED AND REVERTED: it moved the count from
-            // 296 to 289, i.e. FURTHER from the original 300, not closer. That
-            // was the fourth failed explanation for those records. Iterate
-            // pkidx directly, as the original did.
-            // PARALLEL OVER ANCHORS. This loop is the bulk of
-            // `pcluster: scan + emit` (112 s of a ~395 s archive-path run) and
-            // was serial over 21.6M anchors.
-            //
-            // The anchors are flattened into a vector in the map's OWN
-            // iteration order -- NOT sorted. Sorting them was tried and
-            // reverted (it changed which events won ties); preserving the
-            // order means the per-thread results merge back to exactly what
-            // the serial loop produced.
-            //
-            // pvotes/panch are set inserts (order-free) and ploc now keeps the
-            // smallest (contig,pos) rather than the last writer, so all three
-            // merge deterministically regardless of which thread saw an anchor.
-            // pkidx is already a flat sorted array, so the anchor loop indexes
-            // it directly -- the separate panch_v copy is gone.
-            const size_t panch_n = pkidx.size();
             int pc_nt = 1;
             #ifdef _OPENMP
             pc_nt = omp_get_max_threads();
             #endif
             std::vector<std::map<std::tuple<std::string,int,std::string>, std::unordered_set<uint32_t>>> tvotes((size_t)pc_nt), tanch((size_t)pc_nt);
             std::vector<std::map<std::tuple<std::string,int,std::string>, std::pair<uint32_t,uint32_t>>> tloc((size_t)pc_nt);
-            #pragma omp parallel for schedule(dynamic, 4096)
-            for (long long ai = 0; ai < (long long)panch_n; ++ai) {
-                int ptid = 0;
+            // getenv was being called several times PER HIT inside the old
+            // inner loop -- 81.3M hits. Hoisted; the counters it guards are
+            // debug-only and racy, so they stay behind it.
+            const bool PCDBG = std::getenv("CAPS_PCDBG") != nullptr;
+            #pragma omp parallel for schedule(static)
+            for (long long i = 0; i < (long long)seqs.size(); ++i) {
+                int tid = 0;
                 #ifdef _OPENMP
-                ptid = omp_get_thread_num();
+                tid = omp_get_thread_num();
                 #endif
-                auto& pvotes = tvotes[(size_t)ptid];
-                auto& panch  = tanch[(size_t)ptid];
-                auto& ploc   = tloc[(size_t)ptid];
-                const uint64_t akey = pkidx.k[(size_t)ai];
-                uint32_t ccid = pkidx.v[(size_t)ai].first;
-                uint32_t cpos = pkidx.v[(size_t)ai].second;
-                const std::string& cc2 = pc_cd.contigs[ccid];
-                if (cpos < (uint32_t)LW) continue;
-                // CSR: the anchor's own index IS the row, so no lookup at all.
-                const uint32_t rlo = rc_off[(size_t)ai], rhi = rc_off[(size_t)ai + 1];
-                if (rlo == rhi) continue;
-                for (uint32_t rr = rlo; rr < rhi; ++rr) {
-                    const auto& pr = rc_val[rr];
-                    if (std::getenv("CAPS_PCDBG")) ++g_pc_seen;
-                    const std::string& q = seqs[pr.first];
-                    uint32_t rpos = pr.second;
-                    // orient the read so its anchor reads forward like the contig
-                    // AVOID THE COPY IN THE COMMON CASE. `qq` is read-only
-                    // below (verified: no assignment, append, insert, erase,
-                    // resize or clear touches it), and it is either `q` itself
-                    // or its reverse complement. Copying `q` unconditionally
-                    // allocated a full read per CANDIDATE PAIR inside a nested
-                    // loop; only the reverse-complement branch actually needs
-                    // to materialise a new string.
-                    std::string qq_rc;                 // only filled when needed
+                auto& pvotes_t = tvotes[(size_t)tid];
+                auto& panch_t  = tanch[(size_t)tid];
+                auto& ploc_t   = tloc[(size_t)tid];
+                const std::string& q = seqs[(size_t)i];
+                // Reverse complement of this read, built at most ONCE. The old
+                // loop called rc_str(q) per HIT, so a read with many reverse
+                // anchors rebuilt the same string dozens of times.
+                std::string qq_rc; bool rc_built = false;
+                Roll25 rw; const size_t qn = q.size();
+                for (size_t b3 = LW; b3 < qn; ++b3) {
+                    rw.push(q[b3]);
+                    if (b3 + 1 < (size_t)LW + (size_t)AK) continue;
+                    if (!rw.ok()) continue;
+                    const size_t j = b3 + 1 - (size_t)AK;
+                    const size_t ai = pkidx.lookup(rw.canon());
+                    if (ai == (size_t)-1) continue;   // provably dead otherwise
+                    const uint32_t ccid = pkidx.v[ai].first;
+                    const uint32_t cpos = pkidx.v[ai].second;
+                    if (cpos < (uint32_t)LW) continue;
+                    const std::string& cc2 = pc_cd.contigs[ccid];
+                    if (PCDBG) ++g_pc_seen;
+                    // Orientation comes straight from the rolling window:
+                    // rw.f/rw.r ARE the forward k-mer at j and its reverse
+                    // complement, which is what the old code recomputed with
+                    // pack25 + rc25 at this exact position.
                     const std::string* qqp = &q;
-                    uint32_t qp = rpos;
-                    { uint64_t v; pack25(q.data() + rpos, v);
-                      uint64_t rv = rc25(v);
-                      if (v > rv) { qq_rc = rc_str(q); qqp = &qq_rc;
-                                    qp = (uint32_t)(q.size() - rpos - AK); } }
+                    uint32_t qp = (uint32_t)j;
+                    if (rw.f > rw.r) {
+                        if (!rc_built) { qq_rc = rc_str(q); rc_built = true; }
+                        qqp = &qq_rc;
+                        qp = (uint32_t)(q.size() - j - AK);
+                    }
                     const std::string& qq = *qqp;
                     if (qp < (uint32_t)LW) continue;
-                    // walk LEFT from the anchor: contig and read agree, then diverge
                     int d = 0;
                     while (d < LW && cc2[cpos - 1 - d] == qq[qp - 1 - d]) ++d;
-                    if (d >= LW) { if(std::getenv("CAPS_PCDBG")) ++g_pc_identical; continue; }   // identical: no event
-                    // try a single gap of g bases at the divergence point
+                    if (d >= LW) { if (PCDBG) ++g_pc_identical; continue; }   // identical: no event
                     int best_g = 0; std::string best_ins;
                     for (int g = 1; g <= MAXINDEL && !best_g; ++g) {
-                        // deletion in the READ: contig has g extra bases
                         if (cpos >= (uint32_t)(d + g + 10) && qp >= (uint32_t)(d + 10)) {
                             bool ok = true;
                             for (int t = 0; t < 10; ++t)
                                 if (cc2[cpos - 1 - d - g - t] != qq[qp - 1 - d - t]) { ok = false; break; }
                             if (ok) { best_g = g; }
                         }
-                        // insertion in the READ: read has g extra bases
                         if (!best_g && qp >= (uint32_t)(d + g + 10) && cpos >= (uint32_t)(d + 10)) {
                             bool ok = true;
                             for (int t = 0; t < 10; ++t)
@@ -6355,20 +6298,10 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                             if (ok) { best_g = -g; best_ins = qq.substr(qp - d - g, (size_t)g); }
                         }
                     }
-                    if (!best_g) { if(std::getenv("CAPS_PCDBG")) ++g_pc_nogap; continue; }
-                    if (std::getenv("CAPS_PCDBG")) ++g_pc_found;
-                    uint32_t apos2 = cpos - (uint32_t)d;       // contig position of the event
+                    if (!best_g) { if (PCDBG) ++g_pc_nogap; continue; }
+                    if (PCDBG) ++g_pc_found;
+                    const uint32_t apos2 = cpos - (uint32_t)d;   // contig position of the event
                     if (apos2 == 0) continue;
-                    // VOTE KEY. Originally (contig, pos, gap, ins) -- but the
-                    // same genomic locus is covered by 2-7 different contigs
-                    // (measured), and each read anchors to whichever contig its
-                    // 25-mer happens to be unique in, so votes for ONE event
-                    // scatter across several contig ids and never accumulate.
-                    // Measured symptom: 851 read-level gap votes collapsing to
-                    // 64 distinct events, 47 of them with a single supporting
-                    // read. Key instead on the local CONTIG SEQUENCE around the
-                    // event, which is identical across contigs covering the
-                    // same locus and needs no reference genome.
                     std::string ctx;
                     {
                         size_t lo = (apos2 >= 12u) ? (size_t)apos2 - 12u : 0u;
@@ -6376,38 +6309,17 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                         if (hi > lo) ctx = cc2.substr(lo, hi - lo);
                     }
                     auto pkey = std::make_tuple(ctx, best_g, best_ins);
-                    // ── ORDER-INDEPENDENT EVENT LOCATION ────────────────
-                    // pvotes and panch are std::set inserts, so they are
-                    // already independent of the order anchors arrive in.
-                    // `ploc` was a plain assignment -- LAST WRITER WINS -- so
-                    // the event's location depended on which anchor happened to
-                    // be visited last, i.e. on `pkidx`'s unordered_map bucket
-                    // layout, which is an implementation detail of the
-                    // container and changes with insertion history.
-                    //
-                    // MEASURED: rebuilding the index (provably identical anchor
-                    // SET -- 21,605,670 keys, zero differences, checked
-                    // in-process) still moved 4 records, purely because the
-                    // insertion order changed. An earlier attempt to fix this
-                    // by SORTING the loop was wrong and is recorded as such: it
-                    // imposed a THIRD order rather than removing the dependency,
-                    // and moved the count further away (296 -> 289).
-                    //
-                    // The dependency itself is what has to go. Keeping the
-                    // smallest (contig, pos) makes the location a function of
-                    // the DATA rather than of visit order, so any index build
-                    // that yields the same anchors yields the same output.
-                    pvotes[pkey].insert(pr.first);
-                    panch[pkey].insert(cpos);
+                    pvotes_t[pkey].insert((uint32_t)i);
+                    panch_t[pkey].insert(cpos);
                     {
-                        auto lit = ploc.find(pkey);
+                        auto lit = ploc_t.find(pkey);
                         const std::pair<uint32_t,uint32_t> cand(ccid, apos2);
-                        if (lit == ploc.end()) ploc.emplace(pkey, cand);
+                        if (lit == ploc_t.end()) ploc_t.emplace(pkey, cand);
                         else if (cand < lit->second) lit->second = cand;
                     }
                 }
             }
-            _iplap("  pe: anchor loop");
+            _iplap("  pe: read scan + anchor work");
             // MERGE. pvotes/panch are set unions (order-free). ploc keeps the
             // smallest (contig,pos), so the merged value is the minimum over
             // all threads -- identical to the serial minimum regardless of how
