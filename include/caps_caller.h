@@ -2302,10 +2302,46 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         merge_pass(true);
     }
     kc_runs.clear(); kc_runs.shrink_to_fit();
+    // ── DIRECTORY OVER kc ───────────────────────────────────────────────────
+    //
+    // kc_find was a lower_bound over the WHOLE array. At full chr20 that is
+    // 140,719,632 entries, so ~27 dependent probes -- and the graph traversal
+    // calls it for every successor of every solid node, twice per orientation,
+    // over the whole array. It is the same shape already fixed twice in this
+    // file (the seed index and the pcluster anchor map): a sorted array probed
+    // at random is a latency problem, not a comparison problem.
+    //
+    // kc is sorted by RAW k-mer and is final here (nothing mutates it after
+    // this point), so the top KDB bits of a key name a contiguous slice.
+    // Recording each slice's start turns the search into one directory probe
+    // plus a lower_bound over ~8 entries: about 4 touches instead of 27.
+    //
+    // The directory is keyed on the raw k-mer, NOT on a hash, because the array
+    // is in raw order -- so buckets are as uneven as the k-mer distribution.
+    // That is fine for a range narrowing: an over-full bucket just means a
+    // slightly longer bounded search, never a wrong answer. 2^24 entries x 4 B
+    // = 67 MB, independent of input size.
+    //
+    // EXACT: this narrows the search range and changes nothing else. A key is
+    // found iff it was found before.
+    static constexpr int KDB = 24;
+    std::vector<uint32_t> kdir;
+    {
+        const int sh = 62 - KDB;
+        kdir.assign(((size_t)1 << KDB) + 1, 0);
+        for (size_t i = 0; i < kc.size(); ++i) ++kdir[(size_t)(kc[i].kmer >> sh) + 1];
+        for (size_t i = 0; i < ((size_t)1 << KDB); ++i) kdir[i + 1] += kdir[i];
+        fprintf(stderr, "[KC-DIR] %d-bit directory over %zu k-mers (%.1f MB, %.1f entries/bucket)\n",
+                KDB, kc.size(), (double)kdir.size() * 4 / 1048576.0,
+                kc.empty() ? 0.0 : (double)kc.size() / (double)((size_t)1 << KDB));
+    }
     auto kc_find = [&](uint64_t key) -> const KC* {
-        auto it = std::lower_bound(kc.begin(), kc.end(), key,
+        const size_t h = (size_t)(key >> (62 - KDB));
+        const size_t lo = kdir[h], hi = kdir[h + 1];
+        if (lo == hi) return nullptr;
+        auto it = std::lower_bound(kc.begin() + (long)lo, kc.begin() + (long)hi, key,
             [](const KC& e, uint64_t k){ return e.kmer < k; });
-        return (it != kc.end() && it->kmer == key) ? &*it : nullptr;
+        return (it != kc.begin() + (long)hi && it->kmer == key) ? &*it : nullptr;
     };
     uint32_t H = 30;
     // The k-mer count histogram's VALLEY -- the minimum between the error peak
