@@ -4896,7 +4896,19 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         // the MAXOCC filter below already needs -- capping would risk
         // silently changing which keys pass that filter, so this reproduces
         // the ORIGINAL uncapped semantics exactly, just laid out flat.
-        struct KIdxEntry { uint64_t kmer; uint32_t ci; uint32_t pos; uint8_t orient; };
+        // 16 BYTES, NOT 24 -- same packing already applied to the pcluster
+        // anchor record. {uint64 kmer; uint32 ci, pos; uint8 orient} pads to
+        // 24 B, and kidx holds one entry per contig k-mer position (~106M
+        // here), so 2.55 GB plus the parallel stable_sort's full copy. That
+        // pair is what takes the run's high-water mark from 8.3 GB to 10.5 GB.
+        // A canonical 25-mer is 50 bits, so the orientation bit rides in bit 63.
+        struct KIdxEntry {
+            uint64_t kf;                       // bit 63 = orient, bits 49..0 = k-mer
+            uint32_t ci, pos;
+            enum : uint64_t { ORI = 1ULL << 63 };
+            inline uint64_t kmer()   const { return kf & ~(uint64_t)ORI; }
+            inline uint8_t  orient() const { return (uint8_t)(kf >> 63); }
+        };
         std::vector<KIdxEntry> kidx;
         {
             // PARALLEL BUILD, ORDER PRESERVED. kidx is ~65M entries x 24 B
@@ -4917,8 +4929,10 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             for (long long ci = 0; ci < (long long)NC; ++ci) {
                 const std::string& c = cdb.contigs[(size_t)ci];
                 size_t cnt = 0;
-                for (size_t i = 0; i + BK <= c.size(); ++i) {
-                    uint64_t v; if (pack25(c.data() + i, v)) ++cnt;
+                Roll25 rw; const size_t cn2 = c.size();
+                for (size_t b2 = 0; b2 < cn2; ++b2) {
+                    rw.push(c[b2]);
+                    if (b2 + 1 >= (size_t)BK && rw.ok()) ++cnt;
                 }
                 off[(size_t)ci + 1] = cnt;
             }
@@ -4928,10 +4942,13 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             for (long long ci = 0; ci < (long long)NC; ++ci) {
                 const std::string& c = cdb.contigs[(size_t)ci];
                 size_t w = off[(size_t)ci];
-                for (size_t i = 0; i + BK <= c.size(); ++i) {
-                    uint64_t v; if (!pack25(c.data() + i, v)) continue;
-                    uint64_t rcv = rc25(v), canon = v < rcv ? v : rcv;
-                    kidx[w++] = {canon, (uint32_t)ci, (uint32_t)i, (uint8_t)(v <= rcv ? 0 : 1)};
+                Roll25 rw; const size_t cn2 = c.size();
+                for (size_t b2 = 0; b2 < cn2; ++b2) {
+                    rw.push(c[b2]);
+                    if (b2 + 1 < (size_t)BK || !rw.ok()) continue;
+                    const size_t i = b2 + 1 - (size_t)BK;
+                    kidx[w++] = { rw.canon() | (rw.f <= rw.r ? 0ULL : (uint64_t)KIdxEntry::ORI),
+                                  (uint32_t)ci, (uint32_t)i };
                 }
             }
         }
@@ -4950,16 +4967,16 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         // __gnu_parallel::stable_sort keeps the same guarantee.
         #if defined(_OPENMP) && defined(_GLIBCXX_PARALLEL_ALGO_H)
         __gnu_parallel::stable_sort(kidx.begin(), kidx.end(),
-            [](const KIdxEntry& a, const KIdxEntry& b){ return a.kmer < b.kmer; });
+            [](const KIdxEntry& a, const KIdxEntry& b){ return a.kmer() < b.kmer(); });
         #else
         std::stable_sort(kidx.begin(), kidx.end(),
-            [](const KIdxEntry& a, const KIdxEntry& b){ return a.kmer < b.kmer; });
+            [](const KIdxEntry& a, const KIdxEntry& b){ return a.kmer() < b.kmer(); });
         #endif
         auto kidx_run_len = [&](uint64_t key) -> int {
             auto lo = std::lower_bound(kidx.begin(), kidx.end(), key,
-                [](const KIdxEntry& e, uint64_t k){ return e.kmer < k; });
+                [](const KIdxEntry& e, uint64_t k){ return e.kmer() < k; });
             auto hi = std::upper_bound(kidx.begin(), kidx.end(), key,
-                [](uint64_t k, const KIdxEntry& e){ return k < e.kmer; });
+                [](uint64_t k, const KIdxEntry& e){ return k < e.kmer(); });
             return (lo != hi) ? (int)(hi - lo) : -1; // -1 == not found (mirrors kidx.end())
         };
         struct Agg { int anchors = 0; uint32_t altcid = 0, altpos = 0; };
@@ -5037,7 +5054,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             size_t total = 0, kept = 0;
             for (size_t r0 = 0; r0 < kidx.size(); ) {
                 size_t r1 = r0;
-                while (r1 < kidx.size() && kidx[r1].kmer == kidx[r0].kmer) ++r1;
+                while (r1 < kidx.size() && kidx[r1].kmer() == kidx[r0].kmer()) ++r1;
                 ++total;
                 const size_t occn = r1 - r0;
                 if ((int)occn >= 2 && (int)occn <= MAXOCC) { runs.push_back({r0, r1}); ++kept; }
@@ -5094,7 +5111,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             std::vector<std::tuple<uint32_t,uint32_t,uint8_t>> occ;
             occ.reserve(run_j - run_i);
             for (size_t t = run_i; t < run_j; ++t)
-                occ.push_back(std::make_tuple(kidx[t].ci, kidx[t].pos, kidx[t].orient));
+                occ.push_back(std::make_tuple(kidx[t].ci, kidx[t].pos, kidx[t].orient()));
             run_i = run_j;
             if ((int)occ.size() < 2 || (int)occ.size() > MAXOCC) continue;
           for (size_t oi_ = 0; oi_ + 1 < occ.size(); ++oi_)
@@ -5850,8 +5867,10 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                     for (long long ci = 0; ci < (long long)PNC; ++ci) {
                         const std::string& c = pc_cd.contigs[(size_t)ci];
                         size_t cnt = 0;
-                        for (size_t i2 = 0; i2 + 25 <= c.size(); ++i2) {
-                            uint64_t v; if (pack25(c.data() + i2, v)) ++cnt;
+                        Roll25 rw; const size_t cn2 = c.size();
+                        for (size_t b2 = 0; b2 < cn2; ++b2) {
+                            rw.push(c[b2]);
+                            if (b2 + 1 >= 25 && rw.ok()) ++cnt;
                         }
                         off[(size_t)ci + 1] = cnt;
                     }
@@ -5861,10 +5880,13 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                     for (long long ci = 0; ci < (long long)PNC; ++ci) {
                         const std::string& c = pc_cd.contigs[(size_t)ci];
                         size_t w = off[(size_t)ci];
-                        for (size_t i2 = 0; i2 + 25 <= c.size(); ++i2) {
-                            uint64_t v; if (!pack25(c.data() + i2, v)) continue;
-                            const uint64_t rv = rc25(v), cn = v < rv ? v : rv;
-                            pv[w++] = { cn | (v <= rv ? 0ULL : (uint64_t)PE::FWD), (uint32_t)ci, (uint32_t)i2 };
+                        Roll25 rw; const size_t cn2 = c.size();
+                        for (size_t b2 = 0; b2 < cn2; ++b2) {
+                            rw.push(c[b2]);
+                            if (b2 + 1 < 25 || !rw.ok()) continue;
+                            const size_t i2 = b2 + 1 - 25;
+                            pv[w++] = { rw.canon() | (rw.f <= rw.r ? 0ULL : (uint64_t)PE::FWD),
+                                        (uint32_t)ci, (uint32_t)i2 };
                         }
                     }
                 }
@@ -6474,7 +6496,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             std::vector<std::pair<size_t,size_t>> xruns;
             for (size_t r0 = 0; r0 < kidx.size(); ) {
                 size_t r1 = r0;
-                while (r1 < kidx.size() && kidx[r1].kmer == kidx[r0].kmer) ++r1;
+                while (r1 < kidx.size() && kidx[r1].kmer() == kidx[r0].kmer()) ++r1;
                 if (r1 - r0 == 2) xruns.push_back({r0, r1});
                 r0 = r1;
             }
@@ -6493,8 +6515,8 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 auto& xim = txim[(size_t)xtid];
                 const size_t base = xruns[(size_t)xi].first;
                 const size_t myx  = (size_t)xi;
-                uint32_t cax = kidx[base].ci,   pax = kidx[base].pos;   uint8_t oax = kidx[base].orient;
-                uint32_t cbx = kidx[base+1].ci, pbx = kidx[base+1].pos; uint8_t obx = kidx[base+1].orient;
+                uint32_t cax = kidx[base].ci,   pax = kidx[base].pos;   uint8_t oax = kidx[base].orient();
+                uint32_t cbx = kidx[base+1].ci, pbx = kidx[base+1].pos; uint8_t obx = kidx[base+1].orient();
                 if (cax == cbx) continue;
                 uint32_t rcx, rpx, acx, apx; uint8_t rox, aox;
                 if (cdb.contigs[cax].size() >= cdb.contigs[cbx].size()) {
