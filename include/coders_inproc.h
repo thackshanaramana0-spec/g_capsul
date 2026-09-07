@@ -815,28 +815,67 @@ static std::vector<uint8_t> mmpos_encode_buckets(const std::vector<uint8_t>& pos
     //
     // Chosen per bucket by coding both and keeping the smaller, so a bucket
     // that does not benefit is unaffected -- the flag costs one byte.
-    for(auto& kv : b){
-        const uint16_t c=kv.first; auto& v=kv.second;
-        std::vector<uint8_t> vt; vt.reserve(v.size());
-        { const size_t rows=v.size()/c;
-          for(uint16_t col=0; col<c; ++col)
-              for(size_t r=0;r<rows;++r) vt.push_back(v[r*(size_t)c+col]); }
-        int bi=0, bt=0; size_t bs=SIZE_MAX; std::vector<uint8_t> keep;
-        for(int t=0;t<2;++t){
-            const std::vector<uint8_t>& src = t ? vt : v;
-            if(src.size()!=v.size()) continue;
-            std::vector<std::pair<int,std::vector<uint8_t>>> cand;
-            cand.emplace_back(0, xz_compress(src.data(),src.size()));
-            cand.emplace_back(2, pgc::ppmd_encode(src.data(),src.size(),5,32));
-            cand.emplace_back(3, pgc::fse_encode(src.data(),src.size()));
-            cand.emplace_back(4, pgc::range_encode(src.data(),src.size(),c));
-            for(auto& p:cand) if(!p.second.empty() && p.second.size()<bs){
-                bs=p.second.size(); bi=p.first; bt=t; keep=p.second; }
+    // ── BUCKETS CODED IN PARALLEL ───────────────────────────────────────────
+    //
+    // MEASURED: this function is 1.58 s of a 2.13 s mm_pos job, and mm_pos is
+    // the coding pool's LONGEST job -- the pool runs at its Amdahl floor, so
+    // this loop alone sets the encoder's floor. It is a nested search: per
+    // bucket it builds two layouts and probes FOUR coders on each, all serial.
+    //
+    // Buckets are independent -- each reads only its own vector and produces
+    // its own record -- so they are coded concurrently and the RESULTS ARE
+    // EMITTED IN THE ORIGINAL std::map ORDER afterwards. Byte-identical output:
+    // same candidates, same smaller-wins rule, same emission order.
+    //
+    // Concurrency is bounded because each in-flight bucket holds an LZMA
+    // encoder state; buckets are few (one per distinct mismatch count) and the
+    // pool already has this thread, so the bound is deliberately modest.
+    struct BRec { uint16_t c; uint32_t vsz; uint8_t bi, bt; std::vector<uint8_t> keep; };
+    std::vector<BRec> recs(b.size());
+    {
+        std::vector<std::pair<const uint16_t, std::vector<uint8_t>>*> bv;
+        bv.reserve(b.size());
+        for(auto& kv : b) bv.push_back(&kv);
+        unsigned hw = std::thread::hardware_concurrency(); if(!hw) hw = 4;
+        unsigned nt = (unsigned)std::min<size_t>(bv.size(), std::max(1u, hw/2));
+        std::atomic<size_t> next{0};
+        auto work=[&]{
+            for(;;){
+                const size_t i = next.fetch_add(1);
+                if(i >= bv.size()) break;
+                const uint16_t c = bv[i]->first;
+                std::vector<uint8_t>& v = bv[i]->second;
+                std::vector<uint8_t> vt; vt.reserve(v.size());
+                { const size_t rows=v.size()/c;
+                  for(uint16_t col=0; col<c; ++col)
+                      for(size_t r=0;r<rows;++r) vt.push_back(v[r*(size_t)c+col]); }
+                int bi=0, bt=0; size_t bs=SIZE_MAX; std::vector<uint8_t> keep;
+                for(int t=0;t<2;++t){
+                    const std::vector<uint8_t>& src = t ? vt : v;
+                    if(src.size()!=v.size()) continue;
+                    std::vector<std::pair<int,std::vector<uint8_t>>> cand;
+                    cand.emplace_back(0, xz_compress(src.data(),src.size()));
+                    cand.emplace_back(2, pgc::ppmd_encode(src.data(),src.size(),5,32));
+                    cand.emplace_back(3, pgc::fse_encode(src.data(),src.size()));
+                    cand.emplace_back(4, pgc::range_encode(src.data(),src.size(),c));
+                    for(auto& p:cand) if(!p.second.empty() && p.second.size()<bs){
+                        bs=p.second.size(); bi=p.first; bt=t; keep=std::move(p.second); }
+                }
+                recs[i] = BRec{ c, (uint32_t)v.size(), (uint8_t)bi, (uint8_t)bt, std::move(keep) };
+            }
+        };
+        if(nt <= 1){ work(); }
+        else {
+            std::vector<std::thread> th;
+            for(unsigned t=0;t<nt;++t) th.emplace_back(work);
+            for(auto& x:th) x.join();
         }
-        put16(c); put32((uint32_t)v.size());
-        out.push_back((uint8_t)bi); out.push_back((uint8_t)bt);
-        put32((uint32_t)keep.size());
-        out.insert(out.end(),keep.begin(),keep.end());
+    }
+    for(const BRec& r : recs){
+        put16(r.c); put32(r.vsz);
+        out.push_back(r.bi); out.push_back(r.bt);
+        put32((uint32_t)r.keep.size());
+        out.insert(out.end(), r.keep.begin(), r.keep.end());
     }
     return out;
 }
