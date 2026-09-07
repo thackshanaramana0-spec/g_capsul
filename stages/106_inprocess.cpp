@@ -4563,7 +4563,49 @@ int main(int argc,char** argv){
                     g_contig_spans.size(), v_spans.size());
             jobs.push_back({"contig_spans", [&]{ return best_encode(v_spans.data(), v_spans.size(), false); }});
         }
-        jobs.push_back({"pos_abs",     [&]{ return best_encode_chunked(v_pos.data(), v_pos.size(), true); }});
+        // ── pos_abs SPLIT BY REGION ─────────────────────────────────────────
+        //
+        // MEASURED: pos_abs is 46% of the archive and it mixes two populations
+        // with completely different statistics. Main-region positions are
+        // effectively random (delta entropy 18.45 b). Second-region positions
+        // are APPENDED consecutively -- 93.7% of consecutive deltas are exactly
+        // the read length -- for a delta entropy of 1.03 b. Coding both in one
+        // stream forces the model to straddle them and it exploits neither.
+        //
+        // Split: main positions stay RAW uint32 (delta-coding them measured
+        // WORSE, they are random); second-region positions are zigzag-varint
+        // deltas; a bitmap says which read is which. Like-for-like under the
+        // same compressor this measured 1,347,564 -> 1,159,212 B, -14.0% of the
+        // stream and ~6% of the whole archive.
+        std::vector<uint8_t> v_pos_main, v_pos_sec, v_pos_reg;
+        {
+            const size_t np = v_pos.size() / 4;
+            const uint32_t* pp = reinterpret_cast<const uint32_t*>(v_pos.data());
+            v_pos_main.reserve(v_pos.size());
+            v_pos_reg.resize(4 + (np + 7) / 8, 0);
+            const uint32_t np32 = (uint32_t)np;
+            memcpy(v_pos_reg.data(), &np32, 4);          // exact count: the bitmap is padded
+            int64_t prev = (int64_t)MAINEND_;
+            for (size_t i = 0; i < np; ++i) {
+                const uint32_t p = pp[i];
+                if (p >= (uint32_t)MAINEND_) {
+                    v_pos_reg[4 + (i >> 3)] |= (uint8_t)(1u << (i & 7));
+                    const int64_t d = (int64_t)p - prev; prev = (int64_t)p;
+                    uint64_t z = (uint64_t)((d << 1) ^ (d >> 63));
+                    for (;;) { uint8_t b = (uint8_t)(z & 0x7f); z >>= 7;
+                               v_pos_sec.push_back((uint8_t)(b | (z ? 0x80 : 0))); if (!z) break; }
+                } else {
+                    const uint8_t* q = reinterpret_cast<const uint8_t*>(&p);
+                    v_pos_main.insert(v_pos_main.end(), q, q + 4);
+                }
+            }
+            fprintf(stderr, "  [POS-SPLIT] main %zu vals (%zu B), second %zu deltas (%zu B), region %zu B\n",
+                    v_pos_main.size()/4, v_pos_main.size(),
+                    np - v_pos_main.size()/4, v_pos_sec.size(), v_pos_reg.size());
+        }
+        jobs.push_back({"pos_abs",     [&]{ return best_encode_chunked(v_pos_main.data(), v_pos_main.size(), true); }});
+        jobs.push_back({"pos_sec",     [&]{ return best_encode_chunked(v_pos_sec.data(),  v_pos_sec.size(),  false); }});
+        jobs.push_back({"pos_region",  [&]{ return best_encode_chunked(v_pos_reg.data(),  v_pos_reg.size(),  false); }});
         jobs.push_back({"pos_strand",  [&]{ return best_encode(v_str.data(), v_str.size(), false); }});
         jobs.push_back({"mm_sym",      [&]{ return mmc::encode(v_mr, v_mo); }});
         // mm_pos: the encoder picks whichever of the flat and bucketed forms is
