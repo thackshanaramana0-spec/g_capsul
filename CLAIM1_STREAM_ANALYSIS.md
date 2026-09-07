@@ -81,3 +81,46 @@ Applying it honestly matters more than applying it everywhere.
    0.25, not 0.15 -- so datasets with 15-25% duplicates may be turning dedup ON
    where it costs. No locked dataset is currently known to sit in that band;
    worth checking before relying on it.
+
+## 6. Verification, and a pre-existing issue found on the way
+
+**The split is LOSSLESS through the archive on every dataset tested**, at the
+production parameter set (`3 16 16 22 16 16 1 24 64 1`), comparing decoded
+reads against the original FASTQ's sequence column:
+
+    SRR29296997   460,501 reads   LOSSLESS
+    SRR40271341   386,537 reads   LOSSLESS
+    ERR552797     590,692 reads   LOSSLESS
+
+Plus, on SRR29296997: decoded positions byte-identical to the pre-change
+archive, and every other stream byte-identical.
+
+### 6.1 A pre-existing LOSSY result that is NOT this change
+
+`scripts/verify_lossless.sh` reports **LOSSY** for SRR40271341 and ERR552797 --
+and it reports LOSSY for the **BASELINE encoder too**, at the same parameters:
+
+    SRR40271341   baseline LOSSY 3,814,744 B   |  split LOSSY 3,775,454 B
+    ERR552797     baseline LOSSY 4,717,476 B   |  split LOSSY 4,707,212 B
+
+Identical verdict on both binaries, so the split did not cause it. Two things
+distinguish that check from the archive round trip above, and both matter:
+
+1. **It does not test the archive.** Per this repo's own CLAUDE.md section 6.1,
+   `verify_lossless.sh` decodes the DUMPED intermediate streams through
+   `decode_105.py`, not the container. It exercises the algorithm but not the
+   entropy layer.
+2. **It selects its own parameters.** It derives a candidate grid from read
+   length and chose `MAXMAP=60 MINOV=105` and `MAXMAP=60 MINOV=16` here, where
+   the production encode uses `MAXMAP=11 MINOV=16`. So it is testing a
+   configuration the production path does not use.
+
+Read counts match exactly (386,537 / 590,692), so no reads are lost -- content
+differs. That is the signature of the silent data-loss class recorded in
+CLAUDE.md section 6.3.
+
+**This needs its own investigation and is independent of the pos_abs work.**
+Either `decode_105.py` is stale relative to the encoder for those parameters,
+or a real defect exists at `MINOV=105`. Do not treat it as cleared just because
+the archive path round-trips; and do not treat the archive path as suspect just
+because this script fails -- they are different code.
