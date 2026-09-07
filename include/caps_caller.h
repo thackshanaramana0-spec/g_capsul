@@ -5918,9 +5918,31 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                     inline uint64_t key() const { return kf & ~(uint64_t)FWD; }
                     inline uint8_t  fwd() const { return (uint8_t)(kf >> 63); }
                 };
+                // pv WAS kidx, REBUILT -- and it is the run's memory PEAK.
+                //
+                // Read the two builds side by side: both walk the same contigs
+                // (pc_cd IS cdb unless CAPS_PCLUSTER_COLSUB substitutes the
+                // collapsed SNV substrate), both take 25-mers with the same
+                // Roll25 and the same ok() predicate, both pack
+                // canon | (f<=r ? 0 : bit63), both store the same (ci,pos), and
+                // both are stable-sorted by the masked key. They are the same
+                // array, computed twice.
+                //
+                // kidx is built at the top of the indel pass and is still live
+                // here (its last read is the cross-contig SNV loop, far below),
+                // so the second copy is pure duplication: 106M x 16 B = 1.70 GB
+                // for the array plus 1.70 GB for the parallel sort's temporary,
+                // and that pair is exactly where VmHWM peaks.
+                //
+                // Deriving the anchors from kidx is EXACT, not approximate: the
+                // fill order is the same (contig 0,1,2..., ascending position),
+                // the sort is stable on the same key, so each run's first-seen
+                // entry -- the one the occ==1 test keeps -- is the same entry.
+                // CAPS_PV_REBUILD=1 forces the old path for A/B checking.
+                const bool PV_FROM_KIDX = (&pc_cd == &cdb) && !std::getenv("CAPS_PV_REBUILD");
                 std::vector<PE> pv;
                 const size_t PNC = pc_cd.contigs.size();
-                {
+                if (!PV_FROM_KIDX) {
                     std::vector<size_t> off(PNC + 1, 0);
                     #pragma omp parallel for schedule(dynamic, 256)
                     for (long long ci = 0; ci < (long long)PNC; ++ci) {
@@ -5952,6 +5974,20 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 int PUNIQ = 1;
                 if (const char* e = std::getenv("CAPS_PCLUSTER_UNIQ")) PUNIQ = atoi(e);
                 _iplap("pcluster: build flat array");
+                if (PV_FROM_KIDX) {
+                    // identical grouping, reading kidx in place
+                    pkidx.reserve(kidx.size() / 8 + 1);
+                    for (size_t a0 = 0; a0 < kidx.size(); ) {
+                        size_t b0 = a0;
+                        while (b0 < kidx.size() && kidx[b0].kmer() == kidx[a0].kmer()) ++b0;
+                        const size_t occ = b0 - a0;
+                        if (kidx[a0].orient() == 0 && (int)occ <= PUNIQ && occ == 1)
+                            pkidx.append(kidx[a0].kmer(), kidx[a0].ci, kidx[a0].pos);
+                        a0 = b0;
+                    }
+                    fprintf(stderr, "[PCLUSTER] %zu 25-mers -> %zu unique forward anchors (from kidx)\n",
+                            kidx.size(), pkidx.size());
+                } else {
                 // STABLE sort: ties must keep (ci, pos) ascending so the first
                 // entry of a run is the first-seen occurrence.
                 #if defined(_OPENMP) && defined(_GLIBCXX_PARALLEL_ALGO_H)
@@ -5973,6 +6009,8 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 }
                 fprintf(stderr, "[PCLUSTER] %zu 25-mers -> %zu unique forward anchors\n",
                         pv.size(), pkidx.size());
+                }
+                { std::vector<PE>().swap(pv); }   // free immediately either way
                 // SELF-CHECK (CAPS_PCLUSTER_VERIFY=1): replay the ORIGINAL
                 // hash-map selection on the same data and diff. The synthetic
                 // test said the predicates agree; this says whether they agree
