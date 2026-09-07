@@ -237,3 +237,43 @@ first place to look). Its measured effect is dataset-dependent -- SARS -94,279
 to -108,432 B, but E. coli +61,792 to +95,373 B -- so it needs the mismatch
 economics reworked as well as the bug fixed. That is the next real piece of
 work on Claim 1, and it is a larger one than anything in this file.
+
+## 10. `literal`: five knobs swept, all at optimum -- and why nothing shipped
+
+Continuing past the first "at bound" claim, every tunable in the model was
+swept. All on SRR29296997, archive 2,585,780 B; the encoder is deterministic so
+these sizes are exact, not noisy.
+
+| knob | variants tried | outcome |
+|---|---|---|
+| table size `TBITS` | 16/18/20/22, at two data scales | 16 optimal; 22 buys 0.11% (small literal) and 0.13% (10x scale) for +477 MB and +25% time |
+| chunk count | already measured in source | 4 is the knee, 2.5 KB from the single-chunk optimum |
+| context orders `ORD` | lean6, nolow, dense14, hi_ext | baseline best; every variant +134 to +5,210 B |
+| mixer context `MCB` | 4/6/8 | 4 best; +268 and +1,636 B -- finer selection dilutes the weights |
+| SSE context `APMB` | 6/8/10/11/12/14/16 | 12 is the argmax, -1,423 B, 4/4 datasets positive |
+
+### 10.1 The one that "won" was NOT taken
+
+`APMB=12` is a **fitted constant** -- the argmax of a sweep. This project's own
+standing rule (CLAUDE.md rule 1) forbids exactly that, and four datasets
+agreeing does not turn an argmax into a formula. At a mean of 0.036% it would
+not justify a format change on its own either. **Reverted, not shipped.**
+
+The finding underneath it is worth keeping even though the constant is not: the
+SSE stage behaves differently from every other component because it refines an
+ALREADY-FORMED probability through a 33-bucket curve, so each of its contexts
+needs far less evidence than a predictor does. That is why it had headroom where
+the mixer and the context tables were saturated -- and it means the earlier
+generalisation "this model is evidence-limited everywhere" was too broad. If an
+SSE size is ever DERIVED from a measured input property, that would be
+shippable. The argmax is not.
+
+### 10.2 What the sweeps were for
+
+Diagnosis, not a fix. Five independent sweeps landing on the shipped
+configuration is what turns "literal is at bound" from an assertion into a
+measurement. **`literal` is closed by evidence, with nothing shipped from it.**
+
+The structural win in Claim 1 remains the `pos_abs` region split (section 2):
+not a tuned constant, but a decomposition keyed on a measured property of each
+read, separating two populations with an 18x entropy gap.
