@@ -1473,7 +1473,26 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         #endif
         if (nth > 1) BATCH_KMERS = std::max<size_t>(1u << 20, BATCH_KMERS / (size_t)nth);
     }
+    // 12 BYTES, NOT 16.
+    //
+    // {uint64 kmer; uint32 cnt} is 16 bytes because the compiler pads it to
+    // the alignment of its widest member -- 4 bytes of nothing, on the single
+    // largest array in the run. At full chr20 kc holds 140,719,632 entries, so
+    // the padding alone is 537 MB.
+    //
+    // This is the same layout fix already applied to the pcluster anchor
+    // record and to kidx (both 24 -> 16 B); kc was missed because the work on
+    // it went into the MERGE ALGORITHM and never looked at the record.
+    //
+    // Packing is safe here: the k-mer occupies 62 bits so nothing is truncated,
+    // the spill files are written and read by the same binary in one run so the
+    // on-disk record size stays self-consistent, and every offset into those
+    // files is already computed as `index * sizeof(KC)`. x86 unaligned loads
+    // cost nothing measurable next to the cache misses this removes.
+    #pragma pack(push,1)
     struct KC { uint64_t kmer; uint32_t cnt; };
+    #pragma pack(pop)
+    static_assert(sizeof(KC) == 12, "kc record must stay packed at 12 B");
     // [KC-SPLIT] temporary internal timers: kc_H_build is the largest single
     // item left (11.9 s of 81.1 s) and "spill vs partition sort vs k-way
     // merge" is the split that decides which part of it to attack.
