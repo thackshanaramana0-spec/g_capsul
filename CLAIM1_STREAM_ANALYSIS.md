@@ -186,3 +186,54 @@ against the single-chunk optimum while staying parallel. `SEQT` tunes it.
 size is correct on the three-axis trade at two scales, and its chunking is at
 the documented knee. No further work here without a fundamentally different
 model, and general-purpose coders are already 9-15% behind.
+
+## 8. The reference streams (6.8%): measured, rejected
+
+`mem_len`, `mem_dstgap` and `mem_rc` are coded with plain `best_encode`, with
+none of the region awareness `mem_triples` gets from `refc::bound_sel` -- so
+they looked like the same opportunity as `pos_abs`. Instrumented before
+building anything:
+
+    main refs    n=  3,916   H(len) = 9.863 b   P(rc) = 0.760
+    second refs  n=157,993   H(len) = 6.741 b   P(rc) = 0.383
+    combined                 H(len) = 6.910 b
+
+The distributions genuinely differ -- but the population is **97.6% second-
+region**, so separating them recovers almost nothing:
+
+    potential mem_len saving: 1,892 B = 1.4% of the stream = 0.07% of archive
+    potential mem_rc saving:  ~200 B
+
+**Rejected.** A format change is not worth 0.07%.
+
+This is the third time the mixture test has said no (`literal`, `mem_triples`
+already region-aware, and now the reference streams), against one time it said
+yes (`pos_abs`, an 18x entropy gap across a 19%/81% split). The test is
+discriminating on two things at once: the populations must differ AND be
+reasonably balanced. `pos_abs` had both; these have only the first.
+
+## 9. Claim 1: where it stands
+
+Four streams covering **82% of the archive** have now been examined at the
+component level:
+
+| stream | share | verdict |
+|---|---|---|
+| `pos_abs` | 46% -> 40% | **WON** -0.52% to -6.18%, verified lossless |
+| `literal` | 25% | at bound; CM beats general coders 9-15%, table size refuted at two scales |
+| `mem_triples` | 17% | already region-aware, 0.32x order-0 |
+| `mem_len`/`dstgap`/`rc` | 6.8% | measured, 0.07% available, rejected |
+
+Untested remainder is ~10% (`mm_pos` 3.6%, `mm_sym` 2.0%, `mm_cnt` 2.3%,
+`pos_region` 1.6%, `pos_sec` 0.7%). Even a uniform 20% win across all of it
+would be ~2% of the archive, so the realistic remaining upside under this
+decomposition is small.
+
+**The one structural lever left is not a coder change: shrink the pseudogenome
+itself.** CLAUDE.md already names second-region self-match as "the single
+largest quantified opportunity", implemented twice, not shipped because the
+archive comes out LOSSY (the RC path with a non-zero SRCBASE is the documented
+first place to look). Its measured effect is dataset-dependent -- SARS -94,279
+to -108,432 B, but E. coli +61,792 to +95,373 B -- so it needs the mismatch
+economics reworked as well as the bug fixed. That is the next real piece of
+work on Claim 1, and it is a larger one than anything in this file.
