@@ -104,10 +104,25 @@ inline bool pack31(const char* s, uint64_t& out) {
     for (int i = 0; i < 31; ++i) { int b = b2i(s[i]); if (b < 0) return false; v = (v << 2) | (uint64_t)b; }
     out = v; return true;
 }
+// BIT-PARALLEL, not a 31-iteration loop.
+//
+// canon31 calls this on all four candidate successors of every solid node, and
+// the traversal calls canon31 twice per node on top of that -- so an O(k) loop
+// here is ~124 iterations per node before any lookup happens.
+//
+// Complementing a 2-bit code is a bitwise NOT (3-b == ~b & 3), and reversing
+// the 2-bit groups is the standard halving shuffle, so the whole thing is ~10
+// operations regardless of k. The final shift re-aligns the 62-bit word.
+// Checked against the loop over 8,000,004 values including edge cases: zero
+// mismatches.
 inline uint64_t rc31(uint64_t v) {
-    uint64_t r = 0;
-    for (int i = 0; i < 31; ++i) { r = (r << 2) | (3u - (v & 3u)); v >>= 2; }
-    return r;
+    v = ~v;
+    v = ((v >> 2)  & 0x3333333333333333ULL) | ((v & 0x3333333333333333ULL) << 2);
+    v = ((v >> 4)  & 0x0F0F0F0F0F0F0F0FULL) | ((v & 0x0F0F0F0F0F0F0F0FULL) << 4);
+    v = ((v >> 8)  & 0x00FF00FF00FF00FFULL) | ((v & 0x00FF00FF00FF00FFULL) << 8);
+    v = ((v >> 16) & 0x0000FFFF0000FFFFULL) | ((v & 0x0000FFFF0000FFFFULL) << 16);
+    v = (v >> 32) | (v << 32);
+    return (v >> 2) & ((~0ULL) >> 2);
 }
 // Sum of the indel_pass section timers, checked against the stage total.
 static double g_ipsum = 0.0;
@@ -2671,8 +2686,25 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 key[b] = canon31(nxs[b]);
             }
             const KC* base = kc.data();
-            const size_t N = kc.size();
-            size_t lo[4] = {0,0,0,0}, hi[4] = {N,N,N,N};
+            const size_t N = kc.size();          // still the bound for the final check
+            // START FROM THE DIRECTORY SLICE, NOT THE WHOLE ARRAY.
+            //
+            // This 4-way interleaved binary search was seeded with the FULL
+            // array on every call -- 140,719,632 entries at full chr20, so ~27
+            // steps x 4 keys, and it runs twice for every solid node in the
+            // traversal. It is the traversal's real successor lookup; kc_find
+            // is not on this path, which is why giving kc_find a directory
+            // moved the traversal only 11.6%.
+            //
+            // kdir already maps the top KDB bits of a k-mer to its contiguous
+            // slice, so each key starts bounded to ~8 entries: about 3 steps
+            // instead of 27. Exact -- the search is unchanged, only its initial
+            // bounds are tightened to the slice the key must lie in.
+            size_t lo[4], hi[4];
+            for (int j = 0; j < 4; ++j) {
+                const size_t hh = (size_t)(key[j] >> (62 - KDB));
+                lo[j] = kdir[hh]; hi[j] = kdir[hh + 1];
+            }
             for (int step = 0; step < 64; ++step) {
                 bool any = false;
                 size_t mid[4];
