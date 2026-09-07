@@ -4908,17 +4908,39 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
     // result, not an abandoned draft.
     if (!std::getenv("CAPS_NO_INDELS") && cdb.contigs.size() >= 2) {
         constexpr int BK = 25, FLANK = 15;
+        // PARTITIONED BY CONTIG, NOT BY READ.
+        //
+        // This is 4M reads x ~148 bases = ~590M increments, serial. Reads
+        // cannot simply be split across threads because two reads on the same
+        // contig would race on the same counters. Splitting by `cid % T`
+        // instead gives each thread a disjoint set of CONTIGS, so no two
+        // threads ever touch the same counter, and each thread still visits
+        // reads in increasing oi order -- so the increment sequence at every
+        // position is exactly the serial one, including the 60000 clamp's
+        // order dependence. The cost is that every thread scans the 4M read
+        // headers (cheap) to do 1/T of the ~590M increments.
         std::vector<std::vector<uint16_t>> cov(cdb.contigs.size());
-        for (size_t ci = 0; ci < cdb.contigs.size(); ++ci)
-            cov[ci].assign(cdb.contigs[ci].size(), 0);
-        for (size_t oi = 0; oi < n; ++oi) {
-            uint32_t cid = cdb.read_cid[oi], pos = cdb.read_pos[oi];
-            if (cid >= cdb.contigs.size()) continue;
-            uint16_t clipb = (oi < cdb.read_clip.size()) ? cdb.read_clip[oi] : 0;
-            int rl = (int)seqs[oi].size() - (int)clipb;
-            for (int j = 0; j < rl; ++j) {
-                uint32_t p = pos + (uint32_t)j;
-                if (p < cov[cid].size() && cov[cid][p] < 60000) ++cov[cid][p];
+        #pragma omp parallel for schedule(dynamic, 256)
+        for (long long ci = 0; ci < (long long)cdb.contigs.size(); ++ci)
+            cov[(size_t)ci].assign(cdb.contigs[(size_t)ci].size(), 0);
+        {
+            int cov_nt = 1;
+            #ifdef _OPENMP
+            cov_nt = omp_get_max_threads();
+            #endif
+            #pragma omp parallel for schedule(static, 1)
+            for (int t = 0; t < cov_nt; ++t) {
+                for (size_t oi = 0; oi < n; ++oi) {
+                    uint32_t cid = cdb.read_cid[oi], pos = cdb.read_pos[oi];
+                    if (cid >= cdb.contigs.size()) continue;
+                    if ((int)(cid % (uint32_t)cov_nt) != t) continue;
+                    uint16_t clipb = (oi < cdb.read_clip.size()) ? cdb.read_clip[oi] : 0;
+                    int rl = (int)seqs[oi].size() - (int)clipb;
+                    for (int j = 0; j < rl; ++j) {
+                        uint32_t p = pos + (uint32_t)j;
+                        if (p < cov[cid].size() && cov[cid][p] < 60000) ++cov[cid][p];
+                    }
+                }
             }
         }
         // KIDX AS SORTED FLAT ARRAY (2026-09-03), same overhead removal as
@@ -5984,11 +6006,22 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 }
                 _iplap("pcluster: sort + select");
             }
-            std::vector<std::vector<uint16_t>> pcov;
-            {
-                pcov.resize(pc_cd.contigs.size());
+            // pcov WAS cov, RECOMPUTED.
+            //
+            // This loop was character-for-character the coverage build at the
+            // top of the indel pass -- same contigs, same read_cid/read_pos/
+            // read_clip, same 60000 clamp -- because pc_cd IS cdb unless
+            // CAPS_PCLUSTER_COLSUB puts the collapsed SNV substrate in its
+            // place. So on every default run it built a second ~300 MB copy of
+            // an array already in hand, with another ~590M serial increments.
+            //
+            // Alias when the two are literally the same object; keep the build
+            // for the opt-in case, where they genuinely differ.
+            std::vector<std::vector<uint16_t>> pcov_own;
+            if (&pc_cd != &cdb) {
+                pcov_own.resize(pc_cd.contigs.size());
                 for (size_t ci = 0; ci < pc_cd.contigs.size(); ++ci)
-                    pcov[ci].assign(pc_cd.contigs[ci].size(), 0);
+                    pcov_own[ci].assign(pc_cd.contigs[ci].size(), 0);
                 for (size_t oi = 0; oi < n; ++oi) {
                     uint32_t cid = pc_cd.read_cid[oi], pos = pc_cd.read_pos[oi];
                     if (cid >= pc_cd.contigs.size()) continue;
@@ -5996,10 +6029,12 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                     int rl = (int)seqs[oi].size() - (int)clp;
                     for (int j = 0; j < rl; ++j) {
                         uint32_t pp = pos + (uint32_t)j;
-                        if (pp < pcov[cid].size() && pcov[cid][pp] < 60000) ++pcov[cid][pp];
+                        if (pp < pcov_own[cid].size() && pcov_own[cid][pp] < 60000) ++pcov_own[cid][pp];
                     }
                 }
             }
+            const std::vector<std::vector<uint16_t>>& pcov =
+                (&pc_cd == &cdb) ? cov : pcov_own;
             _iplap("  pe: pcov build");
             // cluster reads by right-context anchor that is UNIQUE in the contigs
             //
