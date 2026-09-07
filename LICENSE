@@ -1,0 +1,42 @@
+G_CAPSUL
+Copyright (c) 2026 the G_CAPSUL authors.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+VENDORED THIRD-PARTY COMPONENTS
+
+This repository vendors three third-party components. Their licences govern
+those directories and are reproduced there:
+
+  thirdparty/fse/         Finite State Entropy, Yann Collet.  BSD 2-Clause.
+                          See thirdparty/fse/LICENSE.
+  thirdparty/htscodecs/   htscodecs (fqzcomp quality coder), Genome Research
+                          Ltd.  BSD 3-Clause.  See thirdparty/htscodecs/LICENSE.md.
+  thirdparty/ppmd/        Ppmd7 from the LZMA SDK, Igor Pavlov.  Public domain.
+                          The LZMA SDK is placed in the public domain by its
+                          author; no separate licence file ships with these
+                          extracted sources.
+
+NOT VENDORED, for the record: PgRC2 (GPL-3) is used only as an external
+comparison binary, cloned separately at /root/arcs-clean/method_c. No PgRC2
+source is included in or linked into this project, so its GPL-3 terms do not
+attach to this repository.
+
+liblzma is a runtime dependency, linked with -llzma, and is public domain.
