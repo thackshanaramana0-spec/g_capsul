@@ -1,10 +1,10 @@
 ╔══════════════════════════════════════════════════════════════════════╗
 ║  BENCHMARK 0 — PRE-RUN STATUS                                        ║
 ╚══════════════════════════════════════════════════════════════════════╝
-generated : 2026-09-05 07:06:20 IST
+generated : 2026-09-08 03:16:42 IST
 host      : e2e-147-20  |  user: root
 repo      : /root/arcs-clean/c_star_pg_advance
-branch    : c_star_pg_advance  commit: 4301519
+branch    : c_star_pg_advance  commit: 787c9d7
 tree      : DIRTY (uncommitted changes present)
 
 ════════════════════════════════════════════════════════════════════════
@@ -13,10 +13,10 @@ tree      : DIRTY (uncommitted changes present)
   cores                                12
   RAM total                            82 GB
   RAM available                        78 GB
-  disk free                            118 GB
+  disk free                            105 GB
   [ OK ]   cores >= 8                         12
   [ OK ]   RAM >= 32 GB                       82 GB
-  [ OK ]   disk >= 60 GB free                 118 GB
+  [ OK ]   disk >= 60 GB free                 105 GB
 
 ════════════════════════════════════════════════════════════════════════
  2. TOOLS — state of the art we benchmark against
@@ -44,9 +44,9 @@ tree      : DIRTY (uncommitted changes present)
   CAPSULE_BIN_DIR                      /tmp/capsule_bin
 
   building encoder (best106) ...
-  [ OK ]   encoder builds                     /tmp/capsule_bin/best106 (0.9 MB)
+  [ OK ]   encoder builds                     /tmp/capsule_bin/best106 (1.1 MB)
   building decoder (capsule_decode) ...
-  [ OK ]   decoder builds                     /tmp/capsule_bin/capsule_decode (0.3 MB)
+  [ OK ]   decoder builds                     /tmp/capsule_bin/capsule_decode (0.8 MB)
 
 ════════════════════════════════════════════════════════════════════════
  4. DATASETS — 19 total (15 non-human + 4 GIAB human)
@@ -108,9 +108,15 @@ tree      : DIRTY (uncommitted changes present)
   silently altering kc (it has happened twice in this project).
 
   running sanity window (HG002 r2, ~1 min) ...
-  sanity wall time                     19 s
+  sanity wall time                     18 s
   [ OK ]   k-mer multiset identity            kc=1063607 (expected 1063607)
   [ OK ]   SNV F1 unchanged                   F1=0.886 P=0.944 R=0.836
+
+════════════════════════════════════════════════════════════════════════
+ 6b. ARCHIVE CALLING PATH (Claim 2 depends on this end to end)
+════════════════════════════════════════════════════════════════════════
+  [ OK ]   contig_spans written               CAPS_CALL=1 is effective
+  [ OK ]   call from archive                  4000/4000 read placements restored
 
 ════════════════════════════════════════════════════════════════════════
  7. CONFIGURATION — the exact values that will run
@@ -166,10 +172,10 @@ tree      : DIRTY (uncommitted changes present)
 ════════════════════════════════════════════════════════════════════════
  9. VERDICT
 ════════════════════════════════════════════════════════════════════════
-  checks passed                        31
+  checks passed                        33
   warnings                             0
   failures                             0
-  preflight took                       41 s
+  preflight took                       57 s
 
   ╔════════════════════════════════════════════════════════════════════╗
   ║   VERDICT: GO                                                      ║
@@ -181,4 +187,4 @@ tree      : DIRTY (uncommitted changes present)
   (add SANITY_ONLY=1 to run just the first dataset and get a measured rate)
 
   status file: /root/arcs-clean/c_star_pg_advance/results/BENCHMARK_0_STATUS.txt
-  finished   : 2026-09-05 07:07:01
+  finished   : 2026-09-08 03:17:39
