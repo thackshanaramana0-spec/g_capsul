@@ -41,3 +41,4 @@ results/claim1/
 *.capsule
 *.spring
 *.genozip
+bin/
