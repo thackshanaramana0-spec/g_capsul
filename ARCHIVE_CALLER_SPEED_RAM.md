@@ -279,3 +279,106 @@ is not an artefact of the small input:
 alarm from a crude `strings | head` probe, not a real condition -- both
 decoders read the archive and produced 58,433 records with the expected k-mer
 count.)
+
+---
+
+## 10. The PUBLISHED path is a different path, and it needed separate work
+
+Everything in sections 1-9 is `CAPS_CALL_INDELS=1`, the full SNV+indel caller.
+**Claim 2's published configuration is not that.** It is `CAPS_DBG_ONLY`, which
+is the DEFAULT when `CAPS_CALL_INDELS` is unset, and it takes a different route
+through the caller -- Method B skips `build_substrate` entirely, so the seed
+index, the placement scan and the collapse set (the three biggest levers above)
+do not run at all there.
+
+The competitive picture, from `docs/INDEL_PASS_SPEED_PLAN.md` and
+`docs/COMPRESSION_DERIVED_CALLING.md`:
+
+| | wall | RAM | SNV F1 |
+|---|---|---|---|
+| DiscoSNP++ | 75.7 s | 3.29 GB | 0.847 |
+| ours, `CAPS_DBG_ONLY` | 106.0 s | 6.03 GB | **0.8766** |
+
+Accuracy wins; speed and RAM do not. Measured on the full chr20 archive on this
+box, the pre-session binary is 140.5 / 139.6 s at 6.34 / 6.41 GB.
+
+### 10.1 VCF byte-identity is an INVALID gate on this path
+
+The pre-session binary was run twice on the same archive and **differs from
+itself**: 223,524 differing records out of 111,766, and 230,966 differing
+`##contig` header lines. That is wholesale `dcontig_N` relabeling -- the
+parallel bubble traversal enumerates bubbles in nondeterministic order, so
+every record's contig name shifts even when the calls are the same.
+
+So a `cmp` difference between two binaries here means nothing on its own, and
+one was observed and initially misread as a regression. **Gate this path on F1
+after lifting to chr20 coordinates, never on the VCF bytes.** (The indel path
+IS stable and was correctly gated on `cmp` -- the two paths differ in this.)
+
+### 10.2 A win on one path was a regression on the other
+
+The parallel bin-wise kc merge (section 3) is an 8.2 -> 0.7 s win on the indel
+path. On the graph-only path it is a **RAM regression of ~1.3 GB**, because the
+serial k-way merge it replaced STREAMED from disk holding almost nothing, while
+the bin version builds the whole deduped result in staging vectors and then
+copies it into `kc` -- resident twice. That is invisible where the peak is
+elsewhere and decisive where `kc` IS the peak.
+
+Fixed by making the merge two-pass with exact allocation: pass A sorts each bin
+and counts its distinct keys, retaining nothing, which gives the exact final
+size so `kc` is allocated once at exactly that size; pass B redoes the read and
+sort and writes deduped runs straight into place. Cost is one extra read+sort
+of cache-resident bins; the merged array is never resident twice.
+
+**The lesson is the gating, not the bug.** Every change in section 3 was gated
+on the indel path only, so a change that helped there and hurt elsewhere passed
+cleanly. A caller with two configurations needs both measured.
+
+### 10.3 Result on the published path
+
+Two fixes: the kc merge rebuilt as two-pass with exact allocation (10.2), and
+the in-memory contigs handover extended to this path in its correct TWO-RECORD
+form -- the graph path's ploidy gate samples the concatenated pseudogenome, not
+the 451k individual contigs, so handing it the per-contig form would have been
+a different input rather than a faster route to the same one.
+
+Full chr20, `CAPS_DBG_ONLY`, two runs each:
+
+| | wall | peak |
+|---|---|---|
+| pre-session (`0851692`) | 140.50 / 139.63 s | 6.34 / 6.41 GB |
+| session before these fixes | 131.63 / 129.99 s | 7.96 / 7.89 GB |
+| **with both fixes** | **116.09 / 116.26 s** | **6.67 / 6.69 GB** |
+
+**-17% wall against the pre-session baseline, and the RAM regression closes
+from +1.55 GB to +0.30 GB.** The residual +0.30 GB is the per-thread bin
+buffers the parallel merge needs and the serial streaming merge did not; it
+buys the merge going from 8.2 s to ~1.5 s and is the trade being made
+knowingly.
+
+    export pseudogenome   13.94 s -> 0.00 s
+    kc k-way merge         1.08 s -> 1.52 s   (the deliberate extra pass)
+
+The indel path is unaffected: **VCF byte-identical** to the verified HEAD run,
+53.83 s / 7.01 GB.
+
+### 10.4 Where this leaves the comparison
+
+| full chr20 | wall | RAM | SNV F1 |
+|---|---|---|---|
+| DiscoSNP++ | 75.7 s | 3.29 GB | 0.847 |
+| ours, published path, now | 116.2 s | 6.68 GB | **0.8766** |
+
+**We lead on accuracy and do not lead on cost.** ~1.5x slower and ~2x heavier.
+This session closed a third of the speed gap and none of the RAM gap.
+
+The remaining speed is not in anything touched here: of the 116 s, decode is
+26.7 s, `kc_H_build` ~12 s, and **the DBG traversal is ~74 s**. That is Method
+B's core algorithm and it is untouched. Any serious attempt at DiscoSNP's wall
+time has to go there, and it is a larger piece of work than the structural
+cleanups in this document.
+
+The RAM gap has the same shape: DiscoSNP holds 3.29 GB because GATB streams its
+k-mer partitions and never materialises the whole counter set, while `kc` here
+is 140,719,632 x 16 B = 2.25 GB resident plus ~4.4 GB of decoded reads and
+quality. Closing that means streaming kc, not shaving allocations.
