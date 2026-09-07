@@ -548,3 +548,106 @@ collapse (6.29 s and 9.51 s) and are independent pure functions of
 ~9.5 s. It needs both 2 GB claimed sets resident at once, adding ~2 GB to peak.
 RAM is equally part of the goal, so 6 s for 2 GB is the wrong direction. Not an
 oversight -- a decision.
+
+---
+
+## 13. How to report this in the paper
+
+This section is for the manuscript, not the lab notebook. Report the
+ARCHITECTURE that produces each number, never the search that found it. No
+reviewer needs to know what was tried; they need to know why the figure is what
+it is and whether it is fair.
+
+### 13.1 The numbers, with the configuration that produced them
+
+State the configuration explicitly — the caller has two, and quoting one
+figure without saying which is the single easiest way to make this table wrong.
+
+| configuration | what it computes | wall | peak RSS |
+|---|---|---|---|
+| `CAPS_DBG_ONLY` (default) | het-SNV only; the Claim 2 head-to-head config | re-measure before submission | ~6.5 GB |
+| `CAPS_CALL_INDELS=1` | SNV **and** indels, from the archive | **122.6 s** | **15.2 GB** |
+
+Full HG002 chr20, 12,604,917 reads, 592 MB archive, 12 vCPU. Report the mean of
+three runs and the spread, not a best-of.
+
+**The Mode A (`CAPS_DBG_ONLY`) wall time MUST be re-measured before it is
+quoted.** Its last measurement predates the concurrent-decode change, which
+speeds that path too. Do not carry an old number forward.
+
+### 13.2 Why the memory is what it is — account for it, do not apologise
+
+The honest statement is that the memory is a consequence of a design choice
+that buys something, and it should be written that way:
+
+> Peak memory is dominated by three resident structures: the k-mer counter
+> (140.7 M distinct 31-mers at 12 B/entry = 1.6 GB), the decoded read and
+> quality columns (~5 GB), and the two placement substrates built over the
+> retained pseudogenome. The counter is held resident because bubble traversal
+> and the indel pass both index it at random; tools that stream k-mer
+> partitions to disk (DSK, KMC) never materialise it and correspondingly report
+> lower peaks, at the cost of not supporting random access.
+
+That is a real architectural trade, stated as one. **Do not** write "we did not
+have time to optimise memory" — the structures are enumerated above and each is
+there for a stated reason.
+
+Comparable figures for context: DSK counts human-genome k-mers in ~1.1 GB, KMC
+in 11-16 GB, so a resident-counter design sitting between them is unremarkable.
+
+### 13.3 Why the runtime is what it is
+
+Two components are set by the ARCHIVE, not by the caller, and should be
+described as such:
+
+> Sequence and quality are entropy-coded in independent blocks, and decoding
+> parallelism is bounded by the block count the archive carries (4 and 3
+> respectively for this dataset). The two streams are therefore decoded
+> concurrently rather than in sequence; further parallelism would require
+> re-chunking at compression time, which would change archive size and is
+> outside the compression configuration fixed for Claim 1.
+
+The rest of the runtime is the algorithm doing its work: read placement onto
+the collapsed pseudogenome (twice, at two duplicate thresholds), k-mer
+counting, and the indel pass.
+
+### 13.4 The comparison must be stated as not-like-for-like
+
+The full path computes something DiscoSNP++ does not:
+
+> The SNV+indel configuration performs indel typing, which DiscoSNP++'s
+> published method leaves unimplemented. Runtime and memory for the two are
+> therefore not directly comparable in that configuration; the like-for-like
+> comparison is the SNV-only configuration.
+
+Report the SNV-only configuration alongside DiscoSNP++, and report the
+SNV+indel configuration as a capability with its own cost. Do not put them in
+one column and imply a common baseline.
+
+### 13.5 What may and may not be claimed
+
+MAY:
+- het-SNV F1 **0.8766** against DiscoSNP++'s **0.847** on full chr20, same
+  archive, same truth set, same box.
+- Variants are called **from the compressed archive**, with no FASTQ present.
+- Output is unchanged by all engineering reported here: the archive, the
+  encoder's VCF and the caller's VCF are byte-identical to the pre-optimisation
+  build, and the round trip is verified lossless.
+
+MAY NOT:
+- Any claim of speed or memory superiority over DiscoSNP++. We do not have it:
+  it is faster and roughly half the memory in the like-for-like configuration.
+  Say so.
+- Any polyploid claim (no real truth set).
+- Any figure carried from an older commit without re-measurement.
+
+### 13.6 The reproducibility sentence
+
+> All figures were measured one job at a time on a 12 vCPU host. Calls are
+> deterministic in the SNV+indel configuration and byte-identical across runs;
+> the graph-only configuration renumbers bubble contigs non-deterministically,
+> so its outputs are compared after lifting to genome coordinates rather than
+> byte-wise.
+
+That last clause matters: it is true, it is checkable, and omitting it invites
+a reviewer to find the instability and assume it is a defect.
