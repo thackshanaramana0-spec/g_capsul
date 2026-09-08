@@ -79,60 +79,122 @@ are real and were paid for in machine-days (see "already tested and REFUTED" in
 
 ---
 
-## Orient yourself in the code
+## Orient yourself — by reading the code, not by being told
 
-Roughly 15,800 lines of C++ across seven files. Read in this order.
+**Scan the repository yourself and build your own map before you change
+anything.** You are deliberately not being given a file-by-file guide or a list
+of line numbers. Two reasons, both practical:
 
-| file | lines | what it is |
-|---|---|---|
-| `stages/106_inprocess.cpp` | 4,863 | **the encoder.** The whole pipeline. Start here. |
-| `stages/capsule_decode.cpp` | 1,243 | the decoder + `export` / `coverage` / `query` / `call` |
-| `include/coders_inproc.h` | 931 | stream coders, codec selector, transforms |
-| `include/seqpar_core.h` | 357 | the DNA coder, shared by both paths so they cannot diverge |
-| `include/names_coder.h` | 954 | read-name coder |
-| `include/quality_coder.h` | 561 | quality wrapper around vendored fqzcomp |
-| `include/caps_caller.h` | 6,908 | the variant caller (**not your axis** — do not touch) |
+- Line numbers move. Several in the transcript are already stale after a single
+  session's edits. Anchor on quoted comment text or symbol names, never on
+  `:NNNN`.
+- A map handed to you imports the previous engineer's idea of what matters, and
+  that is exactly the bias you are here to avoid. The largest win of the last
+  session came from noticing something the map would not have shown: three
+  sibling matchers had drifted to three different levels of care.
 
-### Stage map of the encoder — real line numbers, use these as entry points
+Read the encoder end to end before forming hypotheses. Understand every
+representation, buffer, transformation, codec invocation, allocation, copy,
+thread boundary and temporary — and **why each exists and what it costs**. The
+encoder prints per-stage timings, stream sizes and funnel counters to stderr on
+every run; read that log early, it answers a lot.
 
-    :946   lap("load+filter+dedup")        parse, filter, optional dedup
-    :1027  lap("prefix seed index")        builds pent/ptab/pext
-    :1551  lap("round 1 (division)")
-    :2005  lap("round 2 (assembly)")       descending-length overlap sweep
-    :2083  lap("emit chains")
-    :2852  lap("pigeonhole mapping")       maps leftover reads onto the pg
-    :3504  [MEM] MINMEM/seed/step          pg self-match setup
-    :4095  "both run() passes done"        end of MEM matching
-    :4150  lap("pg MEM matching")
-    :4565..:4812                            stream prep, then the coding pool
+### Operational facts you cannot infer by reading
 
-The encoder prints per-stage timings, stream sizes and funnel counters to
-stderr on every run. **Read that log before profiling anything** — it already
-answers many questions.
+These are invocation contracts, not code understanding. Getting them wrong
+produces failures that look like bugs in the code:
 
-### Build and run
-
-    scripts/build106.sh /tmp/best106            # encoder  (must keep -fopenmp)
+    scripts/build106.sh /tmp/best106            # encoder (the -fopenmp matters)
     scripts/build_decode.sh /tmp/capsule_decode # decoder
-    scripts/run_tests.sh                        # 15 self-contained assertions
+    scripts/run_tests.sh                        # must stay 15/15
 
     INPUT=reads.fq ARCHIVE=out.capsule BEST=/tmp/best106 \
         bash scripts/encode_adaptive.sh         # the ONLY correct way to encode
 
-**Never invoke the encoder binary directly.** It needs a specific env and
-argument vector; running it bare produces an incomplete archive that fails
-later in a way that looks like a code bug. Five separate "the tool is broken"
-diagnoses in this project were all wrong invocations.
+**Never invoke the encoder binary bare.** It needs a specific environment and
+argument vector; run directly it silently produces an incomplete archive. Five
+separate "the tool is broken" diagnoses in this project were all wrong
+invocations, not bugs.
 
-Benchmarks (one dataset, all tools, same methodology as the paper):
-
-    bash scripts/benchmark_0_preflight.sh                    # must say GO
+    bash scripts/benchmark_0_preflight.sh                    # must print GO
     CLAIMS=1 bash scripts/sanity_archive_one.sh SRR2584863   # COMPACT only
     bash scripts/benchmark_1_run.sh                          # full sweep, 6-9 h
 
-Data lives in `/data/fastq`. The locked dataset list is
-`NEW_DATASET_LOCKED.md` (**not** the 17-accession list in `DATASET_LOCKED.md`).
-Do not substitute datasets.
+Data is in `/data/fastq`. The locked dataset list is `NEW_DATASET_LOCKED.md`
+(**not** the 17-accession list in `DATASET_LOCKED.md`). Do not substitute
+datasets.
+
+---
+
+## Isolation: how to work without endangering what exists
+
+Everything you do is **additive and reversible**. Concretely:
+
+1. **Work on your own branch.** Branch from `c_star_pg_advance` and name it
+   `gpt2026`. Never commit to `c_star_pg_advance` or `main`. Tag a backup ref
+   before any history-altering operation.
+
+       git checkout -b gpt2026
+
+2. **Namespace everything new.** New symbols, structs, files, env vars and
+   build flags carry a `gpt2026` marker — `gpt2026_sext`, `GPT2026_ADAPTIVE`,
+   `docs/GPT2026_FINDINGS.md`. Anyone reading a diff must be able to see at a
+   glance what is yours and delete it cleanly.
+3. **Prefer adding a path over editing one in place.** Where a replacement is
+   substantial, put it behind a flag (default OFF, so the shipped behaviour is
+   untouched), prove it, and only then propose making it the default. The
+   existing path must remain runnable and must keep producing its current
+   output byte-for-byte while your flag is off.
+4. **Do not delete or rename existing code, streams, scripts or docs.** The
+   retractions and refuted experiments in this repo are evidence, not clutter;
+   its own rules say retractions stay marked in place, never removed.
+
+## Do not break the pseudogenome insight, or the other two claims
+
+This is the constraint most likely to be violated by a purely COMPACT-minded
+optimisation, so read it twice.
+
+The archive is **not just a compressed file**. The whole thesis of this project
+is that the pseudogenome built during compression *is* a reference-free
+assembly and coordinate system, so the same archive also serves:
+
+- **Claim 2** — calling variants directly from the archive, no FASTQ, no
+  reference (`capsule_decode call`).
+- **Claim 3** — `export`, `coverage` and `query` off the archive alone.
+
+Those paths consume named streams from the container. Verified consumers
+include `contig_spans`, `pos_abs`, `pos_sec`, `pos_region`, `pos_strand`,
+`orig2uid_flags`, `orig2uid_vals`, plus the read lengths and the assembly
+streams (`literal`, `mem_triples` and companions) that rebuild the
+pseudogenome. **Derive the authoritative list yourself from
+`stages/capsule_decode.cpp`** — do not trust this paragraph as complete.
+
+Therefore:
+
+- A change that drops, renames, reshapes or reorders a stream may shrink the
+  archive and **silently break Claim 2 or Claim 3**. That is a regression even
+  if every COMPACT number improves.
+- A change that destroys the *addressability* of the pseudogenome — its
+  coordinate meaning, the read placements, the mapping from archive
+  coordinates back to reads — breaks the central claim of the paper. Compression
+  ratio does not buy that back.
+- Whatever you do to the assembly, **it must remain an assembly**. If your
+  change makes the pseudogenome cheaper to produce but no longer a usable
+  coordinate system, it is not a win; it converts this project into an
+  ordinary compressor and throws away its reason to exist.
+
+**Gate for this:** after any change that touches streams, the container, the
+pseudogenome construction or the read placements, run the archive through the
+other claims and confirm they still work:
+
+    CLAIMS=1   bash scripts/sanity_archive_one.sh SRR2584863   # COMPACT
+    CLAIMS=13  bash scripts/sanity_archive_one.sh SRR2584863   # + export/coverage/query
+    bash scripts/sanity_archive_one.sh HG002                   # all three claims
+
+The last one must still produce a populated Claim 2 table (het-SNV F1 ~0.888
+from the archive) and a Claim 3 table. Cost of addressability, for scale: the
+`contig_spans` stream that makes archive-path calling possible is 232,509 B —
+**0.041%** of a 573 MB archive. Do not "optimise" it away.
 
 ---
 
@@ -193,7 +255,8 @@ re-measure and re-rank.
    level.** Genuinely unexplored. Nobody has looked.
 4. **Two documented, unclosed SIZE gaps**, both written in the code as open:
    the seedcap's arbitrary 0.828% loss (above), and MEM matches averaging
-   **179 bases against copMEM's 250** (`106_inprocess.cpp:3507`; the seedcap is at `:2514`). copMEM is by
+   **179 bases against copMEM's 250** — grep the encoder for the comment
+   `copMEM's 250`, and for `[seedcap]` for the other. copMEM is by
    PgRC2's own authors and is the direct comparable.
 5. **Cross-layer opportunities.** The biggest win of the last session was
    noticing that three sibling seed-and-verify matchers (round 2, mapping, MEM)
