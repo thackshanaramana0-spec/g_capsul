@@ -219,6 +219,11 @@ phase1_one(){                      # $1 = dataset name ; returns 1 on failure
     # ---- Genozip ----
     mark "P1 $DS: Genozip"
     step "Genozip compress + decompress"
+    # genozip tests curl/wget availability with file_exists("/dev/stdout") and,
+    # on a Student licence, will not write the archive header unless it can
+    # upload telemetry. If /dev/stdout is missing it exits 1 with NO archive
+    # after compressing the whole file -- a silently blank competitor column.
+    [ -e /dev/stdout ] || ln -sfn /proc/self/fd/1 /dev/stdout 2>/dev/null || true
     A="$WD/$DS.genozip"; TF="$WD/t_gc_$$"; TF2="$WD/t_gd_$$"
     /usr/bin/time -v genozip --force -o "$A" "$IN" 2>"$TF"
     read -r CW CR <<< "$(parse_time_v "$TF")"
