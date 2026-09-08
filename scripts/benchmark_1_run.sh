@@ -166,11 +166,11 @@ phase1_one(){                      # $1 = dataset name ; returns 1 on failure
     mark "P1 $DS: CAPSULE compress"
     step "CAPSULE compress (adaptive, 4 candidates in one process)"
     A="$ARCH_DIR/$DS.capsule"; TF="$WD/t_c_$$"
-    # CAPS_CALL=1 is REQUIRED, not optional: it writes `contig_spans`, and
-    # without that stream Phase 2 cannot call from the archive at all -- the
-    # decoder refuses with "ARCHIVE LACKS contig_spans". Phase 1 archives are
-    # KEPT and reused by Phases 2 and 3, so this flag has to be set here.
-    /usr/bin/time -v env CAPS_CALL=1 CAPS_NAMES=1 CAPS_QUAL=1 INPUT="$IN" ARCHIVE="$A" BEST="$BEST" \
+    # CAPS_SPANS=1 writes `contig_spans`, which Phase 2 needs to call from the
+    # archive. NOT CAPS_CALL=1: that also runs the full caller inline during
+    # compression (~20x heavier). Measured: 38.64 s / 2.45 GB vs 8.97 s /
+    # 1.00 GB on the same input, for a byte-identical archive.
+    /usr/bin/time -v env CAPS_SPANS=1 CAPS_NAMES=1 CAPS_QUAL=1 INPUT="$IN" ARCHIVE="$A" BEST="$BEST" \
         bash "$HERE/scripts/encode_adaptive.sh" >/dev/null 2>"$TF"
     read -r CW CR <<< "$(parse_time_v "$TF")"
     if [ ! -s "$A" ]; then err "$DS: CAPSULE produced no archive"; debug_dump "$DS encode" "${A}.log"; rm -f "$IN" "$TF"; return 1; fi
