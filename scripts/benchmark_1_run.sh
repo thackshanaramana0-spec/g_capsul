@@ -130,16 +130,20 @@ vs_proj(){   # $1=actual seconds  $2=projected seconds
     [ -n "${2:-}" ] || return 0
     awk -v a="$1" -v p="$2" 'BEGIN{ if(p<=0){print "";exit}
         r=a/p; printf "  [proj %.1fs, %.2fx %s]", p, r, (r>1.5)?"SLOWER THAN PROJECTED":((r<0.67)?"faster":"on track") }'; }
-CSV1="$OUT_DIR/claim1_t1_t2.csv"
-CSV2="$OUT_DIR/claim2_t3.csv"
-CSV3="$OUT_DIR/claim3_t6.csv"
+CSV1="$OUT_DIR/claim1_T1.1_T1.2.csv"
+CSV2="$OUT_DIR/claim2_T2.1_snv.csv"
+CSV3="$OUT_DIR/claim3_T3.1_T3.2_T3.3.csv"
 echo "dataset,tool,raw_bytes,archive_bytes,ratio_pct,compress_s,decompress_s,peak_ram_kb,lossless,status" > "$CSV1"
 echo "individual,tool,tp,fp,fn,precision,recall,f1,wall_s,peak_ram_kb,status" > "$CSV2"
-echo "dataset,operation,ours_s,ours_peak_ram_kb,output_bytes,rows,baseline_tool,baseline_s,baseline_peak_ram_kb,speedup,status,note" > "$CSV3"
-CSV4="$OUT_DIR/claim2_t4_coverage.csv"
-CSV5="$OUT_DIR/claim2_t5_indel.csv"
+echo "table,dataset,operation,ours_s,ours_peak_ram_kb,output_bytes,rows,baseline_tool,baseline_s,baseline_peak_ram_kb,speedup,status,note" > "$CSV3"
+CSV4="$OUT_DIR/claim2_T2.2_coverage_sweep.csv"
+CSV5="$OUT_DIR/claim2_T2.3_indel.csv"
+CSV6="$OUT_DIR/claim2_T2.4_multiallelic.csv"
+CSV7="$OUT_DIR/claim2_T2.5_tetraploid.csv"
 echo "individual,depth_x,reads,archive_bytes,tp,fp,fn,precision,recall,f1,wall_s,peak_ram_kb,status" > "$CSV4"
 echo "individual,tool,tp,fp,fn,precision,recall,f1,wall_s,peak_ram_kb,status" > "$CSV5"
+echo "individual,region,truth_multiallelic_sites,capsule_hits,disco_hits,capsule_rate,disco_rate,wall_s,peak_ram_kb,status" > "$CSV6"
+echo "pair,ploidy,region,tool,class,tp,fp,fn,precision,recall,f1,wall_s,peak_ram_kb,status" > "$CSV7"
 
 DATASETS="ERR5181310 SRR554369 ERR552797 SRR2584863 SRR29296997 ERR12954017 \
 SRR065390 SRR40271341 ERR17740259 SRR37283774 DRR976266 SRR36741279 \
@@ -304,7 +308,7 @@ run_phase1(){
     banner "PHASE 1 — CLAIM 1 (compression): 19 datasets, one at a time"
     say "  per dataset: CAPSULE encode -> archive KEPT -> decode -> lossless"
     say "               -> SPRING compress+decompress -> Genozip compress+decompress"
-    say "  tables: T1 archive size | T2 wall time + peak RAM (all three tools)"
+    say "  tables: T1.1 archive size | T1.2 wall time + peak RAM (all three tools)"
     local list="$DATASETS" i=0 n t0 el
     [ -n "${SANITY_ONLY:-}" ] && { list="${SANITY_DS:-$(echo $DATASETS | cut -d' ' -f1)}"; say "  SANITY_ONLY: running only $list"; }
     n=$(echo $list | wc -w)
@@ -356,7 +360,7 @@ run_phase2(){
     fi
     say "  per set: ours (compress+call, one pass) -> DiscoSNP++ -> Kmer2SNP"
     say "           -> rtg vcfeval against GIAB truth"
-    say "  tables: T3 het-SNV F1 (3-way)"
+    say "  tables: T2.1 het-SNV F1 (3-way)"
     local i=0 n=4 t0 fq d f1 p r tv w hwm el
     for IND in $C2_SETS; do
         i=$((i+1)); t0=$(date +%s)
@@ -394,7 +398,7 @@ run_phase2(){
             checkpoint "$IND  our caller done -- SNV F1=$f1 P=$p R=$r, ${w}s"
             printf "%s,CAPSULE,%s,%s,%s,%s,%s,%s,%s,%s,DONE\n" "$IND" \
                 "${tp:-}" "${fp:-}" "${fn:-}" "$p" "$r" "$f1" "$w" "$hwm" >> "$CSV2"
-            # T5: both runners already score INDEL in the same pass -- the line
+            # T2.3: both runners already score INDEL in the same pass -- the line
             # was being printed and thrown away. No extra compute.
             IL=$(grep -aE '^INDEL ' "$d.log" | tail -1)
             if [ -n "${IL:-}" ]; then
@@ -481,8 +485,8 @@ run_phase2(){
         el=$(( $(date +%s) - t0 ))
         inf "[$i/$n] $IND done in ${el}s   (elapsed $(_el))"
     done
-    # ═══ T4 — COVERAGE SWEEP (HG002 only) ══════════════════════════════════
-    # The spec's Claim 2 is T3 + T4 + T5. T4 asks how F1 holds up as depth
+    # ═══ T2.2 — COVERAGE SWEEP (HG002 only) ══════════════════════════════════
+    # Claim 2 is T2.1 + T2.2 + T2.3 (+T2.4/T2.5). T2.2 asks how F1 holds up as depth
     # falls, which is the question a reviewer asks of any k-mer/graph caller:
     # does it only work at luxurious coverage? It needs REAL runs -- the reads
     # are subsampled, re-compressed, and called from the resulting archive by
@@ -496,7 +500,7 @@ run_phase2(){
     local T4_IND=HG002 BASE_DEPTH=30
     local t4fq="$DATA_DIR/${T4_IND}_pooled.fq"
     if [ -s "$t4fq" ] && case ",$PHASES," in *,2,*) true;; *) false;; esac; then
-        banner "T4 — coverage sweep ($T4_IND, ${BASE_DEPTH}x source)"
+        banner "T2.2 — coverage sweep ($T4_IND, ${BASE_DEPTH}x source)"
         local BASE_READS; BASE_READS=$(( $(wc -l < "$t4fq") / 4 ))
         # carry the 30x row over from T3 so the sweep is complete in one table
         local r30; r30=$(awk -F, -v i="$T4_IND" '$1==i && $2=="CAPSULE" && $11=="DONE"{print $3","$4","$5","$6","$7","$8","$9","$10; exit}' "$CSV2")
@@ -505,20 +509,20 @@ run_phase2(){
                 "$(stat -c%s "$ARCH_DIR/$T4_IND.capsule" 2>/dev/null || echo 0)" "$r30" >> "$CSV4"
         fi
         for DEPTH in ${T4_DEPTHS:-10 15 20}; do
-            mark "T4 $T4_IND: ${DEPTH}x"
-            step "T4  ${DEPTH}x  (subsample -> compress -> call from archive)"
+            mark "T2.2 $T4_IND: ${DEPTH}x"
+            step "T2.2  ${DEPTH}x  (subsample -> compress -> call from archive)"
             local frac sub arc4 d4 t0d
             t0d=$(date +%s)
             frac=$(awk -v d="$DEPTH" -v b="$BASE_DEPTH" 'BEGIN{printf "%.4f", d/b}')
             sub="$WD/${T4_IND}_${DEPTH}x.fq"; arc4="$WD/${T4_IND}_${DEPTH}x.capsule"
             # fixed seed: the sweep must be reproducible run to run
             seqtk sample -s11 "$t4fq" "$frac" > "$sub" 2>"$WD/seqtk.log" \
-                || { err "T4 ${DEPTH}x: seqtk failed"; printf "%s,%s,,,,,,,,,,,SUBSAMPLE_FAILED\n" "$T4_IND" "$DEPTH" >> "$CSV4"; continue; }
+                || { err "T2.2 ${DEPTH}x: seqtk failed"; printf "%s,%s,,,,,,,,,,,SUBSAMPLE_FAILED\n" "$T4_IND" "$DEPTH" >> "$CSV4"; continue; }
             local NR4; NR4=$(( $(wc -l < "$sub") / 4 ))
             /usr/bin/time -v env CAPS_SPANS=1 CAPS_NAMES=1 CAPS_QUAL=1 INPUT="$sub" ARCHIVE="$arc4" BEST="$BEST" \
                 bash "$HERE/scripts/encode_adaptive.sh" >/dev/null 2>"$WD/t4c.txt"
             if [ ! -s "$arc4" ]; then
-                err "T4 ${DEPTH}x: no archive"; debug_dump "T4 ${DEPTH}x encode" "${arc4}.log"
+                err "T2.2 ${DEPTH}x: no archive"; debug_dump "T2.2 ${DEPTH}x encode" "${arc4}.log"
                 printf "%s,%s,%s,,,,,,,,,,ENCODE_FAILED\n" "$T4_IND" "$DEPTH" "$NR4" >> "$CSV4"
                 rm -f "$sub"; continue; fi
             d4="$OUT_DIR/c2_${T4_IND}_${DEPTH}x"
@@ -527,8 +531,8 @@ run_phase2(){
             local SL4; SL4=$(grep -aE '^SNV ' "$d4.log" | tail -1)
             local tv4 w4 h4; tv4=$(parse_time_v "$d4.log"); w4=${tv4% *}; h4=${tv4#* }
             if [ -n "${SL4:-}" ]; then
-                ok "T4 ${DEPTH}x  F1=$(echo "$SL4"|grep -oP 'F1=\K[0-9.]+')  ($NR4 reads, $(mbs $(stat -c%s "$arc4")))"
-                checkpoint "$T4_IND T4 ${DEPTH}x done -- F1=$(echo "$SL4"|grep -oP 'F1=\K[0-9.]+')"
+                ok "T2.2 ${DEPTH}x  F1=$(echo "$SL4"|grep -oP 'F1=\K[0-9.]+')  ($NR4 reads, $(mbs $(stat -c%s "$arc4")))"
+                checkpoint "$T4_IND T2.2 ${DEPTH}x done -- F1=$(echo "$SL4"|grep -oP 'F1=\K[0-9.]+')"
                 printf "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,DONE\n" "$T4_IND" "$DEPTH" "$NR4" \
                     "$(stat -c%s "$arc4")" \
                     "$(echo "$SL4"|grep -oP 'TP=\K[0-9]+')" "$(echo "$SL4"|grep -oP 'FP=\K[0-9]+')" \
@@ -536,13 +540,84 @@ run_phase2(){
                     "$(echo "$SL4"|grep -oP ' R=\K[0-9.]+')" "$(echo "$SL4"|grep -oP 'F1=\K[0-9.]+')" \
                     "$w4" "$h4" >> "$CSV4"
             else
-                err "T4 ${DEPTH}x: no SNV line"; debug_dump "T4 ${DEPTH}x" "$d4.log"
+                err "T2.2 ${DEPTH}x: no SNV line"; debug_dump "T2.2 ${DEPTH}x" "$d4.log"
                 printf "%s,%s,%s,%s,,,,,,,,,NO_SNV_LINE\n" "$T4_IND" "$DEPTH" "$NR4" "$(stat -c%s "$arc4")" >> "$CSV4"
             fi
             rm -f "$sub" "$arc4"          # the transient is the whole point of deleting it
-            inf "T4 ${DEPTH}x took $(( $(date +%s) - t0d ))s"
+            inf "T2.2 ${DEPTH}x took $(( $(date +%s) - t0d ))s"
         done
-        banner "T4 COMPLETE  ->  $CSV4"
+        banner "T2.2 COMPLETE  ->  $CSV4"
+    fi
+
+    # ═══ T2.4 — MULTI-ALLELIC, and T2.5 — TETRAPLOID ═══════════════════════
+    # Both are locked parts of Claim 2 (docs/CLAIM2_TABLES_AND_INDEL_SCAN.md)
+    # and both had working runners that this benchmark never called, so a full
+    # sweep produced 6 of the 8 tables and looked complete.
+    #
+    # They are REGION benchmarks, not whole-chr20, by design: multi-allelic
+    # truth sites are rare (HG002 has 952 on all of chr20) and the tetraploid
+    # construction concatenates two individuals' reads, so both are scoped to a
+    # window and that window is recorded in the table rather than implied.
+    # Both drive the ENCODER, not the decoder.
+    if case ",$PHASES," in *,2,*) true;; *) false;; esac; then
+      if [ -x "$BEST" ]; then
+        # ---- T2.4 multi-allelic (one diploid individual's own GT=1/2 sites) ----
+        mark "T2.4 multi-allelic"
+        banner "T2.4 — multi-allelic sites recovered"
+        local MA_IND="${T24_IND:-HG002}" MA_REG="${T24_REGION:-20:3000000-3400000}" mad
+        mad="$OUT_DIR/c2_T2.4_${MA_IND}"
+        if /usr/bin/time -v bash "$HERE/scripts/run_multiallelic_bench_capsule.sh" \
+              "$BEST" "$HERE/scripts" "$REFS/chr20.fa" "$MA_IND" "$MA_REG" "$mad" \
+              > "$mad.log" 2>&1; then
+            local NT CH DH tvm wm hm
+            NT=$(grep -aoP 'truth multi-allelic sites: \K[0-9]+' "$mad.log" | tail -1)
+            CH=$(grep -aoP 'CAPSULE\s+sites with a call at that position: \K[0-9]+' "$mad.log" | tail -1)
+            DH=$(grep -aoP 'DiscoSNP\+\+ sites with a call at that position: \K[0-9]+' "$mad.log" | tail -1)
+            tvm=$(parse_time_v "$mad.log"); wm=${tvm% *}; hm=${tvm#* }
+            if [ -n "${NT:-}" ] && [ -n "${CH:-}" ]; then
+                ok "T2.4  CAPSULE $CH/$NT   DiscoSNP++ ${DH:-0}/$NT"
+                checkpoint "T2.4 multi-allelic done -- $CH/$NT vs ${DH:-0}/$NT"
+                printf "%s,%s,%s,%s,%s,%s,%s,%s,%s,DONE\n" "$MA_IND" "$MA_REG" "$NT" "$CH" "${DH:-0}" \
+                    "$(awk -v a=${CH:-0} -v n=${NT:-1} 'BEGIN{printf "%.3f",(n?a/n:0)}')" \
+                    "$(awk -v a=${DH:-0} -v n=${NT:-1} 'BEGIN{printf "%.3f",(n?a/n:0)}')" \
+                    "$wm" "$hm" >> "$CSV6"
+            else err "T2.4: could not parse counts"; debug_dump "T2.4" "$mad.log"
+                 printf "%s,%s,,,,,,,,PARSE_FAILED\n" "$MA_IND" "$MA_REG" >> "$CSV6"; fi
+        else err "T2.4 runner failed"; debug_dump "T2.4" "$mad.log"
+             printf "%s,%s,,,,,,,,FAILED\n" "$MA_IND" "$MA_REG" >> "$CSV6"; fi
+
+        # ---- T2.5 tetraploid (two real diploids concatenated, Cooke 2022) ----
+        mark "T2.5 tetraploid"
+        banner "T2.5 — tetraploid SNV + indel"
+        local TA="${T25_A:-HG003}" TB="${T25_B:-HG004}" TP4="${T25_PLOIDY:-4}"
+        local TREG="${T25_REGION:-20:3000000-3400000}" ted
+        ted="$OUT_DIR/c2_T2.5_${TA}_${TB}"
+        if /usr/bin/time -v bash "$HERE/scripts/run_tetraploid_bench_capsule.sh" \
+              "$BEST" "$HERE/scripts" "$REFS/chr20.fa" "$TA" "$TB" "$TP4" "$TREG" "$ted" \
+              > "$ted.log" 2>&1; then
+            local tvt wt ht wrote=0
+            tvt=$(parse_time_v "$ted.log"); wt=${tvt% *}; ht=${tvt#* }
+            while read -r nm rest; do
+                [ -n "${nm:-}" ] || continue
+                local tool cls
+                case "$nm" in CAPSULE_*) tool=CAPSULE;; DiscoSNP*) tool="DiscoSNP++";; *) continue;; esac
+                case "$nm" in *_SNV) cls=SNV;; *_INDEL) cls=INDEL;; *) continue;; esac
+                printf "%s+%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,DONE\n" "$TA" "$TB" "$TP4" "$TREG" \
+                    "$tool" "$cls" \
+                    "$(echo "$rest"|grep -oP 'TP=\K[0-9]+')" "$(echo "$rest"|grep -oP 'FP=\K[0-9]+')" \
+                    "$(echo "$rest"|grep -oP 'FN=\K[0-9]+')" "$(echo "$rest"|grep -oP 'P=\K[0-9.]+')" \
+                    "$(echo "$rest"|grep -oP 'R=\K[0-9.]+')" "$(echo "$rest"|grep -oP 'F1=\K[0-9.]+')" \
+                    "$wt" "$ht" >> "$CSV7"
+                wrote=$((wrote+1))
+            done < <(grep -aE '^(CAPSULE|DiscoSNP)[A-Za-z+_]*_(SNV|INDEL) ' "$ted.log")
+            if [ "$wrote" -gt 0 ]; then ok "T2.5  $wrote rows written"; checkpoint "T2.5 tetraploid done -- $wrote rows"
+            else err "T2.5: no score lines parsed"; debug_dump "T2.5" "$ted.log"
+                 printf "%s+%s,%s,%s,,,,,,,,,,,NO_SCORE_LINES\n" "$TA" "$TB" "$TP4" "$TREG" >> "$CSV7"; fi
+        else err "T2.5 runner failed"; debug_dump "T2.5" "$ted.log"
+             printf "%s+%s,%s,%s,,,,,,,,,,,FAILED\n" "$TA" "$TB" "$TP4" "$TREG" >> "$CSV7"; fi
+      else
+        err "encoder $BEST missing -- T2.4 and T2.5 skipped"
+      fi
     fi
 
     checkpoint "PHASE 2 COMPLETE"
@@ -554,26 +629,26 @@ run_phase2(){
 # ═══════════════════════════════════════════════════════════════════════════
 run_phase3(){
     banner "PHASE 3 — CLAIM 3 (archive analysis): reads the archives phase 1 kept"
-    say "  T6a export   vs SPAdes                — 6 datasets (one per kingdom)"
-    say "  T6b coverage vs bwa+samtools+mosdepth — same 6"
-    say "  T6c query    — every archive present (no competitor exists)"
+    say "  T3.1 export   vs SPAdes                — 6 datasets (one per kingdom)"
+    say "  T3.2 coverage vs bwa+samtools+mosdepth — same 6"
+    say "  T3.3 query    — every archive present (no competitor exists)"
     local SPADES="$HOME/SPAdes-4.0.0-Linux/bin/spades.py"
     local i=0 n t0 arc d t_a t_b sp ref src
 
     # ---- T6c: cheap, every archive ----
-    say ""; inf "T6c — query, over every retained archive"
+    say ""; inf "T3.3 — query, over every retained archive"
     for arc in "$ARCH_DIR"/*.capsule; do
         [ -s "$arc" ] || continue
         local ds; ds=$(basename "$arc" .capsule)
         if /usr/bin/time -v "$DEC" query "$arc" "$WD/q.fa" 0-100000 >/dev/null 2>"$WD/q.log"; then
             read -r sp qram <<< "$(parse_time_v "$WD/q.log")"
             local QB QR; QB=$(stat -c%s "$WD/q.fa" 2>/dev/null || echo 0); QR=$(grep -c . "$WD/q.fa" 2>/dev/null || echo 0)
-            ok "T6c query  $ds  ${sp}s  RAM=$(ramg $qram)  $(mbs $QB)  $QR rows"
-            printf "%s,query,%s,%s,%s,%s,none,,,,DONE,no competitor exists for coordinate-range retrieval\n" \
+            ok "T3.3 query  $ds  ${sp}s  RAM=$(ramg $qram)  $(mbs $QB)  $QR rows"
+            printf "T3.3,%s,query,%s,%s,%s,%s,none,,,,DONE,no competitor exists for coordinate-range retrieval\n" \
                 "$ds" "$sp" "$qram" "$QB" "$QR" >> "$CSV3"
         else
-            err "T6c query failed on $ds"; debug_dump "$ds query" "$WD/q.log"
-            printf "%s,query,,,,,none,,,,FAILED,\n" "$ds" >> "$CSV3"
+            err "T3.3 query failed on $ds"; debug_dump "$ds query" "$WD/q.log"
+            printf "T3.3,%s,query,,,,,none,,,,FAILED,\n" "$ds" >> "$CSV3"
         fi
         rm -f "$WD/q.fa"
     done
@@ -595,13 +670,13 @@ run_phase3(){
         say "──────────────────────────────────────────────────────────────────────"
         arc="$ARCH_DIR/$DS.capsule"
         [ -s "$arc" ] || { err "$DS: archive missing (phase 1 must run first) — skipping"
-                           printf "%s,export,,,,,SPAdes,,,,NO_ARCHIVE,\n" "$DS" >> "$CSV3"; continue; }
+                           printf "T3.1,%s,export,,,,,SPAdes,,,,NO_ARCHIVE,\n" "$DS" >> "$CSV3"; continue; }
         if [ "$REFNAME" = chr20 ]; then ref="$REFS/chr20.fa"; else ref="$REFS/c3_${REFNAME}.fa"; fi
         src="$DATA_DIR/${DS}_1.fq"; [ -s "$src" ] || src="$DATA_DIR/${DS}_pooled.fq"
 
-        # T6a export vs SPAdes
+        # T3.1 export vs SPAdes
         mark "P3 $DS: export"
-        step "T6a  our export"
+        step "T3.1  our export"
         d="$OUT_DIR/c3_$DS"; mkdir -p "$d"
         /usr/bin/time -v "$DEC" export "$arc" "$d/contigs.fa" >/dev/null 2>"$d/export.log"
         local OURS_EXP EXP_RAM EXP_B EXP_R
@@ -611,7 +686,7 @@ run_phase3(){
         if [ -s "$d/contigs.fa" ]; then ok "our export  ${OURS_EXP}s  RAM=$(ramg $EXP_RAM)  $(mbs $EXP_B)  $EXP_R contigs"
         else err "our export produced nothing for $DS"; debug_dump "$DS export" "$d/export.log"; fi
 
-        step "T6a  SPAdes de-novo (the slow baseline — minutes to hours)"
+        step "T3.1  SPAdes de-novo (the slow baseline — minutes to hours)"
         if [ -x "$SPADES" ] && [ -s "$src" ]; then
             /usr/bin/time -v python3 "$SPADES" -s "$src" -o "$d/spades" -t "$NPROC" -m $(( $(free -g | awk '/^Mem:/{print $2}') - 8 )) \
                 > "$d/spades.log" 2>&1
@@ -619,23 +694,23 @@ run_phase3(){
             if [ $RC -eq 0 ] && [ -s "$d/spades/contigs.fasta" ]; then
                 local SP_T SP_RAM; read -r SP_T SP_RAM <<< "$(parse_time_v "$d/spades.log")"
                 ok "SPAdes      ${SP_T}s   ->  speedup $(awk -v s=$SP_T -v o=$OURS_EXP 'BEGIN{printf "%.1fx",s/o}')"
-                checkpoint "$DS  T6a export done -- ours ${OURS_EXP}s vs SPAdes ${SP_T}s"
-                printf "%s,export,%s,%s,%s,%s,SPAdes,%s,%s,%s,DONE,\n" "$DS" "$OURS_EXP" "$EXP_RAM" \
+                checkpoint "$DS  T3.1 export done -- ours ${OURS_EXP}s vs SPAdes ${SP_T}s"
+                printf "T3.1,%s,export,%s,%s,%s,%s,SPAdes,%s,%s,%s,DONE,\n" "$DS" "$OURS_EXP" "$EXP_RAM" \
                     "$EXP_B" "$EXP_R" "$SP_T" "$SP_RAM" \
                     "$(awk -v s=$SP_T -v o=$OURS_EXP 'BEGIN{printf "%.1f",s/o}')" >> "$CSV3"
             else
                 err "SPAdes did not complete on $DS (rc=$RC)"; debug_dump "$DS SPAdes" "$d/spades.log"
-                printf "%s,export,%s,%s,%s,%s,SPAdes,,,,BASELINE_DNF,SPAdes did not complete (rc=%s)\n" "$DS" "$OURS_EXP" "$EXP_RAM" "$EXP_B" "$EXP_R" "$RC" >> "$CSV3"
+                printf "T3.1,%s,export,%s,%s,%s,%s,SPAdes,,,,BASELINE_DNF,SPAdes did not complete (rc=%s)\n" "$DS" "$OURS_EXP" "$EXP_RAM" "$EXP_B" "$EXP_R" "$RC" >> "$CSV3"
             fi
             rm -rf "$d/spades/K"* "$d/spades/tmp" 2>/dev/null
         else
             err "SPAdes or input missing for $DS"
-            printf "%s,export,%s,%s,%s,%s,SPAdes,,,,BASELINE_MISSING,\n" "$DS" "$OURS_EXP" "$EXP_RAM" "$EXP_B" "$EXP_R" >> "$CSV3"
+            printf "T3.1,%s,export,%s,%s,%s,%s,SPAdes,,,,BASELINE_MISSING,\n" "$DS" "$OURS_EXP" "$EXP_RAM" "$EXP_B" "$EXP_R" >> "$CSV3"
         fi
 
-        # T6b coverage vs bwa+samtools+mosdepth
+        # T3.2 coverage vs bwa+samtools+mosdepth
         mark "P3 $DS: coverage"
-        step "T6b  our coverage"
+        step "T3.2  our coverage"
         /usr/bin/time -v "$DEC" coverage "$arc" "$d/coverage.tsv" >/dev/null 2>"$d/coverage.log"
         local OURS_COV COV_RAM NROW COV_B
         read -r OURS_COV COV_RAM <<< "$(parse_time_v "$d/coverage.log")"
@@ -643,7 +718,7 @@ run_phase3(){
         COV_B=$(stat -c%s "$d/coverage.tsv" 2>/dev/null || echo 0)
         ok "our coverage ${OURS_COV}s  RAM=$(ramg $COV_RAM)  $(mbs $COV_B)  ${NROW} rows"
 
-        step "T6b  bwa + samtools sort + mosdepth (the conventional route)"
+        step "T3.2  bwa + samtools sort + mosdepth (the conventional route)"
         if [ -s "$ref.bwt" ] && [ -s "$src" ] && command -v mosdepth >/dev/null; then
             # Timed as ONE pipeline under time -v: the conventional route is
             # align+sort+index+depth, and quoting only one of those would flatter us.
@@ -655,18 +730,18 @@ run_phase3(){
             if [ $RC -eq 0 ]; then
                 local CV_T CV_RAM; read -r CV_T CV_RAM <<< "$(parse_time_v "$d/bwa.log")"
                 ok "bwa+mosdepth ${CV_T}s  ->  speedup $(awk -v s=$CV_T -v o=$OURS_COV 'BEGIN{printf "%.1fx",s/o}')"
-                checkpoint "$DS  T6b coverage done -- ours ${OURS_COV}s vs bwa+mosdepth ${CV_T}s"
-                printf "%s,coverage,%s,%s,%s,%s,bwa+samtools+mosdepth,%s,%s,%s,DONE,\n" "$DS" "$OURS_COV" "$COV_RAM" \
+                checkpoint "$DS  T3.2 coverage done -- ours ${OURS_COV}s vs bwa+mosdepth ${CV_T}s"
+                printf "T3.2,%s,coverage,%s,%s,%s,%s,bwa+samtools+mosdepth,%s,%s,%s,DONE,\n" "$DS" "$OURS_COV" "$COV_RAM" \
                     "$COV_B" "$NROW" "$CV_T" "$CV_RAM" \
                     "$(awk -v s=$CV_T -v o=$OURS_COV 'BEGIN{printf "%.1f",s/o}')" >> "$CSV3"
             else
                 err "bwa/mosdepth baseline failed on $DS"; debug_dump "$DS bwa" "$d/bwa.log"
-                printf "%s,coverage,%s,%s,%s,%s,bwa+samtools+mosdepth,,,,BASELINE_FAILED,\n" "$DS" "$OURS_COV" "$COV_RAM" "$COV_B" "$NROW" >> "$CSV3"
+                printf "T3.2,%s,coverage,%s,%s,%s,%s,bwa+samtools+mosdepth,,,,BASELINE_FAILED,\n" "$DS" "$OURS_COV" "$COV_RAM" "$COV_B" "$NROW" >> "$CSV3"
             fi
             rm -f "$d/aln.bam" "$d/aln.bam.bai"    # BAMs are large, the timing is what we keep
         else
             err "bwa index / input / mosdepth missing for $DS — baseline skipped"
-            printf "%s,coverage,%s,%s,%s,%s,bwa+samtools+mosdepth,,,,BASELINE_MISSING,\n" "$DS" "$OURS_COV" "$COV_RAM" "$COV_B" "$NROW" >> "$CSV3"
+            printf "T3.2,%s,coverage,%s,%s,%s,%s,bwa+samtools+mosdepth,,,,BASELINE_MISSING,\n" "$DS" "$OURS_COV" "$COV_RAM" "$COV_B" "$NROW" >> "$CSV3"
         fi
         inf "[$i/$n] $DS done in $(( $(date +%s) - t0 ))s   (elapsed $(_el))"
     done
@@ -685,18 +760,22 @@ say "finished  : $(date '+%Y-%m-%d %H:%M:%S')"
 say "total time: $(_el)"
 say "datasets  : $N_OK ok, $N_FAIL failed${FAILED_LIST:+ ($FAILED_LIST)}"
 say ""
-say "  T1/T2 (Claim 1): $CSV1"
-say "  T3    (Claim 2): $CSV2"
-say "  T4    (Claim 2): $CSV4"
-say "  T5    (Claim 2): $CSV5"
+say "  T1.1/T1.2 (Claim 1): $CSV1"
+say "  T2.1  (Claim 2): $CSV2"
+say "  T2.2  (Claim 2): $CSV4"
+say "  T2.3  (Claim 2): $CSV5"
+say "  T2.4  (Claim 2): $CSV6"
+say "  T2.5  (Claim 2): $CSV7"
 say "  T6    (Claim 3): $CSV3"
 say "  archives kept  : $ARCH_DIR  ($(du -sh "$ARCH_DIR" 2>/dev/null | cut -f1))"
 say "  full log       : $LOG"
 say ""
 say "── CLAIM 1 ──"; column -s, -t "$CSV1" 2>/dev/null | head -30 | tee -a "$LOG"
 say ""; say "── CLAIM 2 ──"; column -s, -t "$CSV2" 2>/dev/null | tee -a "$LOG"
-say ""; say "── CLAIM 2 — T4 coverage sweep ──"; column -s, -t "$CSV4" 2>/dev/null | tee -a "$LOG"
-say ""; say "── CLAIM 2 — T5 het-indel ──";      column -s, -t "$CSV5" 2>/dev/null | tee -a "$LOG"
+say ""; say "── CLAIM 2 — T2.2 coverage sweep ──"; column -s, -t "$CSV4" 2>/dev/null | tee -a "$LOG"
+say ""; say "── CLAIM 2 — T2.3 het-indel ──";      column -s, -t "$CSV5" 2>/dev/null | tee -a "$LOG"
+say ""; say "── CLAIM 2 — T2.4 multi-allelic ──";  column -s, -t "$CSV6" 2>/dev/null | tee -a "$LOG"
+say ""; say "── CLAIM 2 — T2.5 tetraploid ──";     column -s, -t "$CSV7" 2>/dev/null | tee -a "$LOG"
 say ""; say "── CLAIM 3 ──"; column -s, -t "$CSV3" 2>/dev/null | head -30 | tee -a "$LOG"
 rm -rf "$WD"
 [ "$N_FAIL" -eq 0 ] && exit 0 || exit 1
