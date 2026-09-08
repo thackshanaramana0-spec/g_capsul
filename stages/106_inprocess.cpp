@@ -30,6 +30,7 @@
 #include <algorithm>
 #include <thread>
 #include <atomic>
+#include <array>
 #include <omp.h>
 #include <unistd.h>
 #include <sys/wait.h>
@@ -1148,6 +1149,17 @@ int main(int argc,char** argv){
     // the main pseudogenome and leaves the mapping stage with less to hit.
     uint32_t sweep_minov=MINOV;
     static size_t g_sd_hit=0, g_cand=0, g_probe=0;
+    // MAPPING FUNNEL INSTRUMENTATION -- COMPILE-TIME ONLY.
+    // Build with -DMAPFUNNEL to enable, then run with CAPS_MAPDBG=1. It is not
+    // a runtime flag because the counter sits in the hottest loop in the
+    // encoder: a runtime `if(MAPDBG)` measured ~1.8% on HG002, which is the
+    // same order as the effects being hunted. A measurement instrument must
+    // not cost what it measures.
+#ifdef MAPFUNNEL
+    static std::array<std::atomic<size_t>,16> g_mapdbg_probes{};
+    static std::array<std::atomic<size_t>,16> g_mapdbg_cands{};
+    static const bool MAPDBG = (getenv("CAPS_MAPDBG")!=nullptr);
+#endif
     auto sweep=[&](){
         links=0; probes=0; g_sd_hit=0; g_cand=0; g_probe=0;
         // Round 1's result is discarded wholesale (nxt/prv/ovl are refilled on
@@ -2709,7 +2721,13 @@ int main(int argc,char** argv){
                         if(K2>1 && (seedStart%K2)) continue;
                         if(!mmaybe(k)) continue;              // 2 MB filter, stays cached
                         const uint32_t ix=mfind(k); if(ix==UINT32_MAX) continue;
+#ifdef MAPFUNNEL
+                        size_t dbg_walked=0;
+#endif
                         for(uint32_t q=ix;q<ment.size()&&MKEY(q)==(uint32_t)k;++q){
+#ifdef MAPFUNNEL
+                            if(MAPDBG) ++dbg_walked;
+#endif
                             // ── SOFTWARE PREFETCH ───────────────────────────
                             // perf puts 32.4% of all cycles in this worker and
                             // the sweep runs at IPC 0.62 with 3.9 billion cache
@@ -2777,6 +2795,13 @@ int main(int argc,char** argv){
                                 }
                             }
                         }
+#ifdef MAPFUNNEL
+                        if(MAPDBG){
+                            unsigned b=0; size_t v=dbg_walked; while(v>1&&b<15){ v>>=1; ++b; }
+                            g_mapdbg_probes[b].fetch_add(1,std::memory_order_relaxed);
+                            g_mapdbg_cands[b].fetch_add(dbg_walked,std::memory_order_relaxed);
+                        }
+#endif
                     }
                   }
                 });
@@ -2792,6 +2817,20 @@ int main(int argc,char** argv){
                 fprintf(stderr,"  [a4] accepted hits=%zu  hit/hmm capacity=%.1f MB"
                                "  seedindex=%.1f MB  reads=%zu\n",
                         hn, hb/1048576.0, ment.size()*8.0/1048576.0, (size_t)n);
+#ifdef MAPFUNNEL
+                if(MAPDBG){
+                    size_t tp=0,tc=0;
+                    for(int b=0;b<16;++b){ tp+=g_mapdbg_probes[b].load(); tc+=g_mapdbg_cands[b].load(); }
+                    fprintf(stderr,"  [MAPFUNNEL] probes=%zu cands=%zu (%.1f per probe)\n",tp,tc,tp?(double)tc/tp:0.0);
+                    for(int b=0;b<16;++b){
+                        const size_t pb=g_mapdbg_probes[b].load(), cb=g_mapdbg_cands[b].load();
+                        if(!pb) continue;
+                        fprintf(stderr,"  [MAPFUNNEL] bucket<=%-6d probes=%-10zu (%5.2f%%) cands=%-12zu (%5.2f%% of work)\n",
+                                1<<b, pb, 100.0*pb/(tp?tp:1), cb, 100.0*cb/(tc?tc:1));
+                    }
+                    for(int b=0;b<16;++b){ g_mapdbg_probes[b].store(0); g_mapdbg_cands[b].store(0); }
+                }
+#endif
             }
             // Keep the fewest-mismatch placement per read. Threads may each
             // have found a different one; the merge is serial and authoritative,
