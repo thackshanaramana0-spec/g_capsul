@@ -21,16 +21,42 @@ separate streams and entropy-coded.
 
 **Your mandate is the COMPACT axis: archive size, wall time, peak RAM.**
 
-### The goal, in three lines
+### The goal
 
-1. **Win all three axes at once** — smaller archive *and* less wall time *and*
-   less peak RAM than SPRING, Genozip and PgRC2, across the locked datasets,
-   not on one favourable file.
-2. **With the insight intact**: the same archive must still be an assembly —
-   calling variants and answering coordinate queries with no reference and no
-   FASTQ. A size win that costs this is a loss.
-3. **At a margin worth a Nature Methods paper** — large, reproducible, and
-   explained by its mechanism, not a 2% gain from tuning constants.
+1. **The win must be STRUCTURAL and it must GENERALIZE.** A different
+   algorithm, representation, data structure or dataflow — whose gain holds
+   across the locked datasets and grows with input size, not one that appears
+   on a single favourable file. Tuning a constant is allowed as *part* of a
+   change, never as the change itself: a fitted constant is not a result.
+2. **Win all three axes at once** — smaller archive *and* less wall time *and*
+   less peak RAM than SPRING, Genozip and PgRC2.
+3. **The insight must hold.** From the `.capsule` archive **alone** — no FASTQ,
+   no reference — Claim 2 (variant calling) and Claim 3 (export, coverage,
+   query) must still work. A size or speed win that breaks either is a loss,
+   not a trade-off.
+4. **A margin worth a Nature Methods paper** — large, reproducible, and
+   explained by its mechanism.
+
+### How to work
+
+5. **Additive only; destroy nothing.** Your own branch `gpt2026`, namespaced
+   symbols, substantial replacements behind flags that default OFF, and the
+   existing path byte-identical while your flag is off. **Never delete, rewrite
+   or force-push anything on GitHub** — no history rewriting, no removing
+   existing code, streams, scripts or docs. Everything you add must be
+   deletable in one clean diff.
+6. **Higher-order, out-of-the-box, critical and precise engineering.** Profile
+   one level deeper than the last profile. Ask what is computed twice, what is
+   represented in the wrong form, which stage could be fused, moved, made
+   streaming or deleted outright. Prefer one change that removes several costs
+   at once over isolated 2-3% wins.
+7. **All three claims already work and run in parallel. Your depth goes to
+   Claim 1 (COMPACT).** Do not touch the caller.
+8. **Do not fear the previous engineer's dead ends.** That transcript is full
+   of refutations, "at its bound" verdicts and abandoned directions. Re-measure
+   them; its own author overturned his "this cost is intrinsic" verdict with a
+   54% win an hour later. Take its measurements, instrumentation and traps.
+   Leave its conclusions.
 
 ### The ambition, stated plainly
 
