@@ -58,6 +58,7 @@ inf(){ echo "[$(date +%H:%M:%S) +$(_el)] $*" | tee -a "$LOG"; }
 step(){ echo "[$(date +%H:%M:%S) +$(_el)]    -> $*" | tee -a "$LOG"; }
 ok(){   echo "[$(date +%H:%M:%S) +$(_el)]    OK  $*" | tee -a "$LOG"; }
 err(){  echo "[$(date +%H:%M:%S) +$(_el)]  FAIL $*" | tee -a "$LOG"; }
+warn(){ echo "[$(date +%H:%M:%S) +$(_el)]  WARN $*" | tee -a "$LOG"; }
 banner(){ say ""; say "════════════════════════════════════════════════════════════════════"; say " $*"; say "════════════════════════════════════════════════════════════════════"; }
 mb(){ awk -v b="${1:-0}" 'BEGIN{printf "%.2f MB", b/1048576}'; }
 gb(){ awk -v b="${1:-0}" 'BEGIN{printf "%.2f GB", b/1073741824}'; }
@@ -255,6 +256,25 @@ if [ -s "$DATA_DIR/${DS}_pooled.fq" ] && [ -s "$REFS/chr20.fa" ]; then
         keep "claim2" "$OUT/claim2_disco.log" "DiscoSNP++ arm -- the competitor number in T3"
       else err "DiscoSNP++ produced no SNV line -- see $OUT/claim2_disco.log"; fi
     else err "run_fullchr20_bench_disco.sh missing -- T3 will have only our arm"; fi
+    # Third T3 arm. benchmark_1 carries the same arm and the same verdict:
+    # /root/Kmer2SNP and its conda env exist, but THIS repo has never invoked
+    # them -- the published Kmer2SNP F1 (0.464) comes from the outer ARCS
+    # project under a methodology not reproduced here. Inventing an invocation
+    # would yield a number that looks measured and is not. The row is written
+    # explicitly so T3 shows a 3-arm table with a declared gap, rather than a
+    # 2-arm table that reads as if only two tools were ever considered.
+    if [ -f "$HERE/scripts/run_kmer2snp.sh" ]; then
+      bash "$HERE/scripts/run_kmer2snp.sh" "$SRC" "$DS" "$OUT/claim2_k2s" \
+           > "$OUT/claim2_k2s.log" 2>&1
+      K1=$(grep -aE '^SNV ' "$OUT/claim2_k2s.log" | tail -1 | grep -oP 'F1=\K[0-9.]+')
+      if [ -n "${K1:-}" ]; then ok "KMER2SNP SNV F1=$K1"
+        printf "%s,Kmer2SNP,,,,,,%s\n" "$DS" "$K1" >> "$OUT/claim2_t3.csv"
+      else err "Kmer2SNP produced no SNV line"
+        printf "%s,Kmer2SNP,,,,,,FAILED\n" "$DS" >> "$OUT/claim2_t3.csv"; fi
+    else
+      warn "Kmer2SNP: no validated runner in this repo -- T3 arm recorded NOT_AVAILABLE"
+      printf "%s,Kmer2SNP,,,,,,NOT_AVAILABLE\n" "$DS" >> "$OUT/claim2_t3.csv"
+    fi
     keep "claim2" "$OUT/claim2_t3.csv" "T3 table: het-SNV TP/FP/FN/P/R/F1, ours vs DiscoSNP++"
   else err "no SNV line -- see $OUT/claim2.log"; FAILED=1; fi
 else

@@ -484,3 +484,50 @@ per-operation prior-art position that does not overclaim. The open items in
 §7 are genuine future work — porting to the outer binary, a benchmark
 script, and a range index — none of which block the claim as stated, and all
 of which are scoped precisely enough to pick up without re-deriving context.
+
+---
+
+## Addendum — HG002 chr20, measured 2026-09-08, and what the speedup is not
+
+Full end-to-end run `results/sanity_HG002_20260908_110429`, 12.6 M reads,
+3.99 GB input, on an otherwise idle box (nothing else timed alongside it).
+
+| operation | ours | baseline | ratio |
+|---|---|---|---|
+| `export`   | **5.491 s** | SPAdes 4.0.0 `-t 12` **2675.80 s** | **487.3x** |
+| `coverage` | **2.791 s** | bwa mem + samtools sort + mosdepth **162.02 s** | **58.1x** |
+| `query`    | **6.233 s** | no competitor exists | — |
+
+The baselines are real work, not early exits: bwa reports 1,586 s of CPU
+across 12 threads, and mosdepth reports mean depth **28.48x** over all
+63,025,520 bases of chr20 — the expected ~30x. SPAdes ran to completion.
+
+**The `export` ratio must not be read as "the same output, 487x faster."**
+It is not the same output, and the difference is visible in one number:
+
+    SPAdes contigs.fasta   24,281 records   63,724,470 B
+    our export contigs.fa       2 records  181,556,800 B
+
+SPAdes performs de novo de Bruijn assembly and yields biological contigs.
+`export` writes the pseudogenome as two FASTA records (`capsule_pg_main`,
+`capsule_pg_second`) — the greedy suffix-prefix-overlap assembly the compressor
+already built, materialised from `literal` + `mem_triples` (section 2.1). The
+honest statement of what is measured is:
+
+> the time to obtain a reference-free coordinate system over the reads,
+> from an archive that had to be written anyway, versus the time to build
+> one de novo.
+
+That is the claim Claim 3 actually makes — ADDRESSABLE, not "better
+assembler". The pseudogenome is not a substitute for `contigs.fasta` for any
+task needing contig boundaries or biological structure, and no table in this
+project should imply otherwise. `coverage` and `query` carry no such caveat:
+they produce the same object as the conventional route (per-base depth, reads
+over a coordinate range), which is why 58.1x is the more directly comparable
+of the two ratios.
+
+**Cost of making the archive addressable**, measured on this run: the
+`contig_spans` stream is 232,509 B and the archive grew 232,530 B (stream plus
+container header) against a run without it — **0.041%** of a 573,767,964 B
+archive. Claim 2's archive-path calling and Claim 3's addressability are paid
+for out of four hundredths of one percent.
