@@ -75,11 +75,20 @@ debug_dump(){   # $1=label  $2=logfile
 
 # /usr/bin/time -v -> "wall_seconds peak_ram_kb"
 parse_time_v(){
+    # TAKE THE LAST BLOCK ONLY. Some arms redirect /usr/bin/time -v into the
+    # SAME log as the tool's own output, and those inner scripts run time -v
+    # too -- so the file holds several "Elapsed" lines. Without tail -1, awk
+    # printed one number per match and they concatenated: DiscoSNP++ reported
+    # "wall=78.3384.97s", i.e. 78.33 and 84.97 glued together, which would have
+    # gone into the published T3 table as a single bogus figure. The outer
+    # timer finishes last, so the last block is the one that timed the whole
+    # invocation. Peak RAM takes the max, not the last, since the heaviest
+    # child is the honest answer for a pipeline.
     local f="$1" wall hwm
-    wall=$(grep "Elapsed (wall clock)" "$f" 2>/dev/null | awk '{n=split($NF,a,":");
+    wall=$(grep "Elapsed (wall clock)" "$f" 2>/dev/null | tail -1 | awk '{n=split($NF,a,":");
         if(n==3) printf "%.2f",a[1]*3600+a[2]*60+a[3];
         else if(n==2) printf "%.2f",a[1]*60+a[2]; else printf "%.2f",a[1]}')
-    hwm=$(grep "Maximum resident set size" "$f" 2>/dev/null | awk '{print $NF}')
+    hwm=$(grep "Maximum resident set size" "$f" 2>/dev/null | awk '{if($NF+0>m)m=$NF+0}END{printf "%d",m}')
     echo "${wall:-0} ${hwm:-0}"
 }
 
@@ -109,6 +118,18 @@ stop_heartbeat(){ [ -n "$HB_PID" ] && kill "$HB_PID" 2>/dev/null; }
 trap 'stop_heartbeat' EXIT INT TERM
 
 # ── CSVs, written incrementally ───────────────────────────────────────────
+# ── projection from benchmark_0, so a wrong number is visible at minute 19
+# and not at hour 9. Absent file = projections simply not shown; never fatal,
+# and never used to judge a result (CLAUDE.md rule 6: measured wins).
+PROJ_F="${PROJ_FILE:-$HERE/results/BENCHMARK_0_PROJECTION.tsv}"
+proj_ds(){   # $1=accession -> "ours_c ours_d spring_c geno_c", empty if unknown
+    [ -s "$PROJ_F" ] || return 0
+    awk -v d="$1" '$1=="DS" && $2==d {print $4,$5,$6,$7; exit}' "$PROJ_F"; }
+proj_key(){ [ -s "$PROJ_F" ] || return 0; awk -v k="$1" '$1==k{print $2; exit}' "$PROJ_F"; }
+vs_proj(){   # $1=actual seconds  $2=projected seconds
+    [ -n "${2:-}" ] || return 0
+    awk -v a="$1" -v p="$2" 'BEGIN{ if(p<=0){print "";exit}
+        r=a/p; printf "  [proj %.1fs, %.2fx %s]", p, r, (r>1.5)?"SLOWER THAN PROJECTED":((r<0.67)?"faster":"on track") }'; }
 CSV1="$OUT_DIR/claim1_t1_t2.csv"
 CSV2="$OUT_DIR/claim2_t3.csv"
 CSV3="$OUT_DIR/claim3_t6.csv"
@@ -175,7 +196,8 @@ phase1_one(){                      # $1 = dataset name ; returns 1 on failure
     read -r CW CR <<< "$(parse_time_v "$TF")"
     if [ ! -s "$A" ]; then err "$DS: CAPSULE produced no archive"; debug_dump "$DS encode" "${A}.log"; rm -f "$IN" "$TF"; return 1; fi
     ARCH=$(stat -c%s "$A")
-    ok "compress  archive=$(mbs $ARCH)  ratio=$(awk -v a=$ARCH -v r=$RAW 'BEGIN{printf "%.2f%%",100*a/r}')  wall=${CW}s  RAM=$(ramg $CR)"
+    read -r PJC PJD PJS PJG <<< "$(proj_ds "$DS")"
+    ok "compress  archive=$(mbs $ARCH)  ratio=$(awk -v a=$ARCH -v r=$RAW 'BEGIN{printf "%.2f%%",100*a/r}')  wall=${CW}s  RAM=$(ramg $CR)$(vs_proj "$CW" "${PJC:-}")"
     checkpoint "$DS  CAPSULE compress done -- $(mbs $ARCH), ${CW}s, $(ramg $CR)"
 
     mark "P1 $DS: CAPSULE decompress + lossless"
@@ -184,7 +206,7 @@ phase1_one(){                      # $1 = dataset name ; returns 1 on failure
     /usr/bin/time -v "$DEC" "$A" "$OUTDIR" "$OUTDIR/reads.seq" >/dev/null 2>"$TF2"
     read -r DW DR <<< "$(parse_time_v "$TF2")"
     LL=$(losscmp "$IN" "$OUTDIR/reads.seq" "$OUTDIR/reads.seq.names" "$OUTDIR/reads.seq.qual")
-    ok "decompress wall=${DW}s  RAM=$(ramg $DR)  -> $LL"
+    ok "decompress wall=${DW}s  RAM=$(ramg $DR)  -> $LL$(vs_proj "$DW" "${PJD:-}")"
     checkpoint "$DS  CAPSULE decompress + lossless done -- $LL, ${DW}s"
     printf "%s,CAPSULE,%s,%s,%.4f,%s,%s,%s,%s,DONE\n" "$DS" "$RAW" "$ARCH" \
         "$(awk -v a=$ARCH -v r=$RAW 'BEGIN{print 100*a/r}')" "$CW" "$DW" "$CR" "$LL" >> "$CSV1"
@@ -206,7 +228,7 @@ phase1_one(){                      # $1 = dataset name ; returns 1 on failure
         /usr/bin/time -v spring -d -i "$A" -o "$WD/$DS.spr.dec" -t "$NPROC" 2>"$TF2"
         read -r DW DR <<< "$(parse_time_v "$TF2")"
         LL=$(losscmp_plain "$IN" "$WD/$DS.spr.dec")
-        ok "SPRING    archive=$(mbs $ARCH)  ctime=${CW}s  dtime=${DW}s  RAM=$(ramg $CR)  $LL"
+        ok "SPRING    archive=$(mbs $ARCH)  ctime=${CW}s  dtime=${DW}s  RAM=$(ramg $CR)  $LL$(vs_proj "$CW" "${PJS:-}")"
         checkpoint "$DS  SPRING done -- $(mbs $ARCH), ${CW}s, $LL"
         printf "%s,SPRING,%s,%s,%.4f,%s,%s,%s,%s,DONE\n" "$DS" "$RAW" "$ARCH" \
             "$(awk -v a=$ARCH -v r=$RAW 'BEGIN{print 100*a/r}')" "$CW" "$DW" "$CR" "$LL" >> "$CSV1"
@@ -280,7 +302,7 @@ run_phase1(){
     say "               -> SPRING compress+decompress -> Genozip compress+decompress"
     say "  tables: T1 archive size | T2 wall time + peak RAM (all three tools)"
     local list="$DATASETS" i=0 n t0 el
-    [ -n "${SANITY_ONLY:-}" ] && { list=$(echo $DATASETS | cut -d' ' -f1); say "  SANITY_ONLY: running only $list"; }
+    [ -n "${SANITY_ONLY:-}" ] && { list="${SANITY_DS:-$(echo $DATASETS | cut -d' ' -f1)}"; say "  SANITY_ONLY: running only $list"; }
     n=$(echo $list | wc -w)
     for DS in $list; do
         i=$((i+1)); t0=$(date +%s)
@@ -303,6 +325,8 @@ run_phase1(){
         [ "$i" -gt 0 ] && inf "     projected remaining: ~$(( (($(date +%s)-T_RUN_START)/i) * (n-i) / 60 )) min at current rate"
     done
     checkpoint "PHASE 1 COMPLETE -- $N_OK ok, $N_FAIL failed"
+    P1P=$(proj_key PHASE1_ALL_S)
+    [ -n "${P1P:-}" ] && say "  phase 1 wall: $(_el)   projected ${P1P}s"
     banner "PHASE 1 COMPLETE — $N_OK ok, $N_FAIL failed  ->  $CSV1"
 }
 
@@ -311,6 +335,21 @@ run_phase1(){
 # ═══════════════════════════════════════════════════════════════════════════
 run_phase2(){
     banner "PHASE 2 — CLAIM 2 (variant calling): 4 GIAB human sets"
+    # A rehearsal that skips a phase does not rehearse it. Under SANITY_ONLY we
+    # still ENTER phase 2, restricted to the GIAB sets whose archive phase 1
+    # actually produced -- so the calling path is exercised when it can be, and
+    # says so loudly when it cannot, instead of being silently jumped over.
+    if [ -n "${SANITY_ONLY:-}" ]; then
+        local have=""
+        for _i in $C2_SETS; do [ -s "$ARCH_DIR/$_i.capsule" ] && have="$have $_i"; done
+        if [ -z "$have" ]; then
+            err "SANITY_ONLY: no GIAB archive from phase 1 -- the Claim 2 path is NOT rehearsed."
+            err "  To rehearse it end to end:  SANITY_ONLY=1 SANITY_DS=HG002 bash scripts/benchmark_1_run.sh"
+            return 0
+        fi
+        C2_SETS="$(echo $have | cut -d' ' -f1)"
+        say "  SANITY_ONLY: only $C2_SETS"
+    fi
     say "  per set: ours (compress+call, one pass) -> DiscoSNP++ -> Kmer2SNP"
     say "           -> rtg vcfeval against GIAB truth"
     say "  tables: T3 het-SNV F1 (3-way)"
@@ -435,6 +474,13 @@ run_phase3(){
     done
 
     # ---- T6a + T6b: the six ----
+    if [ -n "${SANITY_ONLY:-}" ]; then
+        local keep=""
+        for _e in $C3_BASE; do [ -s "$ARCH_DIR/${_e%%:*}.capsule" ] && keep="$keep $_e"; done
+        C3_BASE="$(echo $keep | cut -d' ' -f1)"
+        [ -z "$C3_BASE" ] && { err "SANITY_ONLY: no archive matches a Claim 3 baseline -- T6a/T6b not rehearsed"; }
+        say "  SANITY_ONLY: baselines restricted to:${C3_BASE:- none}"
+    fi
     n=$(echo $C3_BASE | wc -w)
     for entry in $C3_BASE; do
         i=$((i+1)); t0=$(date +%s)
@@ -520,8 +566,8 @@ run_phase3(){
 
 # ═══════════════════════════════════════════════════════════════════════════
 case ",$PHASES," in *,1,*) run_phase1;; esac
-case ",$PHASES," in *,2,*) [ -n "${SANITY_ONLY:-}" ] || run_phase2;; esac
-case ",$PHASES," in *,3,*) [ -n "${SANITY_ONLY:-}" ] || run_phase3;; esac
+case ",$PHASES," in *,2,*) run_phase2;; esac
+case ",$PHASES," in *,3,*) run_phase3;; esac
 stop_heartbeat
 
 banner "BENCHMARK 1 COMPLETE"

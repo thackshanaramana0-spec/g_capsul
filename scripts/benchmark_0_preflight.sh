@@ -133,8 +133,10 @@ say ""
 printf "  %-4s %-16s %-26s %12s  %s\n" "#" "accession" "organism" "size" "path" | tee -a "$OUT"
 say "  ----------------------------------------------------------------------------------------"
 TOTAL_BYTES=0; DS_OK=0; DS_MISS=0
+DS_SIZES=""   # "acc:bytes" per present dataset, consumed by the projection below
 check_ds(){ local i="$1" acc="$2" org="$3" f="$DATA_DIR/$4"
     if [ -s "$f" ]; then local s; s=$(stat -c%s "$f"); TOTAL_BYTES=$((TOTAL_BYTES+s)); DS_OK=$((DS_OK+1))
+        DS_SIZES="$DS_SIZES $acc:$s"
         printf "  %-4s %-16s %-26s %12s  %s\n" "$i" "$acc" "$org" "$(gb "$s")" "$f" | tee -a "$OUT"
     else DS_MISS=$((DS_MISS+1)); FAIL=$((FAIL+1))
         printf "  %-4s %-16s %-26s %12s  %s\n" "$i" "$acc" "$org" "MISSING" "$f" | tee -a "$OUT"; fi; }
@@ -309,24 +311,97 @@ say "      per dataset: encode(8-candidate adaptive sweep, concurrent) -> archiv
 say "                   decode -> lossless compare -> scratch deleted"
 say "                   SPRING compress+decompress, Genozip compress+decompress"
 say "      tables: T1 archive size | T2 wall time + peak RAM (all 3 tools)"
-say "      est: ~1-2 h (encoder is 5.4x faster as of 9e39e23)  archives kept: ~7 GB"
+say "      est: see the PROJECTION below (measured anchors, 2026-09-08)  archives kept: ~7 GB"
 say ""
 say "  PHASE 2 — Claim 2: 4 GIAB human sets only"
 say "      per set: our caller (compress+call, one pass) -> DiscoSNP++ -> Kmer2SNP"
 say "               -> rtg vcfeval against GIAB truth"
 say "      tables: T3 het-SNV F1 (3-way) | T4 coverage sweep 10/15/20/30x"
-say "      est: 3-4 h"
+say "      est: see the PROJECTION below"
 say ""
 say "  PHASE 3 — Claim 3: reads the archives Phase 1 kept"
 say "      T6a export   vs SPAdes            — 6 datasets (one per kingdom)"
 say "      T6b coverage vs bwa+samtools+mosdepth — same 6"
 say "      T6c query    — ALL 19 (no competitor exists)"
-say "      est: 2-2.5 h"
+say "      est: see the PROJECTION below"
 say ""
-say "  TOTAL ESTIMATE: 6-9 h sequential. Peak transient disk ~35 GB, peak RAM ~20 GB."
-say "  NOTE: timings are ESTIMATES from two anchors (E. coli encode 32.46 s,"
-say "        HG002 chr20 25 min). Phase 1's first dataset replaces them with"
-say "        a measured rate."
+say "  Peak transient disk ~35 GB, peak RAM ~20 GB."
+
+# ── 8b. PROJECTION ────────────────────────────────────────────────────────
+#
+# What the run SHOULD produce, so the operator has something to compare against
+# while a 6-9 h job crawls, and so a wrong number is visible early instead of
+# at the end.
+#
+# CLAUDE.md rule 6: projections are SANITY CHECKS ONLY. Fresh server numbers
+# are authoritative. Never reject a measured result because it disagrees here.
+#
+# BASIS -- all measured on THIS box, idle, one tool at a time, 2026-09-08,
+# with the same CLAIMS=1 methodology benchmark_1 uses:
+#     E. coli    695,163,748 B -> 11.53 s   =  60.3 MB/s   ratio  9.84%
+#     L. major 1,661,157,034 B -> 43.95 s   =  37.8 MB/s   ratio  6.40%
+#     HG002    4,279,197,941 B -> 211.04 s  =  20.3 MB/s   ratio 13.41%
+# Our throughput DEGRADES with input size and repeat content; SPRING's is
+# roughly flat. So compress time is projected from a size bracket, which is a
+# formula over a measured property of the input (standing rule 1), not a
+# fitted per-dataset constant.
+hdr "8b. PROJECTED RESULTS — compare against these while the run proceeds"
+PROJ="$HERE/results/BENCHMARK_0_PROJECTION.tsv"
+: > "$PROJ"
+say "  basis: measured anchors E.coli 60.3 MB/s | L.major 37.8 MB/s | HG002 20.3 MB/s"
+say "  ours degrades with size; SPRING ~85 MB/s and Genozip ~200 MB/s stay flat"
+say ""
+printf "  %-14s %10s %10s %10s %10s %10s\n" "dataset" "size" "ours_c" "ours_d" "spring_c" "geno_c" | tee -a "$OUT"
+say "  --------------------------------------------------------------------------"
+P1_OURS=0; P1_ALL=0
+for e in $DS_SIZES; do
+    acc="${e%%:*}"; b="${e##*:}"
+    read -r oc od sc gc <<< "$(awk -v b="$b" 'BEGIN{
+        mb=b/1048576;
+        tp = (mb<1024) ? 60.3 : ((mb<2560) ? 37.8 : 20.3);   # measured brackets
+        printf "%.1f %.1f %.1f %.1f", mb/tp, mb/100.0, mb/85.0, mb/200.0 }')"
+    printf "  %-14s %10s %9ss %9ss %9ss %9ss\n" "$acc" "$(gb "$b")" "$oc" "$od" "$sc" "$gc" | tee -a "$OUT"
+    printf "DS\t%s\t%s\t%s\t%s\t%s\t%s\n" "$acc" "$b" "$oc" "$od" "$sc" "$gc" >> "$PROJ"
+    P1_OURS=$(awk -v a="$P1_OURS" -v c="$oc" -v d="$od" 'BEGIN{printf "%.1f",a+c+d}')
+    P1_ALL=$(awk -v a="$P1_ALL" -v c="$oc" -v d="$od" -v s="$sc" -v g="$gc" \
+             'BEGIN{printf "%.1f",a+c+d+s*2.2+g*1.3}')   # +decompress for both
+done
+say "  --------------------------------------------------------------------------"
+P1_H=$(awk -v s="$P1_ALL" 'BEGIN{printf "%.1f",s/3600}')
+hb "PHASE 1 projected"  "${P1_ALL}s  (~${P1_H} h)  ours alone ${P1_OURS}s"
+say ""
+say "  PHASE 1 also expects, on EVERY dataset:"
+say "    - lossless=LOSSLESS for all three tools (a LOSSY halts the run)"
+say "    - our archive SMALLER than both competitors"
+say "      measured margins so far: E.coli -7.6% vs SPRING, -42.8% vs Genozip"
+say "                               L.major -9.7% vs SPRING"
+say "                               HG002   -4.1% vs SPRING, -39.7% vs Genozip"
+say "    - ratio lands 6-14% of raw (measured range across the 3 anchors)"
+say ""
+say "  PHASE 2 projected (4 GIAB sets, from the archive):"
+say "    - het-SNV F1 ~0.89 per individual   (HG002 measured 0.888 on 2026-09-08)"
+say "    - DiscoSNP++ ~0.85                  (HG002 measured 0.847)"
+say "    - Kmer2SNP: NOT_AVAILABLE -- no validated runner in this repo"
+say "    - per set ~15 min: compress ~3.5 min + call ~2.5 min + DiscoSNP++ ~1.5 min"
+say "      + vcfeval; 4 sets ~1 h. WEAKEST projection here: one human anchor only."
+say ""
+say "  PHASE 3 projected (6 datasets + query on all 19):"
+say "    - export   400-700x vs SPAdes        (HG002 measured 487x; E.coli 555-656x)"
+say "    - coverage  30-60x vs bwa+mosdepth   (HG002 measured 58.1x)"
+say "    - query    no competitor exists"
+say "    - dominated by the SPAdes baselines, NOT by us: SPAdes on HG002 alone"
+say "      took 2675.80 s against our 5.49 s. Budget ~2 h for the 6 baselines."
+say ""
+TOT_H=$(awk -v p="$P1_ALL" 'BEGIN{printf "%.1f",(p+3600+7200)/3600}')
+hb "TOTAL projected" "~${TOT_H} h sequential"
+{ printf "PHASE1_ALL_S\t%s\n" "$P1_ALL"
+  printf "PHASE1_OURS_S\t%s\n" "$P1_OURS"
+  printf "PHASE2_S\t3600\n"
+  printf "PHASE3_S\t7200\n"
+  printf "TOTAL_H\t%s\n" "$TOT_H"; } >> "$PROJ"
+say ""
+hb "projection written" "$PROJ"
+say "  benchmark_1 reads this file and prints actual-vs-projected as it runs."
 
 # ── 9. VERDICT ────────────────────────────────────────────────────────────
 T_END=$(date +%s)
