@@ -397,7 +397,7 @@ inf "elapsed     : $(_el)"
 say ""
 if [ "$FAILED" -eq 0 ]; then
   say "  ┌──────────────────────────────────────────────────────────────┐"
-  say "  │  SANITY PASSED — all three claims produced their artefacts.  │"
+  say "  │  SANITY PASSED — claims run: $CLAIMS, all produced artefacts. │"
   say "  │  The full run should behave the same on every dataset.        │"
   say "  └──────────────────────────────────────────────────────────────┘"
 else
