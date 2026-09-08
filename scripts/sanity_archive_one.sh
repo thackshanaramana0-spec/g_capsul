@@ -71,10 +71,16 @@ banner(){ say ""; say "═══════════════════
 mb(){ awk -v b="${1:-0}" 'BEGIN{printf "%.2f MB", b/1048576}'; }
 gb(){ awk -v b="${1:-0}" 'BEGIN{printf "%.2f GB", b/1073741824}'; }
 rg(){ awk -v k="${1:-0}" 'BEGIN{printf "%.2f GB", k/1048576}'; }
+# LAST block, MAX rss. If a time -v file ever holds more than one block --
+# which happens the moment /usr/bin/time output shares a log with a script that
+# itself runs time -v -- awk without tail printed one number per match and glued
+# them together. benchmark_1 reported "wall=78.3384.97s" this way. Latent here
+# because these time files are dedicated; fixed anyway, since the failure is
+# silent and lands straight in a published table.
 tv(){ local f="$1" w h
-  w=$(grep "Elapsed (wall clock)" "$f" 2>/dev/null | awk '{n=split($NF,a,":");
+  w=$(grep "Elapsed (wall clock)" "$f" 2>/dev/null | tail -1 | awk '{n=split($NF,a,":");
       if(n==3) printf "%.2f",a[1]*3600+a[2]*60+a[3]; else if(n==2) printf "%.2f",a[1]*60+a[2]; else printf "%.2f",a[1]}')
-  h=$(grep "Maximum resident set size" "$f" 2>/dev/null | awk '{print $NF}')
+  h=$(grep "Maximum resident set size" "$f" 2>/dev/null | awk '{if($NF+0>m)m=$NF+0}END{printf "%d",m}')
   echo "${w:-0} ${h:-0}"; }
 
 # Manifest: every artefact worth inspecting, recorded as it is produced.
