@@ -1,10 +1,10 @@
 ╔══════════════════════════════════════════════════════════════════════╗
 ║  BENCHMARK 0 — PRE-RUN STATUS                                        ║
 ╚══════════════════════════════════════════════════════════════════════╝
-generated : 2026-09-08 03:16:42 IST
+generated : 2026-09-08 10:56:38 IST
 host      : e2e-147-20  |  user: root
 repo      : /root/arcs-clean/c_star_pg_advance
-branch    : c_star_pg_advance  commit: 787c9d7
+branch    : c_star_pg_advance  commit: 11e7ad1
 tree      : DIRTY (uncommitted changes present)
 
 ════════════════════════════════════════════════════════════════════════
@@ -13,10 +13,10 @@ tree      : DIRTY (uncommitted changes present)
   cores                                12
   RAM total                            82 GB
   RAM available                        78 GB
-  disk free                            105 GB
+  disk free                            98 GB
   [ OK ]   cores >= 8                         12
   [ OK ]   RAM >= 32 GB                       82 GB
-  [ OK ]   disk >= 60 GB free                 105 GB
+  [ OK ]   disk >= 60 GB free                 98 GB
 
 ════════════════════════════════════════════════════════════════════════
  2. TOOLS — state of the art we benchmark against
@@ -25,6 +25,8 @@ tree      : DIRTY (uncommitted changes present)
   [ OK ]   SPRING                             /usr/local/bin/spring
   [ OK ]   Genozip                            /usr/local/bin/genozip
   [ OK ]   Genounzip                          /usr/local/bin/genounzip
+  [ OK ]   /dev/stdout exists                 genozip needs it to spawn curl
+  [ OK ]   Genozip round-trip                 3756890 B -> 463186 B, byte-identical
   -- Claim 2 (variant calling) --
   [ OK ]   DiscoSNP++ (on PATH)               /root/DiscoSnp/run_discoSnp++.sh
   [ OK ]   rtg (vcfeval)                      /usr/local/bin/rtg
@@ -172,7 +174,7 @@ tree      : DIRTY (uncommitted changes present)
 ════════════════════════════════════════════════════════════════════════
  9. VERDICT
 ════════════════════════════════════════════════════════════════════════
-  checks passed                        33
+  checks passed                        35
   warnings                             0
   failures                             0
   preflight took                       57 s
@@ -187,4 +189,4 @@ tree      : DIRTY (uncommitted changes present)
   (add SANITY_ONLY=1 to run just the first dataset and get a measured rate)
 
   status file: /root/arcs-clean/c_star_pg_advance/results/BENCHMARK_0_STATUS.txt
-  finished   : 2026-09-08 03:17:39
+  finished   : 2026-09-08 10:57:35

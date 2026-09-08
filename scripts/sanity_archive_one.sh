@@ -121,6 +121,12 @@ fi
                      || { err "decompress -> $LL"; FAILED=1; }
 keep "claim1" "$DD/reads.seq" "reads reconstructed FROM THE ARCHIVE (lossless check input)"
 
+# genozip needs /dev/stdout to exist -- it tests curl/wget availability with
+# file_exists("/dev/stdout") and, on a Student licence, refuses to write the
+# archive header if it cannot upload telemetry. Missing => exit 1, NO archive,
+# after compressing the whole file. Repair it rather than lose the column.
+[ -e /dev/stdout ] || ln -sfn /proc/self/fd/1 /dev/stdout 2>/dev/null || true
+
 for T in SPRING Genozip; do
   step "$T (competitor arm, identical input)"
   if [ "$T" = SPRING ]; then
@@ -158,9 +164,19 @@ for T in SPRING Genozip; do
     if [ -s "$DOUT/out.fq" ]; then
       # Compare the SEQUENCE column only, the same basis used for our own
       # lossless check, so the two verdicts mean the same thing.
+      # Two-stage verdict, so the column means the same thing for every tool.
+      # Stage 1 is IN ORDER, which is the strict test. Only if that fails do we
+      # fall back to the order-free (sorted) test that our own arm uses, and
+      # then the verdict says so explicitly. Comparing a competitor in order
+      # against ourselves sorted would put two different tests in one column.
       awk 'NR%4==2' "$SRC" > "$DOUT/a.seq"
       awk 'NR%4==2' "$DOUT/out.fq" > "$DOUT/b.seq"
-      if cmp -s "$DOUT/a.seq" "$DOUT/b.seq"; then XLL=LOSSLESS; else XLL=LOSSY; fi
+      if cmp -s "$DOUT/a.seq" "$DOUT/b.seq"; then
+        XLL=LOSSLESS
+      else
+        sort "$DOUT/a.seq" -o "$DOUT/a.seq"; sort "$DOUT/b.seq" -o "$DOUT/b.seq"
+        if cmp -s "$DOUT/a.seq" "$DOUT/b.seq"; then XLL=LOSSLESS_REORDERED; else XLL=LOSSY; fi
+      fi
       ok "$T decompress ${XD}s -> $XLL"
     else
       err "$T produced no FASTQ on decompress -- recording NOT_CHECKED"
@@ -169,7 +185,14 @@ for T in SPRING Genozip; do
 
     printf "%s,%s,%s,%s,%.4f,%s,%s,%s,%s\n" "$DS" "$T" "$RAW" "$XS" \
       "$(awk -v a=$XS -v r=$RAW 'BEGIN{print 100*a/r}')" "$XW" "${XD:-}" "$XR" "$XLL" >> "$OUT/_rows_comp"
-  else err "$T produced no archive"; fi
+  else
+    # A competitor that produces nothing must FAIL the run, not leave a blank
+    # row. A T1/T2 table missing the Genozip line reads as "we did not bother
+    # to benchmark it", which is worse than reporting a tool error.
+    err "$T produced no archive -- competitor column would be BLANK"
+    [ "$T" = Genozip ] && err "  genozip needs /dev/stdout + a telemetry upload on a Student licence; see _t_s"
+    FAILED=1
+  fi
 done
 
 CSV1="$OUT/claim1_t1_t2.csv"

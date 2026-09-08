@@ -64,6 +64,33 @@ say "  -- Claim 1 (compression) --"
 chk_cmd "SPRING"          spring     req
 chk_cmd "Genozip"         genozip    req
 chk_cmd "Genounzip"       genounzip  req
+
+# Genozip on a free/Student licence MUST upload a telemetry record before it
+# will write the archive header, and it does that by spawning curl or wget.
+# Its availability test is:
+#     !system("which curl > /dev/null 2>&1") && file_exists("/dev/stdout")
+# so if /dev/stdout is missing -- and on this box it went missing once, while
+# /dev/stdin and /dev/stderr survived -- genozip reports "Neither curl nor
+# wget are available", refuses to write the header, and EXITS 1 WITH NO
+# ARCHIVE after compressing the whole file. `command -v genozip` still passes.
+# That silently blanked the entire Genozip column of T1/T2 for one full run.
+if [ -e /dev/stdout ]; then pass "/dev/stdout exists" "genozip needs it to spawn curl"
+else fail "/dev/stdout MISSING" "genozip will produce NO archive -- fix: ln -sfn /proc/self/fd/1 /dev/stdout"; fi
+
+# Presence is not capability: probe genozip end to end. The probe must exceed
+# ~1 MB, because genozip only ATTEMPTS the telemetry upload above roughly that
+# size -- a small probe passes on a box where every real dataset fails.
+_gzp=$(mktemp -d); _gzf="$_gzp/probe.fq"
+awk 'BEGIN{srand(7);for(i=0;i<12000;i++){s="";q="";for(j=0;j<151;j++){s=s substr("ACGT",int(rand()*4)+1,1);q=q "I"}
+     printf "@p%d\n%s\n+\n%s\n",i,s,q}}' > "$_gzf"
+if genozip --force -o "$_gzp/probe.genozip" "$_gzf" >/dev/null 2>"$_gzp/err" && [ -s "$_gzp/probe.genozip" ]; then
+  if genounzip --force -o "$_gzp/rt.fq" "$_gzp/probe.genozip" >/dev/null 2>&1 && cmp -s "$_gzf" "$_gzp/rt.fq"; then
+    pass "Genozip round-trip" "$(stat -c%s "$_gzf") B -> $(stat -c%s "$_gzp/probe.genozip") B, byte-identical"
+  else fail "Genozip round-trip" "genounzip did not reproduce the probe"; fi
+else
+  fail "Genozip cannot compress" "$(grep -aoiE 'LICENSE ERROR.*|Neither curl nor wget.*' "$_gzp/err" | head -1)"
+fi
+rm -rf "$_gzp"
 say "  -- Claim 2 (variant calling) --"
 # Checked through PATH, not by file existence: the runner invokes
 # `run_discoSnp++.sh` by name, so a present-but-unreachable script fails later
