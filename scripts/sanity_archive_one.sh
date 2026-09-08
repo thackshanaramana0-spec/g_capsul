@@ -3,7 +3,11 @@
 #  SANITY (ARCHIVE PATH) — ONE dataset, ALL THREE CLAIMS, end to end.
 #
 #  Derived from benchmark_sanity_one.sh, with two corrections:
-#    * compress sets CAPS_CALL=1, so the archive carries contig_spans
+#    * compress sets CAPS_SPANS=1, so the archive carries contig_spans WITHOUT
+#      running the caller inline. CAPS_CALL=1 also writes them, but it runs the
+#      full caller at the end of compression -- roughly 20x the work -- and
+#      Claim 2 then calls a SECOND time from the archive. That mistake put
+#      HG002 compression at 913 s against SPRING's 52 s.
 #    * Claim 2 calls FROM THE ARCHIVE (capsule_decode call), which is what the
 #      claim actually asserts. The original ran the ENCODER on the FASTQ.
 #
