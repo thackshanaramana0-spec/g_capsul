@@ -42,3 +42,8 @@ results/claim1/
 *.spring
 *.genozip
 bin/
+
+# 154 MB regenerable caller output; swept in by a git add -A on 2026-09-08
+# and it made the whole branch unpushable (GitHub caps files at 100 MB).
+out.vcf
+*.vcf
