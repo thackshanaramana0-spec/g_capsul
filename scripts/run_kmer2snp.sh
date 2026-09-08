@@ -71,7 +71,10 @@ K2S_DIR="${K2S_DIR:-/root/Kmer2SNP}"
 # install rather than the wrong interpreter.
 K2S_PY="${K2S_PY:-/root/miniconda3/envs/kmer2snp_r/bin/python}"
 [ -x "$K2S_PY" ] || K2S_PY=python3
-SAM2VCF="${SAM2VCF:-/root/arcs-clean/scripts/kmer2snp_sam_to_vcf.py}"
+# Vendored into this repo so the benchmark does not depend on a sibling
+# checkout; the outer copy stays as a fallback for older trees.
+SAM2VCF="${SAM2VCF:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/kmer2snp_sam_to_vcf.py}"
+[ -s "$SAM2VCF" ] || SAM2VCF=/root/arcs-clean/scripts/kmer2snp_sam_to_vcf.py
 
 TRUTH="$HOME/giab_truth/${IND}_GRCh37_1_22_v4.2.1_benchmark.vcf.gz"
 BED="$HOME/giab_truth/${IND}_GRCh37_1_22_v4.2.1_benchmark_noinconsistent.bed"

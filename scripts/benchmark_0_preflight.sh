@@ -110,7 +110,7 @@ if [ -x "$HOME/miniconda3/envs/kmer2snp_r/bin/python" ]; then
 else warn "Kmer2SNP (conda env)" "MISSING — T3 loses its 3rd arm"; fi
 chk_path "Kmer2SNP tool"   "/root/Kmer2SNP/kmer2snp.py" req
 chk_path "Kmer2SNP runner" "$HERE/scripts/run_kmer2snp.sh" req
-chk_path "kmer2snp->VCF"   "/root/arcs-clean/scripts/kmer2snp_sam_to_vcf.py" req
+chk_path "kmer2snp->VCF"   "$HERE/scripts/kmer2snp_sam_to_vcf.py" req
 # T2.4 / T2.5 runners. Both existed and were never called by benchmark_1, so a
 # full sweep produced 6 of 8 tables and still printed COMPLETE.
 chk_path "T2.4 multi-allelic runner" "$HERE/scripts/run_multiallelic_bench_capsule.sh" req
