@@ -3485,6 +3485,34 @@ int main(int argc,char** argv){
         // as a lambda over (T, tlen); calling it with pg.data()/main_pg_end
         // reproduces the original index exactly.
         std::vector<uint64_t> skey; std::vector<uint32_t> spos;
+        // ── SEQUENTIAL CANDIDATE DISCRIMINATOR FOR THE MEM MATCHER ──────────
+        // The same fix already proven in round 2 (see `pext`, ~line 1000),
+        // which was never carried into this matcher. Every candidate here went
+        // straight into extendTol -- a RANDOM access into a 152 MB ASCII text,
+        // one cache miss apiece, up to MAXCAND=64 of them per query position.
+        // extendTol's compare loop is the single hottest line in the whole
+        // encoder (9.09% of all samples, perf on HG002 2026-09-08).
+        //
+        // sext[i] holds the 8 pg bases FOLLOWING entry i's seed, 2 bits each,
+        // in index order -- so the walk reads it sequentially, off the cache
+        // lines already carrying skey/spos.
+        //
+        // WHY SKIPPING IS OUTPUT-PRESERVING, and it is a proof, not a
+        // measurement: the seed already matched, so bases [0,MEMSEED) are
+        // equal by construction. If the next 8 bases hold MORE than MAXMM
+        // mismatches, extendTol breaks at the (MAXMM+1)-th, which lies before
+        // MEMSEED+8. Enabled only when MEMSEED+8 <= MINMEM, so that returned
+        // length is < MINMEM, and a candidate below MINMEM can never be
+        // accepted (`best>=MINMEM`) nor outrank one that is. Skipping it and
+        // extending it reach the same `best`.
+        //
+        // 0xFFFF means "do not filter" -- the window ran off the text or held
+        // a non-ACGT base. It is also the legitimate packing of AAAAAAAA's
+        // complement (all T), so that one window is never filtered: the
+        // sentinel FAILS OPEN, exactly as pext's does, and can only ever cost
+        // work, never a match.
+        std::vector<uint16_t> sext;
+        const char* idxT=nullptr; size_t idxTlen=0;   // text sext/spos describe
         std::vector<uint32_t> htab;
         size_t tsize=1; uint64_t TMASK=0;
         auto hmix=[](uint64_t x){ x^=x>>33; x*=0xff51afd7ed558ccdULL; x^=x>>33; return x; };
@@ -3501,6 +3529,17 @@ int main(int argc,char** argv){
             hugehint((void*)spos.data(), tmp.size()*4); spos.resize(tmp.size());
             hugehint(skey.data(), skey.size()*8); hugehint(spos.data(), spos.size()*4);
             for(size_t i=0;i<tmp.size();++i){ skey[i]=tmp[i].first; spos[i]=tmp[i].second; }
+            // Built here, from the very text being indexed, so sext cannot
+            // describe a different buffer than spos does.
+            idxT=T; idxTlen=tlen;
+            sext.assign(spos.size(), 0xFFFFu);
+            for(size_t i=0;i<spos.size();++i){
+                const size_t w=(size_t)spos[i]+MEMSEED;
+                if(w+8>tlen) continue;
+                uint32_t v=0; bool okw=true;
+                for(int j=0;j<8;++j){ const int b=b2(T[w+j]); if(b<0){ okw=false; break; } v=(v<<2)|(uint32_t)b; }
+                if(okw) sext[i]=(uint16_t)v;
+            }
             tsize=1; while(tsize < skey.size()*2+1) tsize<<=1;
             TMASK=tsize-1;
             hugefill(htab,tsize,UINT32_MAX);
@@ -3613,6 +3652,24 @@ int main(int argc,char** argv){
             // longer, leave qp as a literal and take the better one. One extra
             // probe per matched position, no extra memory, and nothing from
             // PgRC2 -- their parse is greedy too.
+            // Filter validity: sext describes exactly the text we are extending
+            // against, and MEMSEED+8 must fall at or below MINMEM for the
+            // "cannot reach MINMEM" argument above to hold.
+            const bool SEXT_ON = (S==idxT) && (slen==idxTlen) && (MEMSEED+8<=MINMEM);
+            auto qwin8=[&](const char* Q,size_t qlen,size_t qp)->uint16_t{
+                const size_t w=qp+MEMSEED;
+                if(w+8>qlen) return 0xFFFFu;
+                uint32_t v=0;
+                for(int j=0;j<8;++j){ const int b=b2(Q[w+j]); if(b<0) return 0xFFFFu; v=(v<<2)|(uint32_t)b; }
+                return (uint16_t)v;
+            };
+            // >MAXMM mismatching bases in the 8-base window => extendTol stops
+            // short of MEMSEED+8 <= MINMEM => candidate cannot be accepted.
+            auto sext_reject=[&](uint16_t sx,uint16_t qx)->bool{
+                if(sx==0xFFFFu||qx==0xFFFFu) return false;
+                uint32_t d=(uint32_t)(sx^qx); d=(d|(d>>1))&0x5555u;
+                return __builtin_popcount(d) > MAXMM;
+            };
             auto bestAt=[&](const char* Q,size_t qlen,Mode mode,size_t qp,
                             size_t& bsrc)->size_t{
                 uint64_t k; bsrc=0;
@@ -3620,8 +3677,10 @@ int main(int argc,char** argv){
                 const uint32_t idx=lookup(k);
                 if(idx==UINT32_MAX) return 0;
                 size_t best=0, tried=0;
+                const uint16_t qx = SEXT_ON ? qwin8(Q,qlen,qp) : (uint16_t)0xFFFFu;
                 for(uint32_t i=idx;i<skey.size()&&skey[i]==k;++i){
                     if(++tried>MAXCAND) break;
+                    if(SEXT_ON && sext_reject(sext[i],qx)) continue;
                     const size_t s=spos[i];
                     size_t capL=SIZE_MAX;
                     if(mode==SELF_FWD){ if(s>=qp) continue; capL=qp-s; }
@@ -3642,8 +3701,10 @@ int main(int argc,char** argv){
                 size_t best=0, bestsrc=0, tried=0;
                 uint32_t bestmm[REF_MAXMM]; uint8_t bestmmc=0;
                 bool exceededCand=false;
+                const uint16_t qx = SEXT_ON ? qwin8(Q,qlen,qp) : (uint16_t)0xFFFFu;
                 for(uint32_t i=idx;i<skey.size()&&skey[i]==k;++i){
                     if(++tried>MAXCAND){ exceededCand=true; break; }
+                    if(SEXT_ON && sext_reject(sext[i],qx)) continue;
                     const size_t s=spos[i];
                     // Cap usable length BEFORE extending, never after -- in a
                     // self-match the seed at qp also occurs at qp itself and an
