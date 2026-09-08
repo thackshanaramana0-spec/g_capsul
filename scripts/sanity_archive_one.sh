@@ -131,10 +131,37 @@ for T in SPRING Genozip; do
     XS=$(stat -c%s "$S")
     ok "$T archive $(mb $XS)  ratio $(awk -v a=$XS -v r=$RAW 'BEGIN{printf "%.3f%%",100*a/r}')  wall ${XW}s  RAM $(rg $XR)"
     keep "claim1" "$S" "$T archive -- the competitor number in T1"
-    # The competitor's time and RAM were measured; write them, or T2 has a
-    # CAPSULE row and two blanks and is not a comparison at all.
-    printf "%s,%s,%s,%s,%.4f,%s,,%s,\n" "$DS" "$T" "$RAW" "$XS" \
-      "$(awk -v a=$XS -v r=$RAW 'BEGIN{print 100*a/r}')" "$XW" "$XR" >> "$OUT/_rows_comp"
+
+    # ── DECOMPRESS THE COMPETITOR TOO, AND VERIFY IT ────────────────────────
+    # Without this, T2 compares our compress+DECOMPRESS against their compress
+    # alone, and the lossless column has a value for us and a blank for them.
+    # A reviewer reads that as "only one tool was checked for correctness".
+    # SPRING needs -g on decompress to emit FASTQ. Genozip uses genounzip.
+    step "$T decompress + lossless verify"
+    XD=""; XLL="NOT_CHECKED"; DOUT="$OUT/_x_$T"
+    rm -rf "$DOUT"; mkdir -p "$DOUT"
+    if [ "$T" = SPRING ]; then
+      /usr/bin/time -v spring -d -i "$S" -o "$DOUT/out.fq" -t "$NPROC" -g \
+        2>"$OUT/_t_sd" >/dev/null || true
+    else
+      /usr/bin/time -v genounzip --force -o "$DOUT/out.fq" "$S" \
+        2>"$OUT/_t_sd" >/dev/null || true
+    fi
+    read -r XD _ <<< "$(tv "$OUT/_t_sd")"
+    if [ -s "$DOUT/out.fq" ]; then
+      # Compare the SEQUENCE column only, the same basis used for our own
+      # lossless check, so the two verdicts mean the same thing.
+      awk 'NR%4==2' "$SRC" > "$DOUT/a.seq"
+      awk 'NR%4==2' "$DOUT/out.fq" > "$DOUT/b.seq"
+      if cmp -s "$DOUT/a.seq" "$DOUT/b.seq"; then XLL=LOSSLESS; else XLL=LOSSY; fi
+      ok "$T decompress ${XD}s -> $XLL"
+    else
+      err "$T produced no FASTQ on decompress -- recording NOT_CHECKED"
+    fi
+    rm -rf "$DOUT"
+
+    printf "%s,%s,%s,%s,%.4f,%s,%s,%s,%s\n" "$DS" "$T" "$RAW" "$XS" \
+      "$(awk -v a=$XS -v r=$RAW 'BEGIN{print 100*a/r}')" "$XW" "${XD:-}" "$XR" "$XLL" >> "$OUT/_rows_comp"
   else err "$T produced no archive"; fi
 done
 
@@ -219,6 +246,59 @@ run3(){ local op="$1" outf="$2"; shift 2
 run3 export   "$C3/contigs.fa"
 run3 coverage "$C3/coverage.tsv"
 run3 query    "$C3/region.fq" 0-100000
+
+# ── THE CONVENTIONAL BASELINES ──────────────────────────────────────────────
+# Without these, T6 lists our timings with nothing to compare against, and the
+# claim ("addressable: these operations are served from the archive instead of
+# recomputed") has no measured contrast. Commands are IDENTICAL to
+# benchmark_1_run.sh phase 3 so the sanity run rehearses the real thing.
+OURS_EXP=$(awk -F, '$2=="export"{print $3}'   "$CSV3" | head -1)
+OURS_COV=$(awk -F, '$2=="coverage"{print $3}' "$CSV3" | head -1)
+C3REF="$REFS/chr20.fa"          # HG002 is chr20; other datasets use c3_<name>.fa
+SPADES="$HOME/SPAdes-4.0.0-Linux/bin/spades.py"
+
+step "T6a baseline: SPAdes de-novo assembly (minutes to hours)"
+if [ -x "$SPADES" ] && [ -n "${OURS_EXP:-}" ]; then
+  t0=$(date +%s.%N)
+  python3 "$SPADES" -s "$SRC" -o "$C3/spades" -t "$NPROC" \
+      -m $(( $(free -g | awk '/^Mem:/{print $2}') - 8 )) > "$C3/spades.log" 2>&1
+  rc=$?; t1=$(date +%s.%N)
+  if [ $rc -eq 0 ] && [ -s "$C3/spades/contigs.fasta" ]; then
+    SP=$(awk -v a=$t0 -v b=$t1 'BEGIN{printf "%.2f",b-a}')
+    ok "SPAdes ${SP}s   -> export speedup $(awk -v s=$SP -v o=$OURS_EXP 'BEGIN{printf "%.1fx",s/o}')"
+    echo "$DS,export_baseline,$SP,,,SPAdes" >> "$CSV3"
+  else
+    err "SPAdes did not complete (rc=$rc) -- see $C3/spades.log"
+    echo "$DS,export_baseline,,,,SPAdes_DNF" >> "$CSV3"
+  fi
+  rm -rf "$C3/spades/K"* "$C3/spades/tmp" 2>/dev/null
+else
+  err "SPAdes not installed at $SPADES -- T6a has no baseline"
+  echo "$DS,export_baseline,,,,SPAdes_MISSING" >> "$CSV3"
+fi
+
+step "T6b baseline: bwa + samtools sort + mosdepth (the conventional route)"
+if [ -s "$C3REF.bwt" ] && command -v mosdepth >/dev/null && [ -n "${OURS_COV:-}" ]; then
+  t0=$(date +%s.%N)
+  bwa mem -t "$NPROC" "$C3REF" "$SRC" 2>"$C3/bwa.log" \
+    | samtools sort -@ 4 -o "$C3/aln.bam" - 2>>"$C3/bwa.log" \
+    && samtools index "$C3/aln.bam" 2>>"$C3/bwa.log" \
+    && mosdepth -t 4 "$C3/md" "$C3/aln.bam" 2>>"$C3/bwa.log"
+  rc=$?; t1=$(date +%s.%N)
+  if [ $rc -eq 0 ]; then
+    CV=$(awk -v a=$t0 -v b=$t1 'BEGIN{printf "%.2f",b-a}')
+    ok "bwa+mosdepth ${CV}s  -> coverage speedup $(awk -v s=$CV -v o=$OURS_COV 'BEGIN{printf "%.1fx",s/o}')"
+    echo "$DS,coverage_baseline,$CV,,,bwa+samtools+mosdepth" >> "$CSV3"
+  else
+    err "bwa/mosdepth baseline failed (rc=$rc) -- see $C3/bwa.log"
+    echo "$DS,coverage_baseline,,,,bwa_FAILED" >> "$CSV3"
+  fi
+  rm -f "$C3/aln.bam" "$C3/aln.bam.bai"      # BAMs are large; the timing is what we keep
+else
+  err "no bwa index at $C3REF.bwt or mosdepth missing -- T6b has no baseline"
+  echo "$DS,coverage_baseline,,,,baseline_MISSING" >> "$CSV3"
+fi
+
 keep "claim3" "$CSV3" "T6 rows for this dataset"
 
 # ── MANIFEST ───────────────────────────────────────────────────────────────
