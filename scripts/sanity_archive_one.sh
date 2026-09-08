@@ -214,12 +214,12 @@ for T in SPRING Genozip; do
   fi
 done
 
-CSV1="$OUT/claim1_t1_t2.csv"
+CSV1="$OUT/claim1_T1.1_T1.2.csv"
 { echo "dataset,tool,raw_bytes,archive_bytes,ratio_pct,compress_s,decompress_s,peak_ram_kb,lossless"
   echo "$DS,CAPSULE,$RAW,${ARCH:-},$(awk -v a=${ARCH:-0} -v r=$RAW 'BEGIN{printf "%.4f",100*a/r}'),$CW,$DW,$CR,$LL"
   cat "$OUT/_rows_comp" 2>/dev/null
 } > "$CSV1"
-keep "claim1" "$CSV1" "T1 + T2 table rows for this dataset"
+keep "claim1" "$CSV1" "T1.1 + T1.2 table rows for this dataset"
 
 # ── CLAIM 2 ────────────────────────────────────────────────────────────────
 if want 2; then
@@ -252,10 +252,10 @@ if want 2 && [ -s "$DATA_DIR/${DS}_pooled.fq" ] && [ -s "$REFS/chr20.fa" ]; then
     keep "claim2" "$C2/contigs.fa"  "assembled contigs the calls came from"
     keep "claim2" "$OUT/claim2.log" "full Claim 2 log incl. rtg vcfeval summary"
     parse_snv(){ echo "$1" | grep -oP "$2=\\K[0-9.]+" | head -1; }
-    echo "individual,tool,tp,fp,fn,precision,recall,f1,status" > "$OUT/claim2_t3.csv"
+    echo "individual,tool,tp,fp,fn,precision,recall,f1,status" > "$OUT/claim2_T2.1_snv.csv"
     printf "%s,CAPSULE,%s,%s,%s,%s,%s,%s,%s\n" "$DS" \
       "$(parse_snv "$LN" 'TP')" "$(parse_snv "$LN" 'FP')" "$(parse_snv "$LN" 'FN')" \
-      "$(parse_snv "$LN" ' P')" "$(parse_snv "$LN" ' R')" "$(parse_snv "$LN" 'F1')" DONE >> "$OUT/claim2_t3.csv"
+      "$(parse_snv "$LN" ' P')" "$(parse_snv "$LN" ' R')" "$(parse_snv "$LN" 'F1')" DONE >> "$OUT/claim2_T2.1_snv.csv"
 
     # DiscoSNP++ on the SAME reads, SAME truth, SAME scoring. Without it T3 is
     # a single number, not a head-to-head, and the claim is a comparison.
@@ -268,7 +268,7 @@ if want 2 && [ -s "$DATA_DIR/${DS}_pooled.fq" ] && [ -s "$REFS/chr20.fa" ]; then
         ok "DISCO $DL"
         printf "%s,DiscoSNP++,%s,%s,%s,%s,%s,%s,%s\n" "$DS" \
           "$(parse_snv "$DL" 'TP')" "$(parse_snv "$DL" 'FP')" "$(parse_snv "$DL" 'FN')" \
-          "$(parse_snv "$DL" ' P')" "$(parse_snv "$DL" ' R')" "$(parse_snv "$DL" 'F1')" DONE >> "$OUT/claim2_t3.csv"
+          "$(parse_snv "$DL" ' P')" "$(parse_snv "$DL" ' R')" "$(parse_snv "$DL" 'F1')" DONE >> "$OUT/claim2_T2.1_snv.csv"
         keep "claim2" "$OUT/claim2_disco.log" "DiscoSNP++ arm -- the competitor number in T3"
       else err "DiscoSNP++ produced no SNV line -- see $OUT/claim2_disco.log"; fi
     else err "run_fullchr20_bench_disco.sh missing -- T3 will have only our arm"; fi
@@ -287,14 +287,14 @@ if want 2 && [ -s "$DATA_DIR/${DS}_pooled.fq" ] && [ -s "$REFS/chr20.fa" ]; then
       if [ -n "${K1:-}" ]; then ok "KMER2SNP SNV F1=$K1"
         printf "%s,Kmer2SNP,%s,%s,%s,%s,%s,%s,%s\n" "$DS" \
           "$(parse_snv "$KL" 'TP')" "$(parse_snv "$KL" 'FP')" "$(parse_snv "$KL" 'FN')" \
-          "$(parse_snv "$KL" ' P')" "$(parse_snv "$KL" ' R')" "$K1" DONE >> "$OUT/claim2_t3.csv"
+          "$(parse_snv "$KL" ' P')" "$(parse_snv "$KL" ' R')" "$K1" DONE >> "$OUT/claim2_T2.1_snv.csv"
       else err "Kmer2SNP produced no SNV line"
-        printf "%s,Kmer2SNP,,,,,,,FAILED\n" "$DS" >> "$OUT/claim2_t3.csv"; fi
+        printf "%s,Kmer2SNP,,,,,,,FAILED\n" "$DS" >> "$OUT/claim2_T2.1_snv.csv"; fi
     else
       warn "Kmer2SNP: no validated runner in this repo -- T3 arm recorded NOT_AVAILABLE"
-      printf "%s,Kmer2SNP,,,,,,,NOT_AVAILABLE\n" "$DS" >> "$OUT/claim2_t3.csv"
+      printf "%s,Kmer2SNP,,,,,,,NOT_AVAILABLE\n" "$DS" >> "$OUT/claim2_T2.1_snv.csv"
     fi
-    keep "claim2" "$OUT/claim2_t3.csv" "T3 table: het-SNV TP/FP/FN/P/R/F1, ours vs DiscoSNP++"
+    keep "claim2" "$OUT/claim2_T2.1_snv.csv" "T2.1 table: het-SNV TP/FP/FN/P/R/F1, ours vs DiscoSNP++"
   else err "no SNV line -- see $OUT/claim2.log"; FAILED=1; fi
 elif ! want 2; then
   inf "SKIP Claim 2: CLAIMS=$CLAIMS"
@@ -304,9 +304,9 @@ fi
 
 # ── CLAIM 3 ────────────────────────────────────────────────────────────────
 if want 3; then
-banner "CLAIM 3 — archive analysis (T6a export, T6b coverage, T6c query)"
+banner "CLAIM 3 — archive analysis (T3.1 export, T3.2 coverage, T3.3 query)"
 C3="$OUT/claim3"; mkdir -p "$C3"
-CSV3="$OUT/claim3_t6.csv"; echo "dataset,operation,ours_s,output_bytes,rows,status" > "$CSV3"
+CSV3="$OUT/claim3_T3.1_T3.2_T3.3.csv"; echo "dataset,operation,ours_s,output_bytes,rows,status" > "$CSV3"
 run3(){ local op="$1" outf="$2"; shift 2
   step "T6 $op"
   local t0 t1 s
@@ -333,7 +333,7 @@ OURS_COV=$(awk -F, '$2=="coverage"{print $3}' "$CSV3" | head -1)
 C3REF="$REFS/chr20.fa"          # HG002 is chr20; other datasets use c3_<name>.fa
 SPADES="$HOME/SPAdes-4.0.0-Linux/bin/spades.py"
 
-step "T6a baseline: SPAdes de-novo assembly (minutes to hours)"
+step "T3.1 baseline: SPAdes de-novo assembly (minutes to hours)"
 if [ -x "$SPADES" ] && [ -n "${OURS_EXP:-}" ]; then
   t0=$(date +%s.%N)
   python3 "$SPADES" -s "$SRC" -o "$C3/spades" -t "$NPROC" \
@@ -353,7 +353,7 @@ else
   echo "$DS,export_baseline,,,,SPAdes_MISSING" >> "$CSV3"
 fi
 
-step "T6b baseline: bwa + samtools sort + mosdepth (the conventional route)"
+step "T3.2 baseline: bwa + samtools sort + mosdepth (the conventional route)"
 if [ -s "$C3REF.bwt" ] && command -v mosdepth >/dev/null && [ -n "${OURS_COV:-}" ]; then
   t0=$(date +%s.%N)
   bwa mem -t "$NPROC" "$C3REF" "$SRC" 2>"$C3/bwa.log" \
@@ -383,9 +383,9 @@ else
 fi
 
 banner "THE TABLES THIS RUN PRODUCED"
-for t in "$CSV1:T1 + T2  (archive size, time, RAM -- ours vs SPRING vs Genozip)" \
-         "$OUT/claim2_t3.csv:T3  (het-SNV F1 -- ours vs DiscoSNP++)" \
-         "$CSV3:T6  (export / coverage / query from the archive)"; do
+for t in "$CSV1:T1.1 + T1.2  (archive size, time, RAM -- ours vs SPRING vs Genozip)" \
+         "$OUT/claim2_T2.1_snv.csv:T2.1  (het-SNV F1 -- ours vs DiscoSNP++)" \
+         "$CSV3:T3.1-T3.3  (export / coverage / query from the archive)"; do
   f="${t%%:*}"; ttl="${t#*:}"
   [ -s "$f" ] || continue
   say ""; say "  $ttl"; say "  ${f#$OUT/}"

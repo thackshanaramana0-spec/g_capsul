@@ -111,6 +111,14 @@ else warn "Kmer2SNP (conda env)" "MISSING — T3 loses its 3rd arm"; fi
 chk_path "Kmer2SNP tool"   "/root/Kmer2SNP/kmer2snp.py" req
 chk_path "Kmer2SNP runner" "$HERE/scripts/run_kmer2snp.sh" req
 chk_path "kmer2snp->VCF"   "/root/arcs-clean/scripts/kmer2snp_sam_to_vcf.py" req
+# T2.4 / T2.5 runners. Both existed and were never called by benchmark_1, so a
+# full sweep produced 6 of 8 tables and still printed COMPLETE.
+chk_path "T2.4 multi-allelic runner" "$HERE/scripts/run_multiallelic_bench_capsule.sh" req
+chk_path "T2.5 tetraploid runner"    "$HERE/scripts/run_tetraploid_bench_capsule.sh" req
+chk_path "T2.5 truth builder"        "$HERE/scripts/build_tetraploid_truth.py" req
+chk_cmd  "seqtk (T2.2 subsampling)"  seqtk req
+chk_cmd  "bcftools"                  bcftools req
+chk_cmd  "tabix"                     tabix req
 say "  -- Claim 3 (archive analysis) --"
 chk_path "SPAdes"         "$HOME/SPAdes-4.0.0-Linux/bin/spades.py" req
 chk_cmd  "bwa"            bwa        req
@@ -321,21 +329,23 @@ say "  PHASE 1 — Claim 1: all 19 datasets, ONE AT A TIME"
 say "      per dataset: encode(8-candidate adaptive sweep, concurrent) -> archive KEPT"
 say "                   decode -> lossless compare -> scratch deleted"
 say "                   SPRING compress+decompress, Genozip compress+decompress"
-say "      tables: T1 archive size | T2 wall time + peak RAM (all 3 tools)"
+say "      tables: T1.1 archive size | T1.2 wall time + peak RAM (all 3 tools)"
 say "      est: see the PROJECTION below (measured anchors, 2026-09-08)  archives kept: ~7 GB"
 say ""
 say "  PHASE 2 — Claim 2: 4 GIAB human sets only"
 say "      per set: our caller (compress+call, one pass) -> DiscoSNP++ -> Kmer2SNP"
 say "               -> rtg vcfeval against GIAB truth"
-say "      tables: T3 het-SNV F1 (3-way, all 4 sets)"
-say "              T4 coverage sweep 10/15/20/30x (HG002; 30x carried from T3)"
-say "              T5 het-indel F1, ours vs DiscoSNP++ (Kmer2SNP is SNP-only)"
+say "      tables: T2.1 het-SNV F1 (3-way, all 4 sets)"
+say "              T2.2 coverage sweep 10/15/20/30x (HG002; 30x carried from T2.1)"
+say "              T2.3 het-indel F1, ours vs DiscoSNP++ (Kmer2SNP is SNP-only)"
+say "              T2.4 multi-allelic sites recovered (one diploid GT=1/2 window)"
+say "              T2.5 tetraploid SNV+indel, two real diploids (Cooke 2022)"
 say "      est: see the PROJECTION below"
 say ""
 say "  PHASE 3 — Claim 3: reads the archives Phase 1 kept"
-say "      T6a export   vs SPAdes            — 6 datasets (one per kingdom)"
-say "      T6b coverage vs bwa+samtools+mosdepth — same 6"
-say "      T6c query    — ALL 19 (no competitor exists)"
+say "      T3.1 export   vs SPAdes            — 6 datasets (one per kingdom)"
+say "      T3.2 coverage vs bwa+samtools+mosdepth — same 6"
+say "      T3.3 query    — ALL 19 (no competitor exists)"
 say "      est: see the PROJECTION below"
 say ""
 say "  Peak transient disk ~35 GB, peak RAM ~20 GB."
@@ -397,9 +407,9 @@ say "    - DiscoSNP++ ~0.85                  (HG002 measured 0.847)"
 say "    - Kmer2SNP ~0.46                    (HG002 FULL chr20 measured 2026-09-08:"
 say "                                         TP=13565 FP=290 FN=31010 P=0.979 R=0.304)"
 say "      ~12 min per set (KMC ~1 min + graph ~11 min)"
-say "    - T5 het-indel: ours ~0.64 vs DiscoSNP++ ~0.66 -- we are BEHIND here,"
+say "    - T2.3 het-indel: ours ~0.64 vs DiscoSNP++ ~0.66 -- we are BEHIND here,"
 say "      and the indel bound is documented as closed (docs/, indel-bound note)"
-say "    - T4 sweep: F1 should DEGRADE smoothly with depth; a cliff means the"
+say "    - T2.2 sweep: F1 should DEGRADE smoothly with depth; a cliff means the"
 say "      caller is coverage-fragile, which is the point of measuring it"
 say "    - per set ~28 min: compress ~3.5 + call ~2.5 + DiscoSNP++ ~1.5 +"
 say "      Kmer2SNP ~12 + vcfeval; 4 sets ~1.9 h, plus T4's 3 extra depths"
