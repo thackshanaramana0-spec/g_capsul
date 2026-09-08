@@ -252,10 +252,10 @@ if want 2 && [ -s "$DATA_DIR/${DS}_pooled.fq" ] && [ -s "$REFS/chr20.fa" ]; then
     keep "claim2" "$C2/contigs.fa"  "assembled contigs the calls came from"
     keep "claim2" "$OUT/claim2.log" "full Claim 2 log incl. rtg vcfeval summary"
     parse_snv(){ echo "$1" | grep -oP "$2=\\K[0-9.]+" | head -1; }
-    echo "individual,tool,tp,fp,fn,precision,recall,f1" > "$OUT/claim2_t3.csv"
-    printf "%s,CAPSULE,%s,%s,%s,%s,%s,%s\n" "$DS" \
+    echo "individual,tool,tp,fp,fn,precision,recall,f1,status" > "$OUT/claim2_t3.csv"
+    printf "%s,CAPSULE,%s,%s,%s,%s,%s,%s,%s\n" "$DS" \
       "$(parse_snv "$LN" 'TP')" "$(parse_snv "$LN" 'FP')" "$(parse_snv "$LN" 'FN')" \
-      "$(parse_snv "$LN" ' P')" "$(parse_snv "$LN" ' R')" "$(parse_snv "$LN" 'F1')" >> "$OUT/claim2_t3.csv"
+      "$(parse_snv "$LN" ' P')" "$(parse_snv "$LN" ' R')" "$(parse_snv "$LN" 'F1')" DONE >> "$OUT/claim2_t3.csv"
 
     # DiscoSNP++ on the SAME reads, SAME truth, SAME scoring. Without it T3 is
     # a single number, not a head-to-head, and the claim is a comparison.
@@ -266,9 +266,9 @@ if want 2 && [ -s "$DATA_DIR/${DS}_pooled.fq" ] && [ -s "$REFS/chr20.fa" ]; then
       DL=$(grep -aE '^SNV ' "$OUT/claim2_disco.log" | tail -1)
       if [ -n "$DL" ]; then
         ok "DISCO $DL"
-        printf "%s,DiscoSNP++,%s,%s,%s,%s,%s,%s\n" "$DS" \
+        printf "%s,DiscoSNP++,%s,%s,%s,%s,%s,%s,%s\n" "$DS" \
           "$(parse_snv "$DL" 'TP')" "$(parse_snv "$DL" 'FP')" "$(parse_snv "$DL" 'FN')" \
-          "$(parse_snv "$DL" ' P')" "$(parse_snv "$DL" ' R')" "$(parse_snv "$DL" 'F1')" >> "$OUT/claim2_t3.csv"
+          "$(parse_snv "$DL" ' P')" "$(parse_snv "$DL" ' R')" "$(parse_snv "$DL" 'F1')" DONE >> "$OUT/claim2_t3.csv"
         keep "claim2" "$OUT/claim2_disco.log" "DiscoSNP++ arm -- the competitor number in T3"
       else err "DiscoSNP++ produced no SNV line -- see $OUT/claim2_disco.log"; fi
     else err "run_fullchr20_bench_disco.sh missing -- T3 will have only our arm"; fi
@@ -285,14 +285,14 @@ if want 2 && [ -s "$DATA_DIR/${DS}_pooled.fq" ] && [ -s "$REFS/chr20.fa" ]; then
       KL=$(grep -aE '^SNV ' "$OUT/claim2_k2s.log" | tail -1)
       K1=$(echo "$KL" | grep -oP 'F1=\K[0-9.]+')
       if [ -n "${K1:-}" ]; then ok "KMER2SNP SNV F1=$K1"
-        printf "%s,Kmer2SNP,%s,%s,%s,%s,%s,%s\n" "$DS" \
+        printf "%s,Kmer2SNP,%s,%s,%s,%s,%s,%s,%s\n" "$DS" \
           "$(parse_snv "$KL" 'TP')" "$(parse_snv "$KL" 'FP')" "$(parse_snv "$KL" 'FN')" \
-          "$(parse_snv "$KL" ' P')" "$(parse_snv "$KL" ' R')" "$K1" >> "$OUT/claim2_t3.csv"
+          "$(parse_snv "$KL" ' P')" "$(parse_snv "$KL" ' R')" "$K1" DONE >> "$OUT/claim2_t3.csv"
       else err "Kmer2SNP produced no SNV line"
-        printf "%s,Kmer2SNP,,,,,,FAILED\n" "$DS" >> "$OUT/claim2_t3.csv"; fi
+        printf "%s,Kmer2SNP,,,,,,,FAILED\n" "$DS" >> "$OUT/claim2_t3.csv"; fi
     else
       warn "Kmer2SNP: no validated runner in this repo -- T3 arm recorded NOT_AVAILABLE"
-      printf "%s,Kmer2SNP,,,,,,NOT_AVAILABLE\n" "$DS" >> "$OUT/claim2_t3.csv"
+      printf "%s,Kmer2SNP,,,,,,,NOT_AVAILABLE\n" "$DS" >> "$OUT/claim2_t3.csv"
     fi
     keep "claim2" "$OUT/claim2_t3.csv" "T3 table: het-SNV TP/FP/FN/P/R/F1, ours vs DiscoSNP++"
   else err "no SNV line -- see $OUT/claim2.log"; FAILED=1; fi
