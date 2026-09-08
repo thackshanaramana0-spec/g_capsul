@@ -142,7 +142,7 @@ CSV6="$OUT_DIR/claim2_T2.4_multiallelic.csv"
 CSV7="$OUT_DIR/claim2_T2.5_tetraploid.csv"
 echo "individual,depth_x,reads,archive_bytes,tp,fp,fn,precision,recall,f1,wall_s,peak_ram_kb,status" > "$CSV4"
 echo "individual,tool,tp,fp,fn,precision,recall,f1,wall_s,peak_ram_kb,status" > "$CSV5"
-echo "individual,region,truth_multiallelic_sites,capsule_hits,disco_hits,capsule_rate,disco_rate,wall_s,peak_ram_kb,status" > "$CSV6"
+echo "individual,region,truth_multiallelic_sites,capsule_anycall,disco_anycall,capsule_both_alleles,disco_both_alleles,capsule_rate,disco_rate,wall_s,peak_ram_kb,status" > "$CSV6"
 echo "pair,ploidy,region,tool,class,tp,fp,fn,precision,recall,f1,wall_s,peak_ram_kb,status" > "$CSV7"
 
 DATASETS="ERR5181310 SRR554369 ERR552797 SRR2584863 SRR29296997 ERR12954017 \
@@ -564,7 +564,7 @@ run_phase2(){
         # ---- T2.4 multi-allelic (one diploid individual's own GT=1/2 sites) ----
         mark "T2.4 multi-allelic"
         banner "T2.4 — multi-allelic sites recovered"
-        local MA_IND="${T24_IND:-HG002}" MA_REG="${T24_REGION:-20:3000000-3400000}" mad
+        local MA_IND="${T24_IND:-HG002}" MA_REG="${T24_REGION:-20:1000000-6000000}" mad
         mad="$OUT_DIR/c2_T2.4_${MA_IND}"
         if /usr/bin/time -v bash "$HERE/scripts/run_multiallelic_bench_capsule.sh" \
               "$BEST" "$HERE/scripts" "$REFS/chr20.fa" "$MA_IND" "$MA_REG" "$mad" \
@@ -573,18 +573,26 @@ run_phase2(){
             NT=$(grep -aoP 'truth multi-allelic sites: \K[0-9]+' "$mad.log" | tail -1)
             CH=$(grep -aoP 'CAPSULE\s+sites with a call at that position: \K[0-9]+' "$mad.log" | tail -1)
             DH=$(grep -aoP 'DiscoSNP\+\+ sites with a call at that position: \K[0-9]+' "$mad.log" | tail -1)
+            # STRICT is the metric T2.4 claims; anycall is a weaker proxy kept
+            # for continuity. They disagree in DIRECTION on real data
+            # (anycall 6 vs 15 = loss; strict 5 vs 0 = win), so recording only
+            # one of them would be a choice, not a measurement.
+            local CS DS
+            CS=$(grep -aoP 'CAPSULE\s+both-allele sites: \K[0-9]+' "$mad.log" | tail -1)
+            DS=$(grep -aoP 'DiscoSNP\+\+ both-allele sites: \K[0-9]+' "$mad.log" | tail -1)
             tvm=$(parse_time_v "$mad.log"); wm=${tvm% *}; hm=${tvm#* }
             if [ -n "${NT:-}" ] && [ -n "${CH:-}" ]; then
-                ok "T2.4  CAPSULE $CH/$NT   DiscoSNP++ ${DH:-0}/$NT"
+                ok "T2.4  strict both-allele: CAPSULE ${CS:-?}/$NT  DiscoSNP++ ${DS:-NOT_RUN}/$NT   (anycall proxy $CH vs ${DH:-NOT_RUN})"
                 checkpoint "T2.4 multi-allelic done -- $CH/$NT vs ${DH:-0}/$NT"
-                printf "%s,%s,%s,%s,%s,%s,%s,%s,%s,DONE\n" "$MA_IND" "$MA_REG" "$NT" "$CH" "${DH:-0}" \
-                    "$(awk -v a=${CH:-0} -v n=${NT:-1} 'BEGIN{printf "%.3f",(n?a/n:0)}')" \
-                    "$(awk -v a=${DH:-0} -v n=${NT:-1} 'BEGIN{printf "%.3f",(n?a/n:0)}')" \
+                printf "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,DONE\n" "$MA_IND" "$MA_REG" "$NT" \
+                    "$CH" "${DH:-NOT_RUN}" "${CS:-}" "${DS:-NOT_RUN}" \
+                    "$(awk -v a=${CS:-0} -v n=${NT:-1} 'BEGIN{printf "%.3f",(n?a/n:0)}')" \
+                    "$(awk -v a=${DS:-0} -v n=${NT:-1} 'BEGIN{printf "%.3f",(n?a/n:0)}')" \
                     "$wm" "$hm" >> "$CSV6"
             else err "T2.4: could not parse counts"; debug_dump "T2.4" "$mad.log"
-                 printf "%s,%s,,,,,,,,PARSE_FAILED\n" "$MA_IND" "$MA_REG" >> "$CSV6"; fi
+                 printf "%s,%s,,,,,,,,,,PARSE_FAILED\n" "$MA_IND" "$MA_REG" >> "$CSV6"; fi
         else err "T2.4 runner failed"; debug_dump "T2.4" "$mad.log"
-             printf "%s,%s,,,,,,,,FAILED\n" "$MA_IND" "$MA_REG" >> "$CSV6"; fi
+             printf "%s,%s,,,,,,,,,,FAILED\n" "$MA_IND" "$MA_REG" >> "$CSV6"; fi
 
         # ---- T2.5 tetraploid (two real diploids concatenated, Cooke 2022) ----
         mark "T2.5 tetraploid"
@@ -595,6 +603,13 @@ run_phase2(){
         if /usr/bin/time -v bash "$HERE/scripts/run_tetraploid_bench_capsule.sh" \
               "$BEST" "$HERE/scripts" "$REFS/chr20.fa" "$TA" "$TB" "$TP4" "$TREG" "$ted" \
               > "$ted.log" 2>&1; then
+            # P= and R= MUST be anchored. The score line is
+            #   CAPSULE_SNV TP=430 FP=24 FN=143 P=0.947 R=0.750 F1=0.837
+            # so a bare `P=\K` also matches the P inside TP= and FP=, returning
+            # THREE values; printf then reused its format string and emitted
+            # three mangled lines per tool instead of one row. Caught by running
+            # it -- the schema check passes either way, because the format
+            # string is correct; it is the ARGUMENTS that multiplied.
             local tvt wt ht wrote=0
             tvt=$(parse_time_v "$ted.log"); wt=${tvt% *}; ht=${tvt#* }
             while read -r nm rest; do
@@ -605,8 +620,8 @@ run_phase2(){
                 printf "%s+%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,DONE\n" "$TA" "$TB" "$TP4" "$TREG" \
                     "$tool" "$cls" \
                     "$(echo "$rest"|grep -oP 'TP=\K[0-9]+')" "$(echo "$rest"|grep -oP 'FP=\K[0-9]+')" \
-                    "$(echo "$rest"|grep -oP 'FN=\K[0-9]+')" "$(echo "$rest"|grep -oP 'P=\K[0-9.]+')" \
-                    "$(echo "$rest"|grep -oP 'R=\K[0-9.]+')" "$(echo "$rest"|grep -oP 'F1=\K[0-9.]+')" \
+                    "$(echo "$rest"|grep -oP 'FN=\K[0-9]+')" "$(echo "$rest"|grep -oP '(?<![A-Z])P=\K[0-9.]+')" \
+                    "$(echo "$rest"|grep -oP '(?<![A-Z0-9])R=\K[0-9.]+')" "$(echo "$rest"|grep -oP 'F1=\K[0-9.]+')" \
                     "$wt" "$ht" >> "$CSV7"
                 wrote=$((wrote+1))
             done < <(grep -aE '^(CAPSULE|DiscoSNP)[A-Za-z+_]*_(SNV|INDEL) ' "$ted.log")

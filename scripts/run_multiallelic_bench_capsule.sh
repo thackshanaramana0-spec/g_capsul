@@ -28,7 +28,7 @@ mkdir -p "$OUT"; cd "$OUT"
 log "$IND, region $CHROM:$LO-$HI, target ${TARGET_COV}x, single individual (no pooling)"
 
 # ── 1. Stream this individual's real reads for the region ──────────────────
-log "[1/5] streaming $IND $REGION..."
+log "[1/5] streaming $IND $CHROM:$LO-$HI..."
 G=https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/data
 declare -A BAM
 BAM[HG002]="$G/AshkenazimTrio/HG002_NA24385_son/NIST_HiSeq_HG002_Homogeneity-10953946/NHGRI_Illumina300X_AJtrio_novoalign_bams/HG002.hs37d5.300x_chr20.bam"
@@ -86,6 +86,7 @@ if [ -n "$D" ]; then
 else
     log "[4/5] SKIP: DiscoSNP++ not found on PATH -- CAPSULE-only run"
     printf "##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n" > d_raw.vcf
+    DISCO_SKIPPED=1
 fi
 
 # ── 5. Extract truth's multi-allelic sites specifically, then check recovery
@@ -111,6 +112,28 @@ recovered() {
         $1!~/^#/ && ($2 in pos){print $2}' truth_multiallelic.vcf "$CALLS" \
         | sort -u | wc -l
 }
+# ── STRICT allele-level check — the metric the T5.2 CLAIM actually makes ──
+# The proxy above ("any call at this position") is NOT what T5.2 asserts.
+# T5.2 is a CAPABILITY claim: can the caller represent a site where the two
+# haplotypes carry two DIFFERENT non-reference alleles? That is answered only
+# by checking whether BOTH truth ALTs are recovered at the position -- as one
+# native multi-allelic record, or as two matching biallelic ones (which is the
+# fair way to credit DiscoSNP++, since it cannot emit multi-allelic records by
+# construction and would otherwise score 0 by definition rather than by
+# measurement).
+recovered_strict() {
+    local CALLS="$1"
+    awk -F'\t' '
+      NR==FNR{ if($1!~/^#/){ n=split($5,a,","); delete want; 
+                 for(i=1;i<=n;i++) t[$2"\t"toupper(a[i])]=1; np[$2]=n } next }
+      $1!~/^#/{ m=split($5,b,","); for(i=1;i<=m;i++) got[$2"\t"toupper(b[i])]=1 }
+      END{ hit=0
+           for(k in t){ split(k,p,"\t"); seen[p[1]]+=(k in got)?1:0 }
+           for(pos in np) if(seen[pos]>=np[pos] && np[pos]>=2) hit++
+           print hit+0 }' truth_multiallelic.vcf "$CALLS"
+}
+CAPS_STRICT=$(recovered_strict lifted.vcf)
+DISCO_STRICT=$(recovered_strict d_raw.vcf)
 CAPS_HIT=$(recovered lifted.vcf)
 DISCO_HIT=$(recovered d_raw.vcf)
 log "[5/5] done"
@@ -118,7 +141,18 @@ log "[5/5] done"
 echo "===== T5.2 MULTI-ALLELIC ($IND, $CHROM:$LO-$HI) ====="
 echo "truth multi-allelic sites: $N_TRUTH_MULTI"
 echo "CAPSULE    sites with a call at that position: $CAPS_HIT / $N_TRUTH_MULTI"
-echo "DiscoSNP++ sites with a call at that position: $DISCO_HIT / $N_TRUTH_MULTI"
+if [ "${DISCO_SKIPPED:-0}" = 1 ]; then
+  echo "DiscoSNP++ sites with a call at that position: SKIPPED (not on PATH -- NOT a measurement)"
+else
+  echo "DiscoSNP++ sites with a call at that position: $DISCO_HIT / $N_TRUTH_MULTI"
+fi
+echo "-- STRICT (both ALT alleles recovered) -- this is the T5.2 claim's metric --"
+echo "CAPSULE    both-allele sites: $CAPS_STRICT / $N_TRUTH_MULTI"
+if [ "${DISCO_SKIPPED:-0}" = 1 ]; then
+  echo "DiscoSNP++ both-allele sites: SKIPPED (not on PATH -- NOT a measurement)"
+else
+  echo "DiscoSNP++ both-allele sites: $DISCO_STRICT / $N_TRUTH_MULTI"
+fi
 echo "======================================================="
 log "Results in: $OUT"
 log "Total elapsed: $(( $(date +%s) - T_START ))s"
