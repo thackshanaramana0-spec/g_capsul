@@ -90,10 +90,14 @@ keep "input" "$SRC" "the FASTQ under test"
 banner "CLAIM 1 — compression (T1 size, T2 time + RAM)"
 A="$OUT/$DS.capsule"
 step "CAPSULE compress (adaptive sweep, concurrent candidates)"
-# CAPS_CALL=1 is REQUIRED: it writes contig_spans, without which Claim 2
-# cannot call from this archive at all. The archive is KEPT and reused by
-# Claims 2 and 3 below, so the flag has to be set here, not later.
-/usr/bin/time -v env CAPS_CALL=1 CAPS_NAMES=1 CAPS_QUAL=1 INPUT="$SRC" ARCHIVE="$A" BEST="$BEST" \
+# CAPS_SPANS=1, NOT CAPS_CALL=1. Both write contig_spans, which Claim 2 needs
+# to call from this archive -- but CAPS_CALL ALSO runs the full variant caller
+# inline at the end of compression, which is a ~20x heavier path. Measured on
+# a 500k-read HG002 slice: 38.64 s / 2.45 GB with CAPS_CALL against
+# 8.97 s / 1.00 GB with CAPS_SPANS, for a BYTE-IDENTICAL archive and a
+# BYTE-IDENTICAL VCF when called from it afterwards. Using CAPS_CALL here made
+# compression pay for the caller twice.
+/usr/bin/time -v env CAPS_SPANS=1 CAPS_NAMES=1 CAPS_QUAL=1 INPUT="$SRC" ARCHIVE="$A" BEST="$BEST" \
     bash "$HERE/scripts/encode_adaptive.sh" >"$OUT/encode.stdout" 2>"$OUT/_t_c"
 read -r CW CR <<< "$(tv "$OUT/_t_c")"
 if [ -s "$A" ]; then

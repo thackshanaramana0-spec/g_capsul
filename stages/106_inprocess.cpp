@@ -311,6 +311,19 @@ static qlc::Encoded g_QL;  static bool g_QL_done = false;
 // indel-bubble mechanism needs genuinely separate haplotype contigs, which a
 // single merged pg coordinate space would erase). Zero cost when unset.
 static const bool CAPS_CALL  = getenv("CAPS_CALL")  != nullptr;
+// ── SPANS WITHOUT CALLING ───────────────────────────────────────────────────
+// CAPS_CALL does TWO unrelated things: it records g_contig_spans (cheap -- two
+// push_backs per contig) and it runs the FULL variant caller inline at the end
+// of compression (~20x heavier: build_substrate twice, indel_pass, xcontig).
+//
+// An archive only needs the SPANS to serve `capsule_decode call` later. Asking
+// for CAPS_CALL just to get contig_spans made HG002 compression cost 913 s
+// instead of ~250 s and 13.2 GB instead of ~4 GB -- the caller ran twice, once
+// inside compression and once from the archive.
+//
+// CAPS_SPANS=1 records the spans and skips the inline call. CAPS_CALL still
+// implies it, so nothing that relied on the old behaviour changes.
+static const bool CAPS_SPANS = (getenv("CAPS_SPANS") != nullptr) || CAPS_CALL;
 // Near-miss base-quality mask: built only when the near-miss VCF is requested,
 // so no default-path or plain-CAPS_CALL run pays its ~222 MB.
 static const bool NM_QUAL    = getenv("CAPS_NM_VCF") != nullptr;
@@ -2028,7 +2041,7 @@ int main(int argc,char** argv){
             while(nxt[cur]!=NONE && nxt[nxt[cur]]!=NONE){
                 uint32_t o=ovl[cur]; cur=nxt[cur];
                 ppos[cur]=pg.size()-o; rappend(pg,cur,o); }
-            if(CAPS_CALL) g_contig_spans.push_back({_cspan0,pg.size()});
+            if(CAPS_SPANS) g_contig_spans.push_back({_cspan0,pg.size()});
             if(nxt[cur]!=NONE) leftovers.push_back(nxt[cur]);   // tail
             continue;
         }
@@ -2036,7 +2049,7 @@ int main(int argc,char** argv){
         uint32_t cur=i; ppos[cur]=pg.size(); rappend(pg,cur,0);
         while(nxt[cur]!=NONE){ uint32_t o=ovl[cur]; cur=nxt[cur];
                                ppos[cur]=pg.size()-o; rappend(pg,cur,o); }
-        if(CAPS_CALL) g_contig_spans.push_back({_cspan0,pg.size()});
+        if(CAPS_SPANS) g_contig_spans.push_back({_cspan0,pg.size()});
     }
     if(getenv("DBG_OVL")){
         // Overlap-length histogram over committed links, as a FRACTION of read
@@ -2962,7 +2975,7 @@ int main(int argc,char** argv){
             uint32_t cur=i; ppos[cur]=pg.size(); rappend(pg,cur,0);
             while(nxt[cur]!=NONE){ uint32_t o=ovl[cur]; cur=nxt[cur];
                                    ppos[cur]=pg.size()-o; rappend(pg,cur,o); }
-            if(CAPS_CALL) g_contig_spans.push_back({_cspan0,pg.size()});
+            if(CAPS_SPANS) g_contig_spans.push_back({_cspan0,pg.size()});
         }
         second_pg=pg.size()-before;
         fprintf(stderr,"second pg: %zu reads -> %zu B (raw would be %zu B)\n",
@@ -4554,7 +4567,7 @@ int main(int argc,char** argv){
         // Cost is small: ~451k spans, and spans are contiguous (end[i] ==
         // start[i+1] almost everywhere), so storing the END offsets as deltas
         // is a near-monotone sequence the existing coder handles well.
-        if (CAPS_CALL && !g_contig_spans.empty()) {
+        if (CAPS_SPANS && !g_contig_spans.empty()) {
             static std::vector<uint8_t> v_spans;
             v_spans.clear();
             uint64_t prev = 0;
