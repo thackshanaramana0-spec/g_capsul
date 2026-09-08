@@ -136,6 +136,10 @@ CSV3="$OUT_DIR/claim3_t6.csv"
 echo "dataset,tool,raw_bytes,archive_bytes,ratio_pct,compress_s,decompress_s,peak_ram_kb,lossless,status" > "$CSV1"
 echo "individual,tool,tp,fp,fn,precision,recall,f1,wall_s,peak_ram_kb,status" > "$CSV2"
 echo "dataset,operation,ours_s,ours_peak_ram_kb,output_bytes,rows,baseline_tool,baseline_s,baseline_peak_ram_kb,speedup,status,note" > "$CSV3"
+CSV4="$OUT_DIR/claim2_t4_coverage.csv"
+CSV5="$OUT_DIR/claim2_t5_indel.csv"
+echo "individual,depth_x,reads,archive_bytes,tp,fp,fn,precision,recall,f1,wall_s,peak_ram_kb,status" > "$CSV4"
+echo "individual,tool,tp,fp,fn,precision,recall,f1,wall_s,peak_ram_kb,status" > "$CSV5"
 
 DATASETS="ERR5181310 SRR554369 ERR552797 SRR2584863 SRR29296997 ERR12954017 \
 SRR065390 SRR40271341 ERR17740259 SRR37283774 DRR976266 SRR36741279 \
@@ -390,6 +394,17 @@ run_phase2(){
             checkpoint "$IND  our caller done -- SNV F1=$f1 P=$p R=$r, ${w}s"
             printf "%s,CAPSULE,%s,%s,%s,%s,%s,%s,%s,%s,DONE\n" "$IND" \
                 "${tp:-}" "${fp:-}" "${fn:-}" "$p" "$r" "$f1" "$w" "$hwm" >> "$CSV2"
+            # T5: both runners already score INDEL in the same pass -- the line
+            # was being printed and thrown away. No extra compute.
+            IL=$(grep -aE '^INDEL ' "$d.log" | tail -1)
+            if [ -n "${IL:-}" ]; then
+                printf "%s,CAPSULE,%s,%s,%s,%s,%s,%s,%s,%s,DONE\n" "$IND" \
+                    "$(echo "$IL"|grep -oP 'TP=\K[0-9]+')" "$(echo "$IL"|grep -oP 'FP=\K[0-9]+')" \
+                    "$(echo "$IL"|grep -oP 'FN=\K[0-9]+')" "$(echo "$IL"|grep -oP ' P=\K[0-9.]+')" \
+                    "$(echo "$IL"|grep -oP ' R=\K[0-9.]+')" "$(echo "$IL"|grep -oP 'F1=\K[0-9.]+')" \
+                    "$w" "$hwm" >> "$CSV5"
+                ok "OURS      INDEL $(echo "$IL"|grep -oP 'F1=\K[0-9.]+')"
+            else printf "%s,CAPSULE,,,,,,,,,NO_INDEL_LINE\n" "$IND" >> "$CSV5"; fi
         else
             err "$IND: our caller produced no SNV line"; debug_dump "$IND ours" "$d.log"
             printf "%s,CAPSULE,,,,,,,,,FAILED\n" "$IND" >> "$CSV2"
@@ -413,6 +428,15 @@ run_phase2(){
                 checkpoint "$IND  DiscoSNP++ done -- SNV F1=$f1"
                 printf "%s,DiscoSNP++,%s,%s,%s,%s,%s,%s,%s,%s,DONE\n" "$IND" \
                     "${tp:-}" "${fp:-}" "${fn:-}" "$p" "$r" "$f1" "$w" "$hwm" >> "$CSV2"
+                IL=$(grep -aE '^INDEL ' "$OUT_DIR/c2_${IND}_disco.log" | tail -1)
+                if [ -n "${IL:-}" ]; then
+                    printf "%s,DiscoSNP++,%s,%s,%s,%s,%s,%s,%s,%s,DONE\n" "$IND" \
+                        "$(echo "$IL"|grep -oP 'TP=\K[0-9]+')" "$(echo "$IL"|grep -oP 'FP=\K[0-9]+')" \
+                        "$(echo "$IL"|grep -oP 'FN=\K[0-9]+')" "$(echo "$IL"|grep -oP ' P=\K[0-9.]+')" \
+                        "$(echo "$IL"|grep -oP ' R=\K[0-9.]+')" "$(echo "$IL"|grep -oP 'F1=\K[0-9.]+')" \
+                        "$w" "$hwm" >> "$CSV5"
+                    ok "DiscoSNP++ INDEL $(echo "$IL"|grep -oP 'F1=\K[0-9.]+')"
+                else printf "%s,DiscoSNP++,,,,,,,,,NO_INDEL_LINE\n" "$IND" >> "$CSV5"; fi
             else err "DiscoSNP++ produced no SNV line for $IND"; debug_dump "$IND disco" "$OUT_DIR/c2_${IND}_disco.log"
                 printf "%s,DiscoSNP++,,,,,,,,,FAILED\n" "$IND" >> "$CSV2"; fi
         else
@@ -444,6 +468,10 @@ run_phase2(){
                 checkpoint "$IND  Kmer2SNP done -- SNV F1=$f1"
                 printf "%s,Kmer2SNP,%s,%s,%s,%s,%s,%s,%s,%s,DONE\n" "$IND" \
                     "${tp:-}" "${fp:-}" "${fn:-}" "$p" "$r" "$f1" "$w" "$hwm" >> "$CSV2"
+                # Kmer2SNP emits SNP k-mer PAIRS only; it has no indel model at
+                # all. Recorded explicitly so T5's blank is a property of the
+                # tool, not a gap in this benchmark.
+                printf "%s,Kmer2SNP,,,,,,,,,NOT_APPLICABLE_SNP_ONLY\n" "$IND" >> "$CSV5"
             else err "Kmer2SNP produced no SNV line for $IND"
                 printf "%s,Kmer2SNP,,,,,,,,,FAILED\n" "$IND" >> "$CSV2"; fi
         else
@@ -453,6 +481,70 @@ run_phase2(){
         el=$(( $(date +%s) - t0 ))
         inf "[$i/$n] $IND done in ${el}s   (elapsed $(_el))"
     done
+    # ═══ T4 — COVERAGE SWEEP (HG002 only) ══════════════════════════════════
+    # The spec's Claim 2 is T3 + T4 + T5. T4 asks how F1 holds up as depth
+    # falls, which is the question a reviewer asks of any k-mer/graph caller:
+    # does it only work at luxurious coverage? It needs REAL runs -- the reads
+    # are subsampled, re-compressed, and called from the resulting archive by
+    # exactly the path T3 uses, so the only variable is depth.
+    #
+    # HG002_pooled.fq is standardised to 30x (DATASET_LOCKED.md), so the
+    # fraction for a target depth is target/30 -- a formula over a declared
+    # property of the input, not a fitted constant. 30x itself is not re-run:
+    # it IS the T3 row, and re-running it would spend 6 minutes to reproduce a
+    # number we already have.
+    local T4_IND=HG002 BASE_DEPTH=30
+    local t4fq="$DATA_DIR/${T4_IND}_pooled.fq"
+    if [ -s "$t4fq" ] && case ",$PHASES," in *,2,*) true;; *) false;; esac; then
+        banner "T4 — coverage sweep ($T4_IND, ${BASE_DEPTH}x source)"
+        local BASE_READS; BASE_READS=$(( $(wc -l < "$t4fq") / 4 ))
+        # carry the 30x row over from T3 so the sweep is complete in one table
+        local r30; r30=$(awk -F, -v i="$T4_IND" '$1==i && $2=="CAPSULE" && $11=="DONE"{print $3","$4","$5","$6","$7","$8","$9","$10; exit}' "$CSV2")
+        if [ -n "${r30:-}" ]; then
+            printf "%s,%s,%s,%s,%s,FROM_T3\n" "$T4_IND" "$BASE_DEPTH" "$BASE_READS" \
+                "$(stat -c%s "$ARCH_DIR/$T4_IND.capsule" 2>/dev/null || echo 0)" "$r30" >> "$CSV4"
+        fi
+        for DEPTH in ${T4_DEPTHS:-10 15 20}; do
+            mark "T4 $T4_IND: ${DEPTH}x"
+            step "T4  ${DEPTH}x  (subsample -> compress -> call from archive)"
+            local frac sub arc4 d4 t0d
+            t0d=$(date +%s)
+            frac=$(awk -v d="$DEPTH" -v b="$BASE_DEPTH" 'BEGIN{printf "%.4f", d/b}')
+            sub="$WD/${T4_IND}_${DEPTH}x.fq"; arc4="$WD/${T4_IND}_${DEPTH}x.capsule"
+            # fixed seed: the sweep must be reproducible run to run
+            seqtk sample -s11 "$t4fq" "$frac" > "$sub" 2>"$WD/seqtk.log" \
+                || { err "T4 ${DEPTH}x: seqtk failed"; printf "%s,%s,,,,,,,,,,,SUBSAMPLE_FAILED\n" "$T4_IND" "$DEPTH" >> "$CSV4"; continue; }
+            local NR4; NR4=$(( $(wc -l < "$sub") / 4 ))
+            /usr/bin/time -v env CAPS_SPANS=1 CAPS_NAMES=1 CAPS_QUAL=1 INPUT="$sub" ARCHIVE="$arc4" BEST="$BEST" \
+                bash "$HERE/scripts/encode_adaptive.sh" >/dev/null 2>"$WD/t4c.txt"
+            if [ ! -s "$arc4" ]; then
+                err "T4 ${DEPTH}x: no archive"; debug_dump "T4 ${DEPTH}x encode" "${arc4}.log"
+                printf "%s,%s,%s,,,,,,,,,,ENCODE_FAILED\n" "$T4_IND" "$DEPTH" "$NR4" >> "$CSV4"
+                rm -f "$sub"; continue; fi
+            d4="$OUT_DIR/c2_${T4_IND}_${DEPTH}x"
+            bash "$HERE/scripts/run_fullchr20_archive_capsule.sh" \
+                 "$DEC" "$HERE/scripts" "$REFS/chr20.fa" "$arc4" "$T4_IND" "$d4" > "$d4.log" 2>&1
+            local SL4; SL4=$(grep -aE '^SNV ' "$d4.log" | tail -1)
+            local tv4 w4 h4; tv4=$(parse_time_v "$d4.log"); w4=${tv4% *}; h4=${tv4#* }
+            if [ -n "${SL4:-}" ]; then
+                ok "T4 ${DEPTH}x  F1=$(echo "$SL4"|grep -oP 'F1=\K[0-9.]+')  ($NR4 reads, $(mbs $(stat -c%s "$arc4")))"
+                checkpoint "$T4_IND T4 ${DEPTH}x done -- F1=$(echo "$SL4"|grep -oP 'F1=\K[0-9.]+')"
+                printf "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,DONE\n" "$T4_IND" "$DEPTH" "$NR4" \
+                    "$(stat -c%s "$arc4")" \
+                    "$(echo "$SL4"|grep -oP 'TP=\K[0-9]+')" "$(echo "$SL4"|grep -oP 'FP=\K[0-9]+')" \
+                    "$(echo "$SL4"|grep -oP 'FN=\K[0-9]+')" "$(echo "$SL4"|grep -oP ' P=\K[0-9.]+')" \
+                    "$(echo "$SL4"|grep -oP ' R=\K[0-9.]+')" "$(echo "$SL4"|grep -oP 'F1=\K[0-9.]+')" \
+                    "$w4" "$h4" >> "$CSV4"
+            else
+                err "T4 ${DEPTH}x: no SNV line"; debug_dump "T4 ${DEPTH}x" "$d4.log"
+                printf "%s,%s,%s,%s,,,,,,,,,NO_SNV_LINE\n" "$T4_IND" "$DEPTH" "$NR4" "$(stat -c%s "$arc4")" >> "$CSV4"
+            fi
+            rm -f "$sub" "$arc4"          # the transient is the whole point of deleting it
+            inf "T4 ${DEPTH}x took $(( $(date +%s) - t0d ))s"
+        done
+        banner "T4 COMPLETE  ->  $CSV4"
+    fi
+
     checkpoint "PHASE 2 COMPLETE"
     banner "PHASE 2 COMPLETE  ->  $CSV2"
 }
@@ -595,12 +687,16 @@ say "datasets  : $N_OK ok, $N_FAIL failed${FAILED_LIST:+ ($FAILED_LIST)}"
 say ""
 say "  T1/T2 (Claim 1): $CSV1"
 say "  T3    (Claim 2): $CSV2"
+say "  T4    (Claim 2): $CSV4"
+say "  T5    (Claim 2): $CSV5"
 say "  T6    (Claim 3): $CSV3"
 say "  archives kept  : $ARCH_DIR  ($(du -sh "$ARCH_DIR" 2>/dev/null | cut -f1))"
 say "  full log       : $LOG"
 say ""
 say "── CLAIM 1 ──"; column -s, -t "$CSV1" 2>/dev/null | head -30 | tee -a "$LOG"
 say ""; say "── CLAIM 2 ──"; column -s, -t "$CSV2" 2>/dev/null | tee -a "$LOG"
+say ""; say "── CLAIM 2 — T4 coverage sweep ──"; column -s, -t "$CSV4" 2>/dev/null | tee -a "$LOG"
+say ""; say "── CLAIM 2 — T5 het-indel ──";      column -s, -t "$CSV5" 2>/dev/null | tee -a "$LOG"
 say ""; say "── CLAIM 3 ──"; column -s, -t "$CSV3" 2>/dev/null | head -30 | tee -a "$LOG"
 rm -rf "$WD"
 [ "$N_FAIL" -eq 0 ] && exit 0 || exit 1
