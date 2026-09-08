@@ -21,6 +21,17 @@ separate streams and entropy-coded.
 
 **Your mandate is the COMPACT axis: archive size, wall time, peak RAM.**
 
+### The goal, in three lines
+
+1. **Win all three axes at once** — smaller archive *and* less wall time *and*
+   less peak RAM than SPRING, Genozip and PgRC2, across the locked datasets,
+   not on one favourable file.
+2. **With the insight intact**: the same archive must still be an assembly —
+   calling variants and answering coordinate queries with no reference and no
+   FASTQ. A size win that costs this is a loss.
+3. **At a margin worth a Nature Methods paper** — large, reproducible, and
+   explained by its mechanism, not a 2% gain from tuning constants.
+
 ### The ambition, stated plainly
 
 PgRC2 beats SPRING and Genozip on **all three axes simultaneously** — smaller
