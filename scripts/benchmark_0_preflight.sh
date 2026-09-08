@@ -98,8 +98,19 @@ say "  -- Claim 2 (variant calling) --"
 [ -d "$HOME/DiscoSnp" ] && export PATH="$HOME/DiscoSnp:$PATH"
 chk_cmd  "DiscoSNP++ (on PATH)" run_discoSnp++.sh req
 chk_cmd  "rtg (vcfeval)"  rtg        req
-if [ -d "$HOME/miniconda3/envs/kmer2snp_r" ]; then pass "Kmer2SNP (conda env)" "$HOME/miniconda3/envs/kmer2snp_r"
-else warn "Kmer2SNP (conda env)" "MISSING — Claim 2 runs with DiscoSNP++ only, T3 loses its 3rd arm"; fi
+# Kmer2SNP needs FOUR things, and the arm silently vanishes if any is absent:
+# the tool, networkx (which lives in the conda env, not system python3), a
+# k-mer counter (its own DSK wrapper hardcodes a path that does not exist), and
+# our runner. Checked separately so a failure names the missing piece.
+chk_cmd  "KMC (k-mer counter)" kmc req
+if [ -x "$HOME/miniconda3/envs/kmer2snp_r/bin/python" ]; then
+    if "$HOME/miniconda3/envs/kmer2snp_r/bin/python" -c "import networkx" 2>/dev/null
+    then pass "Kmer2SNP python + networkx" "$HOME/miniconda3/envs/kmer2snp_r/bin/python"
+    else fail "Kmer2SNP env has no networkx" "kmer2snp.py cannot import"; fi
+else warn "Kmer2SNP (conda env)" "MISSING — T3 loses its 3rd arm"; fi
+chk_path "Kmer2SNP tool"   "/root/Kmer2SNP/kmer2snp.py" req
+chk_path "Kmer2SNP runner" "$HERE/scripts/run_kmer2snp.sh" req
+chk_path "kmer2snp->VCF"   "/root/arcs-clean/scripts/kmer2snp_sam_to_vcf.py" req
 say "  -- Claim 3 (archive analysis) --"
 chk_path "SPAdes"         "$HOME/SPAdes-4.0.0-Linux/bin/spades.py" req
 chk_cmd  "bwa"            bwa        req
@@ -381,7 +392,9 @@ say ""
 say "  PHASE 2 projected (4 GIAB sets, from the archive):"
 say "    - het-SNV F1 ~0.89 per individual   (HG002 measured 0.888 on 2026-09-08)"
 say "    - DiscoSNP++ ~0.85                  (HG002 measured 0.847)"
-say "    - Kmer2SNP: NOT_AVAILABLE -- no validated runner in this repo"
+say "    - Kmer2SNP ~0.46                    (HG002 FULL chr20 measured 2026-09-08:"
+say "                                         TP=13565 FP=290 FN=31010 P=0.979 R=0.304)"
+say "      ~12 min per set (KMC ~1 min + graph ~11 min)"
 say "    - per set ~15 min: compress ~3.5 min + call ~2.5 min + DiscoSNP++ ~1.5 min"
 say "      + vcfeval; 4 sets ~1 h. WEAKEST projection here: one human anchor only."
 say ""

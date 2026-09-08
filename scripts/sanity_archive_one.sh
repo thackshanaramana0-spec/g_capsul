@@ -282,9 +282,12 @@ if want 2 && [ -s "$DATA_DIR/${DS}_pooled.fq" ] && [ -s "$REFS/chr20.fa" ]; then
     if [ -f "$HERE/scripts/run_kmer2snp.sh" ]; then
       bash "$HERE/scripts/run_kmer2snp.sh" "$SRC" "$DS" "$OUT/claim2_k2s" \
            > "$OUT/claim2_k2s.log" 2>&1
-      K1=$(grep -aE '^SNV ' "$OUT/claim2_k2s.log" | tail -1 | grep -oP 'F1=\K[0-9.]+')
+      KL=$(grep -aE '^SNV ' "$OUT/claim2_k2s.log" | tail -1)
+      K1=$(echo "$KL" | grep -oP 'F1=\K[0-9.]+')
       if [ -n "${K1:-}" ]; then ok "KMER2SNP SNV F1=$K1"
-        printf "%s,Kmer2SNP,,,,,,%s\n" "$DS" "$K1" >> "$OUT/claim2_t3.csv"
+        printf "%s,Kmer2SNP,%s,%s,%s,%s,%s,%s\n" "$DS" \
+          "$(parse_snv "$KL" 'TP')" "$(parse_snv "$KL" 'FP')" "$(parse_snv "$KL" 'FN')" \
+          "$(parse_snv "$KL" ' P')" "$(parse_snv "$KL" ' R')" "$K1" >> "$OUT/claim2_t3.csv"
       else err "Kmer2SNP produced no SNV line"
         printf "%s,Kmer2SNP,,,,,,FAILED\n" "$DS" >> "$OUT/claim2_t3.csv"; fi
     else
