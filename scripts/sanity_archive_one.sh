@@ -36,6 +36,14 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; cd "$HERE"
 source "$HERE/scripts/capsule_config.sh" 2>/dev/null || true
 
 DS="${1:-${DS:-HG002}}"
+# Which claims to run, e.g. CLAIMS=1 for COMPACT alone, CLAIMS=13, default all.
+# The claims share one archive, so restricting them changes nothing about how
+# the ones that DO run are measured -- same encode, same competitors, same
+# lossless check. That is the point of putting the switch here rather than
+# writing a second script.
+CLAIMS="${CLAIMS:-123}"
+CSV3=""   # assigned only if Claim 3 runs; set -u would abort on the table loop
+want(){ case "$CLAIMS" in *"$1"*) return 0;; *) return 1;; esac; }
 STAMP=$(date +%Y%m%d_%H%M%S)
 OUT="${OUT_DIR:-$HERE/results/sanity_${DS}_$STAMP}"
 mkdir -p "$OUT"
@@ -208,8 +216,10 @@ CSV1="$OUT/claim1_t1_t2.csv"
 keep "claim1" "$CSV1" "T1 + T2 table rows for this dataset"
 
 # ── CLAIM 2 ────────────────────────────────────────────────────────────────
+if want 2; then
 banner "CLAIM 2 — variant calling (T3 het-SNV F1)"
-if [ -s "$DATA_DIR/${DS}_pooled.fq" ] && [ -s "$REFS/chr20.fa" ]; then
+fi
+if want 2 && [ -s "$DATA_DIR/${DS}_pooled.fq" ] && [ -s "$REFS/chr20.fa" ]; then
   step "our caller FROM THE ARCHIVE (capsule_decode call) -- no FASTQ is read"
   C2="$OUT/claim2"; mkdir -p "$C2"
   # THIS IS THE ARCHITECTURE CLAIM 2 ASSERTS. The archive built above is the
@@ -277,11 +287,14 @@ if [ -s "$DATA_DIR/${DS}_pooled.fq" ] && [ -s "$REFS/chr20.fa" ]; then
     fi
     keep "claim2" "$OUT/claim2_t3.csv" "T3 table: het-SNV TP/FP/FN/P/R/F1, ours vs DiscoSNP++"
   else err "no SNV line -- see $OUT/claim2.log"; FAILED=1; fi
+elif ! want 2; then
+  inf "SKIP Claim 2: CLAIMS=$CLAIMS"
 else
   inf "SKIP Claim 2: $DS is not one of the 4 GIAB human sets (needs a truth VCF)"
 fi
 
 # ── CLAIM 3 ────────────────────────────────────────────────────────────────
+if want 3; then
 banner "CLAIM 3 — archive analysis (T6a export, T6b coverage, T6c query)"
 C3="$OUT/claim3"; mkdir -p "$C3"
 CSV3="$OUT/claim3_t6.csv"; echo "dataset,operation,ours_s,output_bytes,rows,status" > "$CSV3"
@@ -356,6 +369,10 @@ fi
 keep "claim3" "$CSV3" "T6 rows for this dataset"
 
 # ── MANIFEST ───────────────────────────────────────────────────────────────
+else
+  inf "SKIP Claim 3: CLAIMS=$CLAIMS"
+fi
+
 banner "THE TABLES THIS RUN PRODUCED"
 for t in "$CSV1:T1 + T2  (archive size, time, RAM -- ours vs SPRING vs Genozip)" \
          "$OUT/claim2_t3.csv:T3  (het-SNV F1 -- ours vs DiscoSNP++)" \
