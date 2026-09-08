@@ -134,8 +134,8 @@ CSV1="$OUT_DIR/claim1_t1_t2.csv"
 CSV2="$OUT_DIR/claim2_t3.csv"
 CSV3="$OUT_DIR/claim3_t6.csv"
 echo "dataset,tool,raw_bytes,archive_bytes,ratio_pct,compress_s,decompress_s,peak_ram_kb,lossless,status" > "$CSV1"
-echo "individual,tool,snv_f1,snv_precision,snv_recall,wall_s,peak_ram_kb,status" > "$CSV2"
-echo "dataset,operation,ours_s,baseline_tool,baseline_s,speedup,status,note" > "$CSV3"
+echo "individual,tool,tp,fp,fn,precision,recall,f1,wall_s,peak_ram_kb,status" > "$CSV2"
+echo "dataset,operation,ours_s,ours_peak_ram_kb,output_bytes,rows,baseline_tool,baseline_s,baseline_peak_ram_kb,speedup,status,note" > "$CSV3"
 
 DATASETS="ERR5181310 SRR554369 ERR552797 SRR2584863 SRR29296997 ERR12954017 \
 SRR065390 SRR40271341 ERR17740259 SRR37283774 DRR976266 SRR36741279 \
@@ -360,7 +360,7 @@ run_phase2(){
         say ""; say "──────────────────────────────────────────────────────────────────────"
         inf "PHASE 2  [$i/$n]  $IND"
         say "──────────────────────────────────────────────────────────────────────"
-        [ -s "$fq" ] || { err "$IND: $fq missing — skipping"; printf "%s,CAPSULE,,,,,,MISSING_INPUT\n" "$IND" >> "$CSV2"; continue; }
+        [ -s "$fq" ] || { err "$IND: $fq missing — skipping"; printf "%s,CAPSULE,,,,,,,,,MISSING_INPUT\n" "$IND" >> "$CSV2"; continue; }
         inf "  input $(gbs $(stat -c%s "$fq"))"
 
         mark "P2 $IND: our caller (FROM THE ARCHIVE)"
@@ -375,22 +375,24 @@ run_phase2(){
         c2arc="$ARCH_DIR/$IND.capsule"
         if [ ! -s "$c2arc" ]; then
             err "$IND: no archive at $c2arc -- Phase 1 must run first (it is KEPT for this)"
-            printf "%s,CAPSULE,,,,,,NO_ARCHIVE\n" "$IND" >> "$CSV2"
+            printf "%s,CAPSULE,,,,,,,,,NO_ARCHIVE\n" "$IND" >> "$CSV2"
             continue
         fi
         bash "$HERE/scripts/run_fullchr20_archive_capsule.sh" \
                "$DEC" "$HERE/scripts" "$REFS/chr20.fa" "$c2arc" "$IND" "$d" > "$d.log" 2>&1
-        f1=$(grep -aE '^SNV ' "$d.log" | tail -1 | grep -oP 'F1=\K[0-9.]+')
-        p=$(grep -aE '^SNV ' "$d.log" | tail -1 | grep -oP ' P=\K[0-9.]+')
-        r=$(grep -aE '^SNV ' "$d.log" | tail -1 | grep -oP ' R=\K[0-9.]+')
+        SL=$(grep -aE '^SNV ' "$d.log" | tail -1)
+        f1=$(echo "$SL" | grep -oP 'F1=\K[0-9.]+'); p=$(echo "$SL" | grep -oP ' P=\K[0-9.]+')
+        r=$(echo "$SL" | grep -oP ' R=\K[0-9.]+');  tp=$(echo "$SL" | grep -oP 'TP=\K[0-9]+')
+        fp=$(echo "$SL" | grep -oP 'FP=\K[0-9]+');  fn=$(echo "$SL" | grep -oP 'FN=\K[0-9]+')
         tv=$(parse_time_v "$d.log"); w=${tv% *}; hwm=${tv#* }
         if [ -n "${f1:-}" ]; then
             ok "OURS      SNV F1=$f1  P=$p  R=$r   wall=${w}s  RAM=$(ramg $hwm)"
             checkpoint "$IND  our caller done -- SNV F1=$f1 P=$p R=$r, ${w}s"
-            printf "%s,CAPSULE,%s,%s,%s,%s,%s,DONE\n" "$IND" "$f1" "$p" "$r" "$w" "$hwm" >> "$CSV2"
+            printf "%s,CAPSULE,%s,%s,%s,%s,%s,%s,%s,%s,DONE\n" "$IND" \
+                "${tp:-}" "${fp:-}" "${fn:-}" "$p" "$r" "$f1" "$w" "$hwm" >> "$CSV2"
         else
             err "$IND: our caller produced no SNV line"; debug_dump "$IND ours" "$d.log"
-            printf "%s,CAPSULE,,,,,,FAILED\n" "$IND" >> "$CSV2"
+            printf "%s,CAPSULE,,,,,,,,,FAILED\n" "$IND" >> "$CSV2"
         fi
 
         mark "P2 $IND: DiscoSNP++"
@@ -402,41 +404,51 @@ run_phase2(){
             /usr/bin/time -v bash "$HERE/scripts/run_fullchr20_bench_disco.sh" \
                  "$REFS/chr20.fa" "$fq" "$IND" "$OUT_DIR/c2_${IND}_disco" \
                  > "$OUT_DIR/c2_${IND}_disco.log" 2>&1
-            f1=$(grep -aE '^SNV ' "$OUT_DIR/c2_${IND}_disco.log" | tail -1 | grep -oP 'F1=\K[0-9.]+')
-            p=$(grep -aE '^SNV ' "$OUT_DIR/c2_${IND}_disco.log" | tail -1 | grep -oP ' P=\K[0-9.]+')
-            r=$(grep -aE '^SNV ' "$OUT_DIR/c2_${IND}_disco.log" | tail -1 | grep -oP ' R=\K[0-9.]+')
+            SL=$(grep -aE '^SNV ' "$OUT_DIR/c2_${IND}_disco.log" | tail -1)
+            f1=$(echo "$SL" | grep -oP 'F1=\K[0-9.]+'); p=$(echo "$SL" | grep -oP ' P=\K[0-9.]+')
+            r=$(echo "$SL" | grep -oP ' R=\K[0-9.]+');  tp=$(echo "$SL" | grep -oP 'TP=\K[0-9]+')
+            fp=$(echo "$SL" | grep -oP 'FP=\K[0-9]+');  fn=$(echo "$SL" | grep -oP 'FN=\K[0-9]+')
             tv=$(parse_time_v "$OUT_DIR/c2_${IND}_disco.log"); w=${tv% *}; hwm=${tv#* }
             if [ -n "${f1:-}" ]; then ok "DiscoSNP++ SNV F1=$f1  P=$p  R=$r   wall=${w}s  RAM=$(ramg $hwm)"
                 checkpoint "$IND  DiscoSNP++ done -- SNV F1=$f1"
-                printf "%s,DiscoSNP++,%s,%s,%s,%s,%s,DONE\n" "$IND" "$f1" "$p" "$r" "$w" "$hwm" >> "$CSV2"
+                printf "%s,DiscoSNP++,%s,%s,%s,%s,%s,%s,%s,%s,DONE\n" "$IND" \
+                    "${tp:-}" "${fp:-}" "${fn:-}" "$p" "$r" "$f1" "$w" "$hwm" >> "$CSV2"
             else err "DiscoSNP++ produced no SNV line for $IND"; debug_dump "$IND disco" "$OUT_DIR/c2_${IND}_disco.log"
-                printf "%s,DiscoSNP++,,,,,,FAILED\n" "$IND" >> "$CSV2"; fi
+                printf "%s,DiscoSNP++,,,,,,,,,FAILED\n" "$IND" >> "$CSV2"; fi
         else
             err "run_fullchr20_bench_disco.sh not found — DiscoSNP++ arm skipped"
-            printf "%s,DiscoSNP++,,,,,,SCRIPT_MISSING\n" "$IND" >> "$CSV2"
+            printf "%s,DiscoSNP++,,,,,,,,,SCRIPT_MISSING\n" "$IND" >> "$CSV2"
         fi
 
         mark "P2 $IND: Kmer2SNP"
         step "Kmer2SNP"
-        # NO VERIFIED RUNNER EXISTS IN THIS REPO. /root/Kmer2SNP and the conda
-        # env are both present, but this repository has never invoked them --
-        # the published Kmer2SNP F1 (0.464) comes from the outer ARCS project,
-        # with a methodology not reproduced here. Writing an invocation from
-        # guesswork would produce a number that looks like a measurement and
-        # is not one, which is worse for the paper than an honest gap. The arm
-        # is therefore recorded as NOT_AVAILABLE until a runner is written and
-        # validated against that published value.
+        # RUNNER EXISTS AND IS VALIDATED as of 2026-09-08 (scripts/run_kmer2snp.sh).
+        # Kmer2SNP's own DSK/findGSE wrappers hardcode paths that do not exist
+        # here; the runner bypasses them by passing --t1/--c1/--c2/--r directly,
+        # counting k-mers with KMC and deriving the coverage band from the
+        # histogram. Verified two ways: the converter reproduces the archived
+        # 2026-09-02 VCF byte-identically (131 records), and a full chr20 run
+        # gives F1=0.464 (TP=13565 FP=290 FN=31010), matching the window figure
+        # this project has been quoting (0.4636) at 111x the scale.
+        # The branch below stays conditional: if the runner is ever absent the
+        # arm records NOT_AVAILABLE rather than silently leaving T3 two-armed.
         if [ -f "$HERE/scripts/run_kmer2snp.sh" ]; then
-            bash "$HERE/scripts/run_kmer2snp.sh" "$fq" "$IND" "$OUT_DIR/c2_${IND}_k2s" \
+            /usr/bin/time -v bash "$HERE/scripts/run_kmer2snp.sh" "$fq" "$IND" "$OUT_DIR/c2_${IND}_k2s" \
                  > "$OUT_DIR/c2_${IND}_k2s.log" 2>&1
-            f1=$(grep -aE '^SNV ' "$OUT_DIR/c2_${IND}_k2s.log" | tail -1 | grep -oP 'F1=\K[0-9.]+')
-            if [ -n "${f1:-}" ]; then ok "Kmer2SNP  SNV F1=$f1"
-                printf "%s,Kmer2SNP,%s,,,,,DONE\n" "$IND" "$f1" >> "$CSV2"
+            SL=$(grep -aE '^SNV ' "$OUT_DIR/c2_${IND}_k2s.log" | tail -1)
+            f1=$(echo "$SL" | grep -oP 'F1=\K[0-9.]+'); p=$(echo "$SL" | grep -oP ' P=\K[0-9.]+')
+            r=$(echo "$SL" | grep -oP ' R=\K[0-9.]+');  tp=$(echo "$SL" | grep -oP 'TP=\K[0-9]+')
+            fp=$(echo "$SL" | grep -oP 'FP=\K[0-9]+');  fn=$(echo "$SL" | grep -oP 'FN=\K[0-9]+')
+            tv=$(parse_time_v "$OUT_DIR/c2_${IND}_k2s.log"); w=${tv% *}; hwm=${tv#* }
+            if [ -n "${f1:-}" ]; then ok "Kmer2SNP  SNV F1=$f1  P=$p  R=$r   wall=${w}s  RAM=$(ramg $hwm)"
+                checkpoint "$IND  Kmer2SNP done -- SNV F1=$f1"
+                printf "%s,Kmer2SNP,%s,%s,%s,%s,%s,%s,%s,%s,DONE\n" "$IND" \
+                    "${tp:-}" "${fp:-}" "${fn:-}" "$p" "$r" "$f1" "$w" "$hwm" >> "$CSV2"
             else err "Kmer2SNP produced no SNV line for $IND"
-                printf "%s,Kmer2SNP,,,,,,FAILED\n" "$IND" >> "$CSV2"; fi
+                printf "%s,Kmer2SNP,,,,,,,,,FAILED\n" "$IND" >> "$CSV2"; fi
         else
             err "Kmer2SNP env or runner missing — arm skipped (T3 has 2 of 3 tools)"
-            printf "%s,Kmer2SNP,,,,,,NOT_AVAILABLE\n" "$IND" >> "$CSV2"
+            printf "%s,Kmer2SNP,,,,,,,,,NOT_AVAILABLE\n" "$IND" >> "$CSV2"
         fi
         el=$(( $(date +%s) - t0 ))
         inf "[$i/$n] $IND done in ${el}s   (elapsed $(_el))"
@@ -461,14 +473,15 @@ run_phase3(){
     for arc in "$ARCH_DIR"/*.capsule; do
         [ -s "$arc" ] || continue
         local ds; ds=$(basename "$arc" .capsule)
-        t_a=$(date +%s.%N)
-        if "$DEC" query "$arc" "$WD/q.fa" 0-100000 >/dev/null 2>"$WD/q.log"; then
-            t_b=$(date +%s.%N); sp=$(awk -v a=$t_a -v b=$t_b 'BEGIN{printf "%.3f",b-a}')
-            ok "T6c query  $ds  ${sp}s"
-            printf "%s,query,%s,none,,,DONE,no competitor exists for coordinate-range retrieval\n" "$ds" "$sp" >> "$CSV3"
+        if /usr/bin/time -v "$DEC" query "$arc" "$WD/q.fa" 0-100000 >/dev/null 2>"$WD/q.log"; then
+            read -r sp qram <<< "$(parse_time_v "$WD/q.log")"
+            local QB QR; QB=$(stat -c%s "$WD/q.fa" 2>/dev/null || echo 0); QR=$(grep -c . "$WD/q.fa" 2>/dev/null || echo 0)
+            ok "T6c query  $ds  ${sp}s  RAM=$(ramg $qram)  $(mbs $QB)  $QR rows"
+            printf "%s,query,%s,%s,%s,%s,none,,,,DONE,no competitor exists for coordinate-range retrieval\n" \
+                "$ds" "$sp" "$qram" "$QB" "$QR" >> "$CSV3"
         else
             err "T6c query failed on $ds"; debug_dump "$ds query" "$WD/q.log"
-            printf "%s,query,,none,,,FAILED,\n" "$ds" >> "$CSV3"
+            printf "%s,query,,,,,none,,,,FAILED,\n" "$ds" >> "$CSV3"
         fi
         rm -f "$WD/q.fa"
     done
@@ -490,7 +503,7 @@ run_phase3(){
         say "──────────────────────────────────────────────────────────────────────"
         arc="$ARCH_DIR/$DS.capsule"
         [ -s "$arc" ] || { err "$DS: archive missing (phase 1 must run first) — skipping"
-                           printf "%s,export,,SPAdes,,,NO_ARCHIVE,\n" "$DS" >> "$CSV3"; continue; }
+                           printf "%s,export,,,,,SPAdes,,,,NO_ARCHIVE,\n" "$DS" >> "$CSV3"; continue; }
         if [ "$REFNAME" = chr20 ]; then ref="$REFS/chr20.fa"; else ref="$REFS/c3_${REFNAME}.fa"; fi
         src="$DATA_DIR/${DS}_1.fq"; [ -s "$src" ] || src="$DATA_DIR/${DS}_pooled.fq"
 
@@ -498,65 +511,70 @@ run_phase3(){
         mark "P3 $DS: export"
         step "T6a  our export"
         d="$OUT_DIR/c3_$DS"; mkdir -p "$d"
-        t_a=$(date +%s.%N)
-        "$DEC" export "$arc" "$d/contigs.fa" >/dev/null 2>"$d/export.log"
-        t_b=$(date +%s.%N); local OURS_EXP; OURS_EXP=$(awk -v a=$t_a -v b=$t_b 'BEGIN{printf "%.2f",b-a}')
-        if [ -s "$d/contigs.fa" ]; then ok "our export  ${OURS_EXP}s   $(mbs $(stat -c%s "$d/contigs.fa"))"
+        /usr/bin/time -v "$DEC" export "$arc" "$d/contigs.fa" >/dev/null 2>"$d/export.log"
+        local OURS_EXP EXP_RAM EXP_B EXP_R
+        read -r OURS_EXP EXP_RAM <<< "$(parse_time_v "$d/export.log")"
+        EXP_B=$(stat -c%s "$d/contigs.fa" 2>/dev/null || echo 0)
+        EXP_R=$(grep -c '^>' "$d/contigs.fa" 2>/dev/null || echo 0)
+        if [ -s "$d/contigs.fa" ]; then ok "our export  ${OURS_EXP}s  RAM=$(ramg $EXP_RAM)  $(mbs $EXP_B)  $EXP_R contigs"
         else err "our export produced nothing for $DS"; debug_dump "$DS export" "$d/export.log"; fi
 
         step "T6a  SPAdes de-novo (the slow baseline — minutes to hours)"
         if [ -x "$SPADES" ] && [ -s "$src" ]; then
-            t_a=$(date +%s.%N)
-            python3 "$SPADES" -s "$src" -o "$d/spades" -t "$NPROC" -m $(( $(free -g | awk '/^Mem:/{print $2}') - 8 )) \
+            /usr/bin/time -v python3 "$SPADES" -s "$src" -o "$d/spades" -t "$NPROC" -m $(( $(free -g | awk '/^Mem:/{print $2}') - 8 )) \
                 > "$d/spades.log" 2>&1
-            local RC=$?; t_b=$(date +%s.%N)
+            local RC=$?
             if [ $RC -eq 0 ] && [ -s "$d/spades/contigs.fasta" ]; then
-                local SP_T; SP_T=$(awk -v a=$t_a -v b=$t_b 'BEGIN{printf "%.2f",b-a}')
+                local SP_T SP_RAM; read -r SP_T SP_RAM <<< "$(parse_time_v "$d/spades.log")"
                 ok "SPAdes      ${SP_T}s   ->  speedup $(awk -v s=$SP_T -v o=$OURS_EXP 'BEGIN{printf "%.1fx",s/o}')"
                 checkpoint "$DS  T6a export done -- ours ${OURS_EXP}s vs SPAdes ${SP_T}s"
-                printf "%s,export,%s,SPAdes,%s,%s,DONE,\n" "$DS" "$OURS_EXP" "$SP_T" \
+                printf "%s,export,%s,%s,%s,%s,SPAdes,%s,%s,%s,DONE,\n" "$DS" "$OURS_EXP" "$EXP_RAM" \
+                    "$EXP_B" "$EXP_R" "$SP_T" "$SP_RAM" \
                     "$(awk -v s=$SP_T -v o=$OURS_EXP 'BEGIN{printf "%.1f",s/o}')" >> "$CSV3"
             else
                 err "SPAdes did not complete on $DS (rc=$RC)"; debug_dump "$DS SPAdes" "$d/spades.log"
-                printf "%s,export,%s,SPAdes,,,BASELINE_DNF,SPAdes did not complete (rc=%s)\n" "$DS" "$OURS_EXP" "$RC" >> "$CSV3"
+                printf "%s,export,%s,%s,%s,%s,SPAdes,,,,BASELINE_DNF,SPAdes did not complete (rc=%s)\n" "$DS" "$OURS_EXP" "$EXP_RAM" "$EXP_B" "$EXP_R" "$RC" >> "$CSV3"
             fi
             rm -rf "$d/spades/K"* "$d/spades/tmp" 2>/dev/null
         else
             err "SPAdes or input missing for $DS"
-            printf "%s,export,%s,SPAdes,,,BASELINE_MISSING,\n" "$DS" "$OURS_EXP" >> "$CSV3"
+            printf "%s,export,%s,%s,%s,%s,SPAdes,,,,BASELINE_MISSING,\n" "$DS" "$OURS_EXP" "$EXP_RAM" "$EXP_B" "$EXP_R" >> "$CSV3"
         fi
 
         # T6b coverage vs bwa+samtools+mosdepth
         mark "P3 $DS: coverage"
         step "T6b  our coverage"
-        t_a=$(date +%s.%N)
-        "$DEC" coverage "$arc" "$d/coverage.tsv" >/dev/null 2>"$d/coverage.log"
-        t_b=$(date +%s.%N); local OURS_COV; OURS_COV=$(awk -v a=$t_a -v b=$t_b 'BEGIN{printf "%.2f",b-a}')
-        local NROW; NROW=$(wc -l < "$d/coverage.tsv" 2>/dev/null || echo 0)
-        ok "our coverage ${OURS_COV}s   ${NROW} rows"
+        /usr/bin/time -v "$DEC" coverage "$arc" "$d/coverage.tsv" >/dev/null 2>"$d/coverage.log"
+        local OURS_COV COV_RAM NROW COV_B
+        read -r OURS_COV COV_RAM <<< "$(parse_time_v "$d/coverage.log")"
+        NROW=$(wc -l < "$d/coverage.tsv" 2>/dev/null || echo 0)
+        COV_B=$(stat -c%s "$d/coverage.tsv" 2>/dev/null || echo 0)
+        ok "our coverage ${OURS_COV}s  RAM=$(ramg $COV_RAM)  $(mbs $COV_B)  ${NROW} rows"
 
         step "T6b  bwa + samtools sort + mosdepth (the conventional route)"
         if [ -s "$ref.bwt" ] && [ -s "$src" ] && command -v mosdepth >/dev/null; then
-            t_a=$(date +%s.%N)
-            bwa mem -t "$NPROC" "$ref" "$src" 2>"$d/bwa.log" \
-              | samtools sort -@ 4 -o "$d/aln.bam" - 2>>"$d/bwa.log" \
-              && samtools index "$d/aln.bam" 2>>"$d/bwa.log" \
-              && mosdepth -t 4 "$d/md" "$d/aln.bam" 2>>"$d/bwa.log"
-            local RC=$?; t_b=$(date +%s.%N)
+            # Timed as ONE pipeline under time -v: the conventional route is
+            # align+sort+index+depth, and quoting only one of those would flatter us.
+            /usr/bin/time -v bash -c "bwa mem -t $NPROC '$ref' '$src' \
+              | samtools sort -@ 4 -o '$d/aln.bam' - \
+              && samtools index '$d/aln.bam' \
+              && mosdepth -t 4 '$d/md' '$d/aln.bam'" > "$d/bwa.log" 2>&1
+            local RC=$?
             if [ $RC -eq 0 ]; then
-                local CV_T; CV_T=$(awk -v a=$t_a -v b=$t_b 'BEGIN{printf "%.2f",b-a}')
+                local CV_T CV_RAM; read -r CV_T CV_RAM <<< "$(parse_time_v "$d/bwa.log")"
                 ok "bwa+mosdepth ${CV_T}s  ->  speedup $(awk -v s=$CV_T -v o=$OURS_COV 'BEGIN{printf "%.1fx",s/o}')"
                 checkpoint "$DS  T6b coverage done -- ours ${OURS_COV}s vs bwa+mosdepth ${CV_T}s"
-                printf "%s,coverage,%s,bwa+samtools+mosdepth,%s,%s,DONE,\n" "$DS" "$OURS_COV" "$CV_T" \
+                printf "%s,coverage,%s,%s,%s,%s,bwa+samtools+mosdepth,%s,%s,%s,DONE,\n" "$DS" "$OURS_COV" "$COV_RAM" \
+                    "$COV_B" "$NROW" "$CV_T" "$CV_RAM" \
                     "$(awk -v s=$CV_T -v o=$OURS_COV 'BEGIN{printf "%.1f",s/o}')" >> "$CSV3"
             else
                 err "bwa/mosdepth baseline failed on $DS"; debug_dump "$DS bwa" "$d/bwa.log"
-                printf "%s,coverage,%s,bwa+samtools+mosdepth,,,BASELINE_FAILED,\n" "$DS" "$OURS_COV" >> "$CSV3"
+                printf "%s,coverage,%s,%s,%s,%s,bwa+samtools+mosdepth,,,,BASELINE_FAILED,\n" "$DS" "$OURS_COV" "$COV_RAM" "$COV_B" "$NROW" >> "$CSV3"
             fi
             rm -f "$d/aln.bam" "$d/aln.bam.bai"    # BAMs are large, the timing is what we keep
         else
             err "bwa index / input / mosdepth missing for $DS — baseline skipped"
-            printf "%s,coverage,%s,bwa+samtools+mosdepth,,,BASELINE_MISSING,\n" "$DS" "$OURS_COV" >> "$CSV3"
+            printf "%s,coverage,%s,%s,%s,%s,bwa+samtools+mosdepth,,,,BASELINE_MISSING,\n" "$DS" "$OURS_COV" "$COV_RAM" "$COV_B" "$NROW" >> "$CSV3"
         fi
         inf "[$i/$n] $DS done in $(( $(date +%s) - t0 ))s   (elapsed $(_el))"
     done
