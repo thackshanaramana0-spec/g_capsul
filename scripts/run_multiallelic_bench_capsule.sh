@@ -56,8 +56,37 @@ log "[2/5] done -- $(awk '{n+=$3-$2}END{print n+0}' regions.bed) confident bp, $
 
 # ── 3. CAPSULE reference-free call (standard diploid, no ploidy override) ──
 log "[3/5] running CAPSULE caller (standard diploid)..."
-export CAPS_CALL=1 CALL_VCF="$OUT/calls.vcf" CAPS_DUMP_CONTIGS="$OUT/contigs.tsv"
-"$CAPS" reads.fq 3 16 16 22 16 16 1 24 64 1 >/dev/null 2>capsule_call.log
+# ── ARCHIVE PATH ──────────────────────────────────────────────────────────
+# This table used to drive the ENCODER over the FASTQ, which made it the only
+# part of Claim 2 whose calls did NOT come from the archive -- the exact thing
+# the paper claims. It now does what T2.1 does: compress to a .capsule, then
+# call FROM that archive with no FASTQ and no reference in the loop.
+#   CAPS_SPANS=1 writes contig_spans (which the caller needs) WITHOUT running
+#   the caller inline; CAPS_CALL=1 would do both and cost ~20x.
+# Set CAPS_ENCODER_PATH=1 to fall back to the old in-encoder call for
+# comparison; the old path is kept, not deleted.
+DEC="${CAPS_DEC:-${CAPS%%/best106}/capsule_decode}"
+[ -x "$DEC" ] || DEC=/tmp/capsule_bin/capsule_decode
+if [ "${CAPS_ENCODER_PATH:-0}" = 1 ]; then
+    log "[call] ENCODER path (CAPS_ENCODER_PATH=1) -- not the archive path"
+    export CAPS_CALL=1 CALL_VCF="$OUT/calls.vcf" CAPS_DUMP_CONTIGS="$OUT/contigs.tsv"
+    "$CAPS" reads.fq 3 16 16 22 16 16 1 24 64 1 >/dev/null 2>capsule_call.log
+else
+    [ -x "$DEC" ] || { echo "FATAL: decoder not found ($DEC); set CAPS_DEC" >&2; exit 1; }
+    log "[call] compressing to an archive, then calling FROM it (no FASTQ read)"
+    env CAPS_SPANS=1 CAPS_NAMES=1 CAPS_QUAL=1 \
+        INPUT="$OUT/reads.fq" ARCHIVE="$OUT/reads.capsule" BEST="$CAPS" \
+        bash "$SC/encode_adaptive.sh" >/dev/null 2>encode.log \
+      || { echo "FATAL: encode failed -- see $OUT/encode.log" >&2; tail -15 encode.log >&2; exit 1; }
+    [ -s "$OUT/reads.capsule" ] || { echo "FATAL: no archive produced" >&2; exit 1; }
+    log "[call] archive $(stat -c%s "$OUT/reads.capsule") B -- calling from it"
+    export CAPS_DUMP_CONTIGS="$OUT/contigs.tsv"
+    env CAPS_CALL_INDELS=1 "$DEC" call "$OUT/reads.capsule" "$OUT/calls.vcf" "$OUT/callwk" \
+        >/dev/null 2>capsule_call.log || true
+    rm -rf "$OUT/callwk"
+    if grep -q "ARCHIVE LACKS" capsule_call.log 2>/dev/null; then
+        echo "FATAL: archive cannot serve call -- $(grep 'ARCHIVE LACKS' capsule_call.log)" >&2; exit 1; fi
+fi
 grep -E "CAPS-CALL" capsule_call.log || true
 cp contigs.tsv contigs.fa
 log "[3/5]   caller done -- $(grep -c '^>' contigs.fa) contigs, aligning + lifting..."
