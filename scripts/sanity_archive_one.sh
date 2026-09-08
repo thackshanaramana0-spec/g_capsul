@@ -140,12 +140,15 @@ for T in SPRING Genozip; do
     # Without this, T2 compares our compress+DECOMPRESS against their compress
     # alone, and the lossless column has a value for us and a blank for them.
     # A reviewer reads that as "only one tool was checked for correctness".
-    # SPRING needs -g on decompress to emit FASTQ. Genozip uses genounzip.
+    # NO -g ON SPRING. `-g` means "gzipped", and on decompress it writes GZIP
+    # BYTES into a .fq file, which then reads as garbage and reports a false
+    # LOSSY. This project has been burned by this exact flag before -- see the
+    # tool_invocation_before_blame note. Our inputs are plain .fq.
     step "$T decompress + lossless verify"
     XD=""; XLL="NOT_CHECKED"; DOUT="$OUT/_x_$T"
     rm -rf "$DOUT"; mkdir -p "$DOUT"
     if [ "$T" = SPRING ]; then
-      /usr/bin/time -v spring -d -i "$S" -o "$DOUT/out.fq" -t "$NPROC" -g \
+      /usr/bin/time -v spring -d -i "$S" -o "$DOUT/out.fq" -t "$NPROC" \
         2>"$OUT/_t_sd" >/dev/null || true
     else
       /usr/bin/time -v genounzip --force -o "$DOUT/out.fq" "$S" \
