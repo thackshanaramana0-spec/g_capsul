@@ -1991,7 +1991,7 @@ int main(int argc,char** argv){
     fprintf(stderr,"round2: probes=%zu links=%zu\n",probes,links);
     fprintf(stderr,"[FUNNEL] probes=%zu  seed_hit=%zu (%.1f%%)  cand_examined=%zu  links=%zu (%.2f%% of probes)\n",g_probe,g_sd_hit,100.0*g_sd_hit/(g_probe?g_probe:1),g_cand,links,100.0*links/(g_probe?g_probe:1));
     lap("round 2 (assembly)");
-    if(CAPS_CALL){
+    if(CAPS_SPANS){
         fprintf(stderr,"[HARVEST] commits=%zu branches(ccnt==2)=%zu  ccnt hist:",
                 g_commits,g_branch.size());
         for(int z=0;z<9;++z) if(g_cc_hist[z]) fprintf(stderr," %d:%zu",z,g_cc_hist[z]);
@@ -2900,7 +2900,7 @@ int main(int argc,char** argv){
         // own file at an absolute path resolved from the cwd captured BEFORE
         // any chdir (so a relative path the caller passed still refers to the
         // directory they meant), and the parent promotes the winner's.
-        if(CAPS_CALL){
+        if(CAPS_SPANS){
             auto abso=[&](const char* q)->std::string{
                 std::string t(q);
                 return (!t.empty() && t[0]=='/') ? t : (g_l2_cwd + "/" + t);
