@@ -3,6 +3,13 @@
 Copy everything below the line into the receiving model, together with the repo
 and the exported session transcript.
 
+**Glance over the transcript at
+<https://github.com/thackshanaramana0-spec/g_capsul/blob/c_star_pg_advance/2026-09-08-194956-this-session-is-being-continued-from-a-previous-c.txt>
+for context only — it is a working Claude session, not a final or authoritative
+document.** Skim it to understand how the system was built, measured and
+debugged; refer back to it for specifics, but never treat anything in it as
+settled.
+
 ---
 
 ## Who you are and what this is
