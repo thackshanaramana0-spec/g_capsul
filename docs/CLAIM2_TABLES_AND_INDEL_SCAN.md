@@ -20,8 +20,42 @@ than the honest loss is.
 | **T3** | het-SNV F1 — G_CAPSUL vs DiscoSNP++ vs Kmer2SNP, HG002-HG005 chr20 | **WIN** 0.890 vs 0.874 vs 0.464 |
 | **T4** | coverage sweep — G_CAPSUL F1 at 10×/15×/20×/30× (HG002 only) | sensitivity curve, not a win/loss comparison |
 | **T5** | het-indel F1 — G_CAPSUL vs DiscoSNP++, HG002-HG005 chr20 | **WIN as of 2026-09-03: 0.666 vs 0.639**, 5 of 8 evaluations. Previously recorded as a loss (0.637 vs 0.663); a scoring bug that misfiled multi-allelic SNVs as indel false positives — and could only ever penalise G_CAPSUL — was found and fixed. Neither caller changed. Full evidence, and the check that the win is invariant to scoring convention, in `docs/HET_INDEL_FRESH_SCAN.md` Finding 4. |
-| **T5.2** *(new)* | multi-allelic sites recovered — G_CAPSUL vs DiscoSNP++, real diploid GT=1/2 sites | **WIN** 11/18 vs 0/18, replicated on two independent chr20 regions |
+| **T5.2** *(new)* | multi-allelic sites recovered — G_CAPSUL vs DiscoSNP++, real diploid GT=1/2 sites | **WIN 5/7 vs 0/7** on the SNV-only subset — see the RECONCILIATION note below; the earlier "11/18 vs 0/18" is withdrawn |
 | **T5.3** *(new)* | tetraploid SNV + indel F1 — G_CAPSUL vs DiscoSNP++, real HG003+HG004 mix (Cooke et al. 2022 method) | **SNV WIN** 0.836 vs 0.782; **indel WIN** 0.567 vs 0.553 (see §T5.3 below) |
+
+### T5.2 — RECONCILIATION (2026-09-10). The "11/18" is withdrawn.
+
+Re-running T5.2 gave 5/111, irreconcilable with the recorded 11/18. Two
+separate causes, both found:
+
+**1. The denominator 18 is not reproducible, and this document contradicted its
+own companion.** `docs/POLYPLOID_BENCHMARK.md` §1b records the setup in full:
+"HG002, chr20:1-6 Mb, 30x, **971,250 real reads, 5,216 truth het sites of which
+111 are multi-allelic**". The re-run reproduces both figures exactly -- 971,250
+reads and 111 multi-allelic sites. 111 is right; 18 appears nowhere else, and
+that analysis was ad-hoc and never saved (as this file already noted).
+
+**2. The metric was scoring 104 sites it cannot evaluate.** Of the 111 GT=1/2
+sites, only **7 have both ALT alleles single-base**; the other 104 are
+indel-bearing. The recovery check compares a single BASE at the variant
+position, so those 104 counted as misses BY CONSTRUCTION rather than by
+measurement. That is what produced the meaningless 5/111.
+
+Scored on the subset the metric can actually evaluate:
+
+    CAPSULE    both alleles recovered : 5 / 7   (71%)
+    DiscoSNP++ both alleles recovered : 0 / 7   (0%)
+
+DiscoSNP++'s 0 is the structural result this table exists to show: it cannot
+emit a multi-allelic record at all. The proxy metric (any call at the position)
+is 14/111 vs 15/111 and is reported alongside, because the two disagree in
+direction and reporting only one would be a choice rather than a measurement.
+
+**Scope, stated rather than implied:** this is a 7-site result. It is a
+capability demonstration, not a rate. Multi-allelic SNV sites are genuinely
+rare in a single diploid human -- that rarity is the finding, not a shortfall
+of the benchmark -- and the honest way to enlarge it is more of chr20 or more
+individuals, not a looser definition.
 
 ### T5.3 — TETRAPLOID (added 2026-09-03)
 

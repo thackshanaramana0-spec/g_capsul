@@ -51,8 +51,24 @@ bcftools view -r "$REGION" "$TRUTH" -Oz -o truth_raw.vcf.gz 2>/dev/null
 tabix -f -p vcf truth_raw.vcf.gz
 awk -v c="$CHROM" -v lo="$LO" -v hi="$HI" '$1==c && $3>lo && $2<hi{
   s=($2>lo?$2:lo); e=($3<hi?$3:hi); if(e>s) print c"\t"s"\t"e}' "$BED" > regions.bed
+# TWO denominators, because they measure different things and conflating them
+# is what made this table irreconcilable with its own documentation.
+#
+#   N_MULTI     every GT=1/2 record (both haplotypes non-reference, alleles
+#               differ). chr20:1-6Mb gives 111, which is exactly the figure
+#               docs/POLYPLOID_BENCHMARK.md records for this setup.
+#   N_MULTI_SNV those whose BOTH alt alleles are single bases: 7 of the 111.
+#
+# The recovery check below compares a single BASE at the variant position, so
+# it can only evaluate the SNV subset. Scored against all 111, the 104
+# indel-bearing sites count as misses BY CONSTRUCTION rather than by
+# measurement -- which is what produced the unreconcilable "5/111". The SNV
+# denominator is the honest one for this metric; the full count is kept
+# alongside it so the scope is visible rather than implied.
 N_MULTI=$(zcat truth_raw.vcf.gz | grep -v '^#' | awk -F'\t' '$5~/,/' | wc -l)
-log "[2/5] done -- $(awk '{n+=$3-$2}END{print n+0}' regions.bed) confident bp, $N_MULTI truth multi-allelic sites"
+N_MULTI_SNV=$(zcat truth_raw.vcf.gz | grep -v '^#' | awk -F'\t' '
+    $5~/,/{ if(length($4)!=1) next; n=split($5,a,","); for(i=1;i<=n;i++) if(length(a[i])!=1) next; print }' | wc -l)
+log "[2/5] done -- $(awk '{n+=$3-$2}END{print n+0}' regions.bed) confident bp, $N_MULTI truth multi-allelic sites ($N_MULTI_SNV of them SNV-only)"
 
 # ── 3. CAPSULE reference-free call (standard diploid, no ploidy override) ──
 log "[3/5] running CAPSULE caller (standard diploid)..."
@@ -151,9 +167,14 @@ recovered() {
 # construction and would otherwise score 0 by definition rather than by
 # measurement).
 recovered_strict() {
+    # SNV-ONLY by construction: the check compares single bases, so an
+    # indel-bearing site cannot pass it and must not be counted against us.
     local CALLS="$1"
     awk -F'\t' '
-      NR==FNR{ if($1!~/^#/){ n=split($5,a,","); delete want; 
+      NR==FNR{ if($1!~/^#/){ if(length($4)!=1) next;
+                 n=split($5,a,","); snv=1
+                 for(i=1;i<=n;i++) if(length(a[i])!=1) snv=0
+                 if(!snv) next
                  for(i=1;i<=n;i++) t[$2"\t"toupper(a[i])]=1; np[$2]=n } next }
       $1!~/^#/{ m=split($5,b,","); for(i=1;i<=m;i++) got[$2"\t"toupper(b[i])]=1 }
       END{ hit=0
@@ -176,11 +197,11 @@ else
   echo "DiscoSNP++ sites with a call at that position: $DISCO_HIT / $N_TRUTH_MULTI"
 fi
 echo "-- STRICT (both ALT alleles recovered) -- this is the T5.2 claim's metric --"
-echo "CAPSULE    both-allele sites: $CAPS_STRICT / $N_TRUTH_MULTI"
+echo "CAPSULE    both-allele sites: $CAPS_STRICT / $N_MULTI_SNV  (SNV-only subset; $N_MULTI multi-allelic sites total, $((N_MULTI-N_MULTI_SNV)) indel-bearing and not scorable by a base comparison)"
 if [ "${DISCO_SKIPPED:-0}" = 1 ]; then
   echo "DiscoSNP++ both-allele sites: SKIPPED (not on PATH -- NOT a measurement)"
 else
-  echo "DiscoSNP++ both-allele sites: $DISCO_STRICT / $N_TRUTH_MULTI"
+  echo "DiscoSNP++ both-allele sites: $DISCO_STRICT / $N_MULTI_SNV"
 fi
 echo "======================================================="
 log "Results in: $OUT"
