@@ -47,3 +47,8 @@ bin/
 # and it made the whole branch unpushable (GitHub caps files at 100 MB).
 out.vcf
 *.vcf
+
+# Third-party agent work-in-progress (handoff prompt: namespaced, deletable
+# in one clean diff). Untracked so it stays the author of its own commits.
+gpt2026_*
+GPT2026_*
