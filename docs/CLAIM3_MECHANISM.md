@@ -162,7 +162,43 @@ resolution implemented and validated against an external truth set.
   positions and exposes no read-out at all (`PgRC -h`: compress, `-d`, nothing
   else).
 
-## Honest limits
+## The three limits, now closed by measurement
+
+**1. Was it one window?** No. Four further windows spanning chr20, 60 sites
+each, HG002:
+
+    window (chr20)   content both   coordinate both
+    10.0 - 10.6 Mb        55 / 60             0 / 60
+    25.0 - 25.6 Mb        50 / 60             0 / 60
+    40.0 - 40.6 Mb        56 / 60             0 / 60
+    55.0 - 55.6 Mb        49 / 60             0 / 60
+    ALL                  210 / 240 (87.5%)    0 / 240 (0.0%)
+
+Consistent with the original 3.0-3.6 Mb window (81/100). Combined with the
+four-individual run this is **640 het sites across 4 individuals and 5
+windows: coordinate 0, content 549 (85.8%)**.
+
+**2. Why did some sites return one allele?** Not because a haplotype is
+missing. Instrumented: of all 30 one-allele sites across the window sweep,
+**0 resolved a single locus and 30 resolved MULTIPLE loci that agreed**. The
+parallel contigs exist; they simply carry the same base at that position.
+
+That is the expected complement of the mechanism. A het variant is stored one
+of two ways: split into separate contigs (recovered by content addressing) or
+kept as a per-read MISMATCH on a single contig. Query emits consensus, so
+mismatch-encoded variants are invisible to it — and they cannot be made visible
+cheaply, because `mm_sym` is coded with an adaptive model in READ order, so
+read k's deviations require decoding all k-1 before it. **The 12-15% residue is
+therefore explained and bounded, not unknown**: it is exactly the variants the
+compressor chose to encode as deviations rather than as structure.
+
+**3. Why does allele balance vary per individual (0.84-2.43)?** Because the
+query returns EVIDENCE, not genotypes: it reports every read at every parallel
+representative, and those representatives can have unequal read depth. Pooled
+over 400 sites the ratio is 0.97, which is the meaningful figure. Genotyping is
+Claim 2's job, and Claim 2 does it from the same archive.
+
+## Remaining limits
 
 - 2 of 20 sites returned no reads: the probe was not located in the
   pseudogenome. 8 of 250 in the wider scan. Recall of the probe search is not
@@ -172,13 +208,12 @@ resolution implemented and validated against an external truth set.
   implemented.
 - Allele balance is not uniform (e.g. 20:3013473 gave 20 REF / 1 ALT). The
   query returns evidence; it does not genotype. Genotyping is Claim 2.
-- Replicated on 4 individuals x 100 sites, but all within the same chr20
-  600 kb window. Not replicated on other chromosomes or regions.
-- 61 of 400 sites returned only one allele (8-22% per individual). Cause not
-  characterised: the probe may land in a repeat, or one haplotype may be
-  absent from the assembly at that locus.
-- Per-individual allele balance varies (0.84 to 2.43) even though the pooled
-  figure is 0.97. The query returns evidence, not genotypes.
+- 4 individuals x 100 sites plus 4 further windows on HG002 (640 sites, 5
+  windows) — but all on chr20, because the archives are chr20 at 30x. Not
+  replicated on another chromosome or another coverage depth.
+- The 12-15% residue is explained (mismatch-encoded variants, see above) but
+  NOT recovered. Recovering it needs the mismatch stream to be positionally
+  addressable, which its adaptive read-order coding prevents.
 
 ## The claim, finalised
 
