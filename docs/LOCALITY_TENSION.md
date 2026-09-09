@@ -80,7 +80,44 @@ So the change plausibly **closes the source-stream gap to PgRC2 and overtakes
 it**, while collapsing the closure enough to make windowed access work without
 any sidecar.
 
-## What to implement
+## REFUTED: the tie-break is not the lever (2026-09-09)
+
+Implemented the obvious fix -- among candidates achieving the maximum match
+length, prefer the nearest source -- behind `CAPS_LOCALITY=1`, and instrumented
+it. On E. coli:
+
+    candidates examined : 5,548,491
+    max-length ties     :     1,962   (0.035%)
+    nearer source taken :     1,962   (fired on 100% of ties)
+
+    archive 68,429,027 -> 68,429,064 B  (+37 B, noise)
+    reach-back median 13,428,096 -> 13,427,891  (unchanged)
+
+The code worked; **there was nothing for it to do.** The longest match is
+essentially always unique, so ties are 0.035% of candidates and breaking them
+differently changes nothing. Reverted.
+
+**Why the 44% measurement and this one do not contradict each other.** The
+nearer identical copies are really there in the pseudogenome -- but they are
+not in the candidate list. `build_index` samples the text every
+`STEP = MINMEM - MEMSEED + 1 = 15` positions, and a candidate is only produced
+when the query's seed matches a seed stored at a SAMPLED position. A nearer
+copy is therefore reachable only if it happens to begin on one, roughly a 1-in-
+15 chance, and even then it competes as a shorter match if the alignment is off.
+
+**So the real lever is index sampling density, not the accept rule.** That is a
+much harder trade: STEP controls index memory and the length of every candidate
+walk, and the candidate walk is already the measured bottleneck of the mapping
+stage (3.66 billion candidates on HG002, 3% of probes causing 37% of the work).
+Denser sampling buys locality and pays in exactly the place that is already
+most expensive. Whether it is worth it is an open question, not a plan.
+
+**Status of the locality claim:** the TENSION and the closure measurements below
+stand. The proposed remedy does not. Do not cite locality-aware reference
+selection as a contribution until a lever is found that actually moves the
+reach-back distribution.
+
+## What was proposed (superseded by the refutation above)
 
 1. **Nearest-among-equals in the matcher** (`stages/106_inprocess.cpp`, the MEM
    candidate loop). It already enumerates candidates per seed and keeps the
