@@ -602,11 +602,49 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
             fprintf(stderr,"[coverage] %zu placements over %zu bp -> %s\n",placed,pg.size(),outdir.c_str());
             return 0;
         }
-        // query: "START-END" -> every read overlapping that pseudogenome range
-        uint64_t qa=0,qb=0;
-        { const char* d=strchr(modearg.c_str(),'-');
-          if(!d){ fprintf(stderr,"query needs START-END\n"); return 2; }
-          qa=strtoull(modearg.c_str(),nullptr,10); qb=strtoull(d+1,nullptr,10); }
+        // query accepts EITHER "START-END" (pseudogenome offsets) or a literal
+        // DNA SEQUENCE.
+        //
+        // WHY THE SEQUENCE FORM EXISTS. Offsets are pseudogenome offsets, not
+        // chromosome positions, so "give me BRCA1" was unanswerable without
+        // bringing back a reference -- the one dependency this archive exists
+        // to avoid. Asking by SEQUENCE removes the coordinate system from the
+        // interface entirely: the user supplies the gene/primer/probe they
+        // already have, we locate it in the pseudogenome, and return the reads
+        // sitting there. Still no reference, and now biologically meaningful.
+        //
+        // It is nearly free: pg is already fully decoded and in memory for the
+        // offset form, so this adds a scan over a buffer we are holding anyway.
+        // Both strands are searched, because a read's placement carries no
+        // guarantee about which strand the query was written on.
+        std::vector<std::pair<uint64_t,uint64_t>> ranges;
+        bool seqmode = !modearg.empty() &&
+                       modearg.find_first_not_of("ACGTNacgtn") == std::string::npos;
+        if(seqmode){
+            std::string q=modearg; for(auto& c:q) c=(char)toupper((unsigned char)c);
+            std::string rc(q.rbegin(), q.rend());
+            for(auto& c:rc) c = (c=='A'?'T':c=='T'?'A':c=='C'?'G':c=='G'?'C':c);
+            const std::string hay((const char*)pg.data(), pg.size());
+            for(const std::string* pat : { &q, &rc }){
+                if(pat==&rc && rc==q) break;            // palindrome: do not double-count
+                for(size_t at=hay.find(*pat); at!=std::string::npos; at=hay.find(*pat,at+1))
+                    ranges.push_back({(uint64_t)at,(uint64_t)(at+pat->size())});
+            }
+            std::sort(ranges.begin(),ranges.end());
+            fprintf(stderr,"[query] sequence of %zu bp -> %zu occurrence(s) in the pseudogenome\n",
+                    q.size(), ranges.size());
+            if(ranges.empty()){
+                fprintf(stderr,"[query] not found -- no reads emitted\n");
+                FILE* fe=fopen(outdir.c_str(),"wb"); if(fe) fclose(fe);
+                return 0;
+            }
+        } else {
+            uint64_t qa=0,qb=0;
+            const char* d=strchr(modearg.c_str(),'-');
+            if(!d){ fprintf(stderr,"query needs START-END or a DNA sequence\n"); return 2; }
+            qa=strtoull(modearg.c_str(),nullptr,10); qb=strtoull(d+1,nullptr,10);
+            ranges.push_back({qa,qb});
+        }
         FILE* f=fopen(outdir.c_str(),"wb");
         if(!f){ fprintf(stderr,"cannot write %s\n",outdir.c_str()); return 1; }
         // Emit one record per UNIQUE read. A duplicate read has the same
@@ -618,14 +656,15 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
             uint64_t a=P[u]; uint16_t l=u<L.size()?L[u]:0;
             if(!l||a==UINT32_MAX||a>=pg.size()) continue;
             uint64_t b=a+l;
-            if(b<=qa||a>=qb) continue;                       // no overlap
+            bool hit=false;
+            for(const auto& r : ranges) if(b>r.first && a<r.second){ hit=true; break; }
+            if(!hit) continue;
             uint64_t e=std::min<uint64_t>(pg.size(),b);
             fprintf(f,">r%zu pos=%llu len=%llu\n",u,(unsigned long long)a,(unsigned long long)(e-a));
             fwrite(pg.data()+a,1,e-a,f); fputc('\n',f); ++n;
         }
         fclose(f);
-        fprintf(stderr,"[query] %zu reads overlap %llu-%llu -> %s\n",n,
-                (unsigned long long)qa,(unsigned long long)qb,outdir.c_str());
+        fprintf(stderr,"[query] %zu reads over %zu range(s) -> %s\n",n,ranges.size(),outdir.c_str());
         return 0;
     }
     std::vector<uint32_t> positions(posb.size()/4);
