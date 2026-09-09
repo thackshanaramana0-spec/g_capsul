@@ -47,3 +47,8 @@ bin/
 # and it made the whole branch unpushable (GitHub caps files at 100 MB).
 out.vcf
 *.vcf
+
+# Third-party work-in-progress (namespaced, deletable
+# in one clean diff). Untracked so it stays the author of its own commits.
+exp2026_*
+EXP2026_*
