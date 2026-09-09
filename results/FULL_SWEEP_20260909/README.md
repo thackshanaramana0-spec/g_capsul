@@ -83,10 +83,36 @@ chr20:1-100000" but only after alignment to a reference. We return reads at a
 coordinate range of an assembly THE COMPRESSOR ITSELF BUILT, with no reference
 anywhere in the pipeline. That is the claim; "no competitor" is not.
 
-Consequence for the paper: T3.3 currently has no head-to-head number. The
-honest fix is to benchmark `genocat --regions` and indexed CRAM on an
-equivalent slice and report wall time and bytes read, disclosing that the
-coordinate systems differ.
+### T3.3 head-to-head, MEASURED 2026-09-09
+
+An earlier note here said T3.3 had no competitor number. It does. SPRING has
+`--decompress-range`, so the fair question is what a small slice COSTS:
+
+    dataset       ours query   SPRING --decompress-range 1 100   SPRING full
+    ERR5181310      0.50 s              5.90 s                     5.94 s
+    SRR2584863      0.46 s              4.93 s                     5.28 s
+
+SPRING's range decode costs 93-99% of decoding the ENTIRE archive: it inflates
+everything and then slices. Ours costs 8-17% of our own full decode, because
+`query` decodes the assembly layer (literal + mem_triples -> pseudogenome) plus
+placements and stops -- it never touches quality (the largest stream), never
+touches names, and never reconstructs reads. See stages/capsule_decode.cpp: the
+quality thread only starts when a quality output is requested, and the
+query/coverage branch returns before names.
+
+So there are TWO distinct claims and both survive:
+
+  1. COST. We serve a slice without a full decode; SPRING measurably cannot.
+     ~11x on these two datasets.
+  2. ADDRESSING. SPRING takes read INDICES -- "reads 1000-2000", an arbitrary
+     file slice. It cannot answer "what is at this locus" at any cost, because
+     a FASTQ archive has no loci. CRAM/genocat --regions can, but only after
+     aligning to an external reference. We take a pseudogenome coordinate, from
+     an assembly the compressor built, with no reference anywhere.
+
+What is still NOT done: the same head-to-head against `genocat --regions` and
+indexed CRAM, which do have coordinates and would need the reference-build cost
+counted honestly on their side.
 
 **Read T3.1 carefully.** `output_bytes`/`rows` are in the table for this
 reason: our export emits 2 records (the pseudogenome), SPAdes emits tens of
