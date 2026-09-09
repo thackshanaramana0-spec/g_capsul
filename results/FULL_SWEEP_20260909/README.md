@@ -63,8 +63,30 @@ T2.5 tetraploid (HG003+HG004, ploidy 4, real reads, Cooke et al. 2022)
     DRR976266      0.70s vs 548.82s  784.0x  1.49s vs 23.98s   16.1x
     HG002          5.67s vs 2678.83s 472.5x  3.04s vs 164.90s  54.2x
 
-T3.3 query ran on ALL 19 archives; no competitor exists for coordinate-range
-retrieval from a compressed archive.
+T3.3 query ran on ALL 19 archives. **"No competitor exists" is FALSE and was
+removed** -- this project's own docs/CLAIM3_APPLICATIONS.md had already recorded
+that, and the scripts still carried the claim. Verified against the literature
+2026-09-09:
+
+  SPRING        --decompress-range start end   -> by READ INDEX (1..N in file
+                order, or reordered order if -r was used). Our own baseline.
+  BEETL-fastq   sFASTQ searchable archive      -> by SEQUENCE (BWT substring)
+  CIndex        compressed FASTQ indexes       -> by record identifier
+  genocat --regions / CRAM+samtools            -> by REFERENCE coordinate,
+                which requires aligning to an external reference first
+
+So partial random access into compressed reads is well established. The
+defensible statement is about the COORDINATE SYSTEM, not the capability:
+SPRING returns "reads 1000-2000", an arbitrary file slice with no biological
+meaning; BEETL returns "reads containing string S"; CRAM returns "reads at
+chr20:1-100000" but only after alignment to a reference. We return reads at a
+coordinate range of an assembly THE COMPRESSOR ITSELF BUILT, with no reference
+anywhere in the pipeline. That is the claim; "no competitor" is not.
+
+Consequence for the paper: T3.3 currently has no head-to-head number. The
+honest fix is to benchmark `genocat --regions` and indexed CRAM on an
+equivalent slice and report wall time and bytes read, disclosing that the
+coordinate systems differ.
 
 **Read T3.1 carefully.** `output_bytes`/`rows` are in the table for this
 reason: our export emits 2 records (the pseudogenome), SPAdes emits tens of
