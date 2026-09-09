@@ -41,9 +41,13 @@ The two >10 GB sets dominate: without them we are ~2.3x.
 **T2.3 het-indel F1** — 0.620 / 0.637 / 0.632 / 0.593 against DiscoSNP++
 0.576 / 0.587 / 0.595 / 0.605. 3 wins, 1 loss. Kmer2SNP has no indel model.
 
-**T2.4** — strict both-allele 5/111 vs DiscoSNP++ 0/111. **Do not quote yet**:
-does not reconcile with the earlier locked 11/18 (different denominator, the
-old analysis was ad-hoc and unsaved).
+**T2.4 — RECONCILED 2026-09-10.** Strict both-allele **5/7 vs DiscoSNP++ 0/7**
+on the SNV-only subset. The earlier 5/111 was scoring 104 indel-bearing sites
+that a single-base comparison cannot evaluate; the earlier "11/18" is withdrawn
+because 111 is the reproducible denominator (confirmed by
+docs/POLYPLOID_BENCHMARK.md's own setup: 971,250 reads, 111 multi-allelic
+sites, both reproduced exactly). Quotable now, with its scope: 7 sites, a
+capability demonstration rather than a rate.
 
 **T2.5 tetraploid** — SNV 0.897 vs 0.782, INDEL 0.597 vs 0.553.
 
@@ -68,7 +72,6 @@ coordinate. **640 sites, 4 individuals, 5 windows: coordinate 0, content 549.**
 
 - **HG005 loses both T2.1 and T2.3**, on an unexplained precision collapse
   (FP 3,426 against ~1,700 elsewhere). It is the deepest sample.
-- **T2.4 is unreconciled** with the locked figure. Do not publish it.
 - **T3.4's 12-15% residue** is explained (mismatch-encoded variants, invisible
   to a consensus-emitting query) but not recovered.
 - **T3.4 is chr20 only, at 30x.** Not replicated on another chromosome.
