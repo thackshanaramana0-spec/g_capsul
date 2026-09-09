@@ -58,8 +58,28 @@ Asking by SEQUENCE resolves every parallel representative of a locus at once —
 both haplotypes, both strands — because they are parallel precisely in the
 sense of sharing content. The query then returns their union: a real pileup.
 
-**Scale validation, 100 GIAB het SNVs, real tool, end to end, both query modes
-run on the identical archive and identical sites:**
+**FULL VALIDATION — all four GIAB individuals, 100 het SNVs each, both query
+modes on the identical archive and identical sites (T3.4):**
+
+    individual   sites   coordinate both   content both   allele balance
+    HG002          100                 0             81         1.06
+    HG003          100                 0             88         2.43
+    HG004          100                 0             78         0.92
+    HG005          100                 0             92         0.84
+    ALL            400                 0            339         0.97
+
+    coordinate addressing : 0/400   (0.0%)
+    content addressing    : 339/400 (84.8%)
+    overall allele balance: 25,161 REF / 24,489 ALT  (ratio 0.97)
+
+**0 of 400 against 339 of 400**, replicated across four unrelated individuals
+(three Ashkenazi trio members and one Han Chinese), and the pooled allele
+balance is 0.97 -- the returned evidence is unbiased. The archives were rebuilt
+from scratch for this run and reproduce the sweep's sizes byte for byte
+(HG003 567,123,999; HG004 606,192,930; HG005 997,518,994), so the result does
+not depend on a particular build.
+
+Per-individual detail for HG002, from the earlier n=100 run:
 
                               BOTH alleles   one allele   neither
     COORDINATE query                     0          100         0
@@ -152,10 +172,13 @@ resolution implemented and validated against an external truth set.
   implemented.
 - Allele balance is not uniform (e.g. 20:3013473 gave 20 REF / 1 ALT). The
   query returns evidence; it does not genotype. Genotyping is Claim 2.
-- All measurements are HG002 chr20, 100 sites in a 600 kb window. Not
-  replicated on other individuals or chromosomes.
-- 19 of 100 sites returned only one allele. Cause not characterised (probe
-  landing in a repeat, or one haplotype absent from the assembly).
+- Replicated on 4 individuals x 100 sites, but all within the same chr20
+  600 kb window. Not replicated on other chromosomes or regions.
+- 61 of 400 sites returned only one allele (8-22% per individual). Cause not
+  characterised: the probe may land in a repeat, or one haplotype may be
+  absent from the assembly at that locus.
+- Per-individual allele balance varies (0.84 to 2.43) even though the pooled
+  figure is 0.97. The query returns evidence, not genotypes.
 
 ## The claim, finalised
 
