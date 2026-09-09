@@ -350,11 +350,22 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
                 placed,(unsigned long long)PGLEN,outdir.c_str());
         return 0;
     }
+    // QUERY BUDGET INSTRUMENT (CAPS_QTIME=1). The point of query is that its
+    // cost should track the ANSWER, not the archive. To know whether that is
+    // true we need the split, not the total.
+    const bool QTIME = getenv("CAPS_QTIME")!=nullptr;
+    auto _qt0 = std::chrono::steady_clock::now();
+    auto QLAP=[&](const char* what){ if(!QTIME) return;
+        auto n=std::chrono::steady_clock::now();
+        fprintf(stderr,"  [qtime] %-28s %6.3f s\n", what,
+                std::chrono::duration<double>(n-_qt0).count()); _qt0=n; };
+    QLAP("archive read + stream map");
     // ---- literal: 2-bit codes -> ACGT --------------------------------------
     auto litcode = seq_decode_mem(S["literal"].data(), S["literal"].size());
     std::vector<uint8_t> literal(litcode.size());
     { const char M[4]={'A','C','G','T'};
       for(size_t i=0;i<litcode.size();++i) literal[i]=(uint8_t)M[litcode[i]&3]; }
+    QLAP("literal decode (seq_decode_mem)");
 
     // ---- references --------------------------------------------------------
     auto gaps = varints(dec("mem_dstgap"));
@@ -369,6 +380,19 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
     // sources were coded relative to main_pg_end. Absent stream == none.
     auto selfflags = has("mem_self") ? dec("mem_self") : std::vector<uint8_t>();
     auto src = refc::decode(S["mem_triples"].data(), S["mem_triples"].size(), dst, MAINEND, selfflags);
+    QLAP("reference streams decode");
+    // CAPS_DUMP_REFS=1 -> the reference list, so the DEPENDENCY CLOSURE of a
+    // pg window can be measured offline. The question windowed rebuild turns
+    // on is not whether references reach far back (they do, 99.7% over 100kb)
+    // but how much of pg a window transitively depends on.
+    if(getenv("CAPS_DUMP_REFS")){
+        FILE* rf=fopen(getenv("CAPS_DUMP_REFS"),"wb");
+        if(rf){ fprintf(rf,"dst\tsrc\tlen\n");
+            for(size_t i=0;i<NR;++i)
+                fprintf(rf,"%u\t%u\t%u\n",dst[i],(unsigned)src[i],mlen[i]);
+            fclose(rf);
+            fprintf(stderr,"[refs] %zu references dumped\n",NR); }
+    }
 
     // ── CLAIM 3 / coverage — hoisted ABOVE the pseudogenome rebuild ─────────
     // Per-base depth needs only the pseudogenome LENGTH (already in the header)
@@ -558,6 +582,7 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
     // ── CLAIM 3 / coverage and query ────────────────────────────────────────
     // Both need only the per-read PLACEMENTS, which the compressor computed and
     // stored. No alignment, no index build, no read reconstruction.
+    QLAP("pg rebuild (replay references)");
     if(mode=="coverage" || mode=="query"){
         std::vector<uint32_t> P(posb.size()/4);
         memcpy(P.data(),posb.data(),P.size()*4);
@@ -566,6 +591,7 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
         // orig2uid: 1 bit/read "is a duplicate" + sparse alias values
         std::vector<uint32_t> vals; { auto vv=varints(o2v); vals.assign(vv.begin(),vv.end()); }
         const size_t NORIG = L.size();
+        QLAP("placement streams unpack");
         auto uid_of=[&](size_t o)->uint32_t{
             if(o>=NORIG) return UINT32_MAX;
             size_t byte=o>>3, bit=o&7;
@@ -664,6 +690,7 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
             fwrite(pg.data()+a,1,e-a,f); fputc('\n',f); ++n;
         }
         fclose(f);
+        QLAP("scan all reads + emit answer");
         fprintf(stderr,"[query] %zu reads over %zu range(s) -> %s\n",n,ranges.size(),outdir.c_str());
         return 0;
     }
