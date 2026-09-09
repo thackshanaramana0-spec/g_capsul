@@ -82,7 +82,27 @@ Added to the caller only; the compression path is untouched.
    contigs, both strands, fewest mismatches wins, same `mm<7` gate the pileup
    already used.
 
-**Ablation (same reads, opposite-direction check):**
+**FULL chr20 CONFIRMATION, 2026-09-09** (HG002, from the archive, toggles
+`CAPS_NO_COLLAPSE` / `CAPS_NO_REMAP`). The window ablation below reproduces at
+111x the scale, with a LARGER gap:
+
+| configuration | SNV F1 | precision | recall |
+|---|---|---|---|
+| neither | 0.431 | 0.967 | 0.278 |
+| re-placement only | **0.426** | 0.962 | 0.274 |
+| collapse only | 0.648 | 0.963 | 0.488 |
+| **both** | **0.888** | 0.956 | 0.830 |
+
+Two results the window run could not show:
+* Re-placement alone is **worse than doing nothing** (0.426 < 0.431). Collapse
+  alone buys +0.217, re-placement alone -0.005; additivity predicts 0.212,
+  observed is **+0.457**. Synergy, not additivity.
+* The ERROR SHAPE confirms the mechanism. Without collapse, precision holds at
+  0.96-0.97 while recall falls to 0.27 -- the caller is not mistaken, it is
+  blind, which is exactly what "the alt-allele reads are filed on a different
+  contig" predicts. Noise or a bad threshold would cost precision instead.
+
+**Ablation (same reads, opposite-direction check) -- original 75k-read window:**
 
 | configuration | SNV F1 |
 |---|---|
