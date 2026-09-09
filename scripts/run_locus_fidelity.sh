@@ -35,14 +35,25 @@ TRUTH="$HOME/giab_truth/${IND}_GRCh37_1_22_v4.2.1_benchmark.vcf.gz"
 CHROM=20; LO=3000000; HI=3600000          # a window with dense GIAB truth
 PAR="${T34_PAR:-6}"                        # correctness only: parallel is safe
 
+# Resolve to absolute paths BEFORE the cd below. The script cd's into its
+# output directory, so a relative archive/ref/decoder path would silently stop
+# resolving there -- which failed as "export failed" and looked like a decoder
+# problem rather than a path one.
+abspath(){ case "$1" in /*) printf '%s' "$1";; *) printf '%s/%s' "$(pwd)" "$1";; esac; }
+DEC="$(command -v "$DEC" 2>/dev/null || abspath "$DEC")"
+ARC="$(abspath "$ARC")"; REF="$(abspath "$REF")"
+case "$OUT" in /*) ;; *) OUT="$(abspath "$OUT")";; esac
+
 for t in tabix samtools python3; do command -v $t >/dev/null || { echo "MISSING: $t" >&2; exit 1; }; done
+[ -x "$DEC" ] || { echo "MISSING/not executable: $DEC" >&2; exit 1; }
+[ -s "$REF" ] || { echo "MISSING ref: $REF" >&2; exit 1; }
 [ -s "$ARC" ]   || { echo "MISSING archive: $ARC" >&2; exit 1; }
 [ -s "$TRUTH" ] || { echo "MISSING truth: $TRUTH" >&2; exit 1; }
 mkdir -p "$OUT/q"; cd "$OUT"
 
 echo "=== T3.4 locus retrieval fidelity — $IND chr$CHROM:$LO-$HI ==="
 [ -s pg.fa ] || "$DEC" export "$ARC" pg.fa >/dev/null 2>&1
-[ -s pg.fa ] || { echo "export failed" >&2; exit 1; }
+[ -s pg.fa ] || { echo "export failed: $DEC export $ARC" >&2; exit 1; }
 [ -s ref.txt ] || samtools faidx "$REF" $CHROM:$((LO-1000))-$((HI+1000)) 2>/dev/null \
     | tail -n +2 | tr -d '\n' | tr 'acgt' 'ACGT' > ref.txt
 tabix "$TRUTH" $CHROM:$LO-$HI 2>/dev/null \
