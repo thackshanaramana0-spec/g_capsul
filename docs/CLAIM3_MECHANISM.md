@@ -72,6 +72,39 @@ Same 20 GIAB het sites, real tool, end to end:
 Against the coordinate control's 0/12, this is the result: **content addressing
 recovers the pileup that coordinate addressing structurally cannot.**
 
+## PRIOR ART — the phenomenon is known, in a different field
+
+Checked 2026-09-09, after the measurements above. **Heterozygous regions
+assembling into separate contigs is well documented in the DE NOVO ASSEMBLY
+literature** and must not be presented as a new observation:
+
+- Purge Haplotigs (BMC Bioinformatics 2018) — identifies "suspected duplicated
+  sequences assumed to be allelic haplotypes".
+- Redundans (NAR 2016) — an assembly pipeline for highly heterozygous genomes.
+- Regional sequence expansion or collapse in heterozygous genome assemblies
+  (PLOS Comp Biol 2020) — heterozygous regions "duplicate existing sequences
+  and lead to higher rates of fragmentation as they are resolved into separate
+  contigs".
+
+The correct statement of what is ours is therefore NARROWER than "we discovered
+haplotype fragmentation". It is:
+
+1. **The setting.** In assembly, haplotigs are a QUALITY defect: the assembly
+   is redundant and fragmented. In a compression archive the assembly is a
+   byproduct and the archive is the product, so the same phenomenon is an
+   ADDRESSABILITY defect: the archive's own coordinate system cannot express
+   "this locus". That consequence is not described anywhere we could find.
+2. **The measurement in that setting** (250 GIAB het sites, median 4 parallel
+   loci, 0/12 coordinate queries recovering both alleles).
+3. **The resolution, which is the OPPOSITE of the field's.** The assembly
+   field's remedy is to PURGE the redundant haplotigs and keep a pseudo-haploid
+   reference. For an archive that is exactly wrong: deleting a haplotig deletes
+   an allele, and with it the lossless property and the variant. We keep every
+   representative and reach them all by content instead.
+
+Point 3 is the load-bearing one. The known remedy destroys what an archive
+needs, so importing it would be a correctness bug, not a fix.
+
 ## What is claimed, and what is not
 
 **Claimed.** A compression-optimal read archive fragments each heterozygous
