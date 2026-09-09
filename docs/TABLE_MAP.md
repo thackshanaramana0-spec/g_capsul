@@ -16,11 +16,14 @@ results; this is the mapping, kept so those remain readable.
 | T6a | **T3.1** | export vs SPAdes | `claim3_T3.1_T3.2_T3.3.csv` |
 | T6b | **T3.2** | coverage vs bwa+samtools+mosdepth | same CSV |
 | T6c | **T3.3** | query (partial random access, reference-free coordinates) | same CSV |
+| *(new)* | **T3.4** | locus retrieval FIDELITY — coordinate vs content addressing | `claim3_T3.4_locus_fidelity.csv` |
 
 **Caution when reading old documents:** under the OLD scheme `T3` meant
 het-SNV; under the NEW scheme `T3.x` means Claim 3 (addressability). A bare
 "T3" in a pre-2026-09-09 document is het-SNV, i.e. today's T2.1.
 
 Every table carries wall time, peak RAM and an output size or count, so each
-claim can be audited on all three axes. Claim 3's rows are tagged with their
+claim can be audited on all three axes. **T3.4 is the exception and does so
+deliberately**: it measures whether what a locus query returns is USABLE, not
+what it costs, so it records no timing and its queries run in parallel. Claim 3's rows are tagged with their
 sub-table id in the first column.

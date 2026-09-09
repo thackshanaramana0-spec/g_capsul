@@ -140,10 +140,12 @@ CSV4="$OUT_DIR/claim2_T2.2_coverage_sweep.csv"
 CSV5="$OUT_DIR/claim2_T2.3_indel.csv"
 CSV6="$OUT_DIR/claim2_T2.4_multiallelic.csv"
 CSV7="$OUT_DIR/claim2_T2.5_tetraploid.csv"
+CSV8="$OUT_DIR/claim3_T3.4_locus_fidelity.csv"
 echo "individual,depth_x,reads,archive_bytes,tp,fp,fn,precision,recall,f1,wall_s,peak_ram_kb,status" > "$CSV4"
 echo "individual,tool,tp,fp,fn,precision,recall,f1,wall_s,peak_ram_kb,status" > "$CSV5"
 echo "individual,region,truth_multiallelic_sites,capsule_anycall,disco_anycall,capsule_both_alleles,disco_both_alleles,capsule_rate,disco_rate,wall_s,peak_ram_kb,status" > "$CSV6"
 echo "pair,ploidy,region,tool,class,tp,fp,fn,precision,recall,f1,wall_s,peak_ram_kb,status" > "$CSV7"
+echo "individual,sites,coord_both,coord_one,coord_none,content_both,content_one,content_none,ref_reads,alt_reads,status" > "$CSV8"
 
 DATASETS="ERR5181310 SRR554369 ERR552797 SRR2584863 SRR29296997 ERR12954017 \
 SRR065390 SRR40271341 ERR17740259 SRR37283774 DRR976266 SRR36741279 \
@@ -760,6 +762,33 @@ run_phase3(){
         fi
         inf "[$i/$n] $DS done in $(( $(date +%s) - t0 ))s   (elapsed $(_el))"
     done
+    # ═══ T3.4 — LOCUS RETRIEVAL FIDELITY ═══════════════════════════════════
+    # T3.1-T3.3 measure what retrieval COSTS. This measures whether what comes
+    # back is USABLE. A het locus is not one place in a compression-optimal
+    # pseudogenome -- it is N parallel contigs -- so a COORDINATE returns one
+    # haplotype with the variation gone, while content addressing resolves all
+    # representatives and returns a real pileup. Both modes are run on the same
+    # archive and the same GIAB sites, so nothing else can explain the gap.
+    # Correctness only: no timing is recorded and the queries run in parallel.
+    if [ -s "$ARCH_DIR/HG002.capsule" ] && [ -s "$REFS/chr20.fa" ]; then
+        mark "T3.4 locus fidelity"
+        banner "T3.4 — locus retrieval fidelity (coordinate vs content)"
+        local t34d="$OUT_DIR/c3_T3.4"
+        if bash "$HERE/scripts/run_locus_fidelity.sh" "$DEC" "$ARCH_DIR/HG002.capsule" \
+              "$REFS/chr20.fa" HG002 "$t34d" "${T34_N:-100}" > "$t34d.log" 2>&1; then
+            local row; row=$(grep -a '^T34,' "$t34d.log" | tail -1)
+            if [ -n "${row:-}" ]; then
+                printf "%s,DONE\n" "${row#T34,}" >> "$CSV8"
+                ok "T3.4  $(grep -a 'content recovers both' "$t34d.log" | tail -1)"
+                checkpoint "T3.4 locus fidelity done"
+            else err "T3.4: no result row"; debug_dump "T3.4" "$t34d.log"
+                 printf "HG002,,,,,,,,,,NO_RESULT\n" >> "$CSV8"; fi
+        else err "T3.4 runner failed"; debug_dump "T3.4" "$t34d.log"
+             printf "HG002,,,,,,,,,,FAILED\n" >> "$CSV8"; fi
+    else
+        inf "SKIP T3.4: needs the HG002 archive and chr20.fa"
+    fi
+
     checkpoint "PHASE 3 COMPLETE"
     banner "PHASE 3 COMPLETE  ->  $CSV3"
 }
@@ -781,6 +810,7 @@ say "  T2.2  (Claim 2): $CSV4"
 say "  T2.3  (Claim 2): $CSV5"
 say "  T2.4  (Claim 2): $CSV6"
 say "  T2.5  (Claim 2): $CSV7"
+say "  T3.4  (Claim 3): $CSV8"
 say "  T6    (Claim 3): $CSV3"
 say "  archives kept  : $ARCH_DIR  ($(du -sh "$ARCH_DIR" 2>/dev/null | cut -f1))"
 say "  full log       : $LOG"
@@ -792,5 +822,6 @@ say ""; say "── CLAIM 2 — T2.3 het-indel ──";      column -s, -t "$CSV
 say ""; say "── CLAIM 2 — T2.4 multi-allelic ──";  column -s, -t "$CSV6" 2>/dev/null | tee -a "$LOG"
 say ""; say "── CLAIM 2 — T2.5 tetraploid ──";     column -s, -t "$CSV7" 2>/dev/null | tee -a "$LOG"
 say ""; say "── CLAIM 3 ──"; column -s, -t "$CSV3" 2>/dev/null | head -30 | tee -a "$LOG"
+say ""; say "── CLAIM 3 — T3.4 locus retrieval fidelity ──"; column -s, -t "$CSV8" 2>/dev/null | tee -a "$LOG"
 rm -rf "$WD"
 [ "$N_FAIL" -eq 0 ] && exit 0 || exit 1
