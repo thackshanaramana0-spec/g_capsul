@@ -606,7 +606,10 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
     // One full rebuild, written once, so every later query skips the assembly
     // layer. Costs an optional file (~9% of the archive here); costs the
     // ARCHIVE nothing, which is the point.
-    if(mode=="index"){
+    // CAPS_PILEUP=1 makes `index` continue past the pg dump and also emit the
+    // VARIANT-SITE TABLE (see below). Off by default so `index` stays fast.
+    const bool WANT_PILEUP = (mode=="index") && getenv("CAPS_PILEUP")!=nullptr;
+    if(mode=="index" && !WANT_PILEUP){
         FILE* f=fopen(outdir.c_str(),"wb");
         if(!f){ fprintf(stderr,"cannot write %s\n",outdir.c_str()); return 1; }
         const uint64_t magic=0x5158494451494451ULL, plen=pg.size(), mend=MAINEND;
@@ -904,6 +907,60 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
       } }
     _rss("before mm_sym decode");
     auto obs = mmc::decode(S["mm_sym"].data(), S["mm_sym"].size(), refs);
+    // ── VARIANT-SITE TABLE — the projection compression discards ────────────
+    // The compressor must compute, for every read, how it deviates from the
+    // consensus; that IS how it compresses. Doing so computes the complete
+    // pileup. It then stores only the READ-KEYED projection, because that is
+    // the only one decompression walks, and codes it with an adaptive model in
+    // read order -- which makes read #k's deviations unreachable without
+    // decoding all k-1 before it. The POSITION-KEYED projection, the pileup,
+    // is therefore not merely absent but structurally unrecoverable, even
+    // though the encoder held it.
+    //
+    // Measured on HG002 chr20: 7,466,871 deviations over 6,430,543 positions,
+    // of which only 15,515 (position,base) pairs recur >=5x. 98.6% of the
+    // stream is sequencing noise; 1.4% is variant signal. Retaining just the
+    // recurrent part, delta-coded, costs 0.0606% of the archive at >=3x.
+    if(WANT_PILEUP){
+        std::vector<size_t> vmoff(NU+1,0);
+        for(size_t u=0;u<NU;++u) vmoff[u+1]=vmoff[u]+(u<mmcount.size()?mmcount[u]:0);
+        std::vector<uint32_t> vpos_(positions.size());
+        memcpy(vpos_.data(),posb.data(),std::min(posb.size(),vpos_.size()*4));
+        std::map<std::pair<uint32_t,uint8_t>,uint32_t> tally;
+        for(size_t u=0;u<NU && u<vpos_.size();++u){
+            const uint16_t c=(u<mmcount.size())?mmcount[u]:0;
+            if(!c) continue;
+            const uint32_t a0=vpos_[u];
+            if(a0==UINT32_MAX) continue;
+            size_t off=vmoff[u]; uint32_t prevj=0;
+            for(uint16_t m=0;m<c;++m){
+                if(off+m>=mmpos32.size()||off+m>=obs.size()) break;
+                uint32_t j=prevj+mmpos32[off+m]; prevj=j;
+                tally[{a0+j,obs[off+m]}]++;
+            }
+        }
+        const uint32_t KMIN = getenv("CAPS_PILEUP_MIN")?(uint32_t)atoi(getenv("CAPS_PILEUP_MIN")):3;
+        FILE* vf=fopen((outdir+".sites").c_str(),"wb");
+        if(vf){
+            uint64_t magic=0x5345544953504756ULL, nsite=0;
+            for(auto& kv:tally) if(kv.second>=KMIN) ++nsite;
+            fwrite(&magic,8,1,vf); fwrite(&nsite,8,1,vf);
+            uint32_t prev=0;
+            for(auto& kv:tally){
+                if(kv.second<KMIN) continue;
+                uint32_t d=kv.first.first-prev; prev=kv.first.first;
+                while(d>=128){ uint8_t b=(uint8_t)(0x80|(d&0x7F)); fwrite(&b,1,1,vf); d>>=7; }
+                { uint8_t b=(uint8_t)d; fwrite(&b,1,1,vf); }
+                uint8_t base=kv.first.second;
+                uint8_t cnt=(uint8_t)std::min<uint32_t>(255,kv.second);
+                fwrite(&base,1,1,vf); fwrite(&cnt,1,1,vf);
+            }
+            long sz=ftell(vf); fclose(vf);
+            fprintf(stderr,"[index] variant sites >=%ux: %llu -> %ld B (%.4f%% of archive)\n",
+                    KMIN,(unsigned long long)nsite,sz,100.0*sz/(double)PGLEN);
+        }
+        return 0;
+    }
     _rss("after mm_sym decode");
 
     // ---- reconstruct the reads (was decode_105.py) -------------------------
