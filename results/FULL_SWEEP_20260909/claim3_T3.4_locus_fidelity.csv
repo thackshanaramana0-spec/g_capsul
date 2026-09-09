@@ -1,0 +1,5 @@
+individual,sites,coord_both,coord_one,coord_none,content_both,content_one,content_none,ref_reads,alt_reads,status
+HG002,100,0,100,0,81,19,0,3072,3263,DONE
+HG003,100,0,100,0,88,12,0,1498,3639,DONE
+HG004,100,0,97,3,78,22,0,2640,2424,DONE
+HG005,100,0,100,0,92,8,0,17951,15163,DONE
