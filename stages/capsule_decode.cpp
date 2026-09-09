@@ -360,6 +360,93 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
         fprintf(stderr,"  [qtime] %-28s %6.3f s\n", what,
                 std::chrono::duration<double>(n-_qt0).count()); _qt0=n; };
     QLAP("archive read + stream map");
+    // ── QUERY FROM A SIDECAR INDEX — no assembly layer decoded at all ──────
+    // Measured (CAPS_QTIME): 98.6% of a query is spent materialising the whole
+    // pseudogenome (literal decode 55%, reference replay 29%, reference stream
+    // decode 10%) to hand back a slice. The emit itself is 1.3%.
+    //
+    // The archive is NOT changed to fix this. Claim 1 is the stronger claim and
+    // must not be spent buying Claim 3 a constant. Instead the pseudogenome is
+    // written once to an OPTIONAL sidecar, 2-bit packed, exactly the pattern
+    // BAM/.bai and CRAM/.crai already establish in this field. Absent the
+    // sidecar everything behaves as before; present, query skips the assembly
+    // layer entirely and reads bases straight out of it.
+    //   build:  capsule_decode index <in.capsule> <out.qidx>
+    //   use:    automatic if <in.capsule>.qidx exists, or set CAPS_QIDX
+    if(mode=="query"){
+        std::string qidx = getenv("CAPS_QIDX") ? getenv("CAPS_QIDX") : (std::string(arcpath) + ".qidx");
+        FILE* qf = fopen(qidx.c_str(), "rb");
+        if(qf){
+            uint64_t magic=0, plen=0, mend=0;
+            if(fread(&magic,8,1,qf)==1 && magic==0x5158494451494451ULL &&
+               fread(&plen,8,1,qf)==1 && fread(&mend,8,1,qf)==1 && plen==PGLEN){
+                std::vector<uint8_t> packed((plen+3)/4);
+                if(fread(packed.data(),1,packed.size(),qf)==packed.size()){
+                    QLAP("sidecar: pg load");
+                    auto base_at=[&](uint64_t i)->char{
+                        static const char M[4]={'A','C','G','T'};
+                        return M[(packed[i>>2] >> (2*(3-(i&3)))) & 3]; };
+                    uint64_t np=0,nl=0; std::vector<uint32_t> P; std::vector<uint16_t> L;
+                    if(fread(&np,8,1,qf)==1 && fread(&nl,8,1,qf)==1){
+                        P.resize(np); L.resize(nl);
+                        if(fread(P.data(),1,np*4,qf)!=np*4 || fread(L.data(),1,nl*2,qf)!=nl*2){
+                            fprintf(stderr,"[query] sidecar truncated -- rebuild it\n"); fclose(qf); return 1; }
+                    } else { fprintf(stderr,"[query] sidecar has no placements -- rebuild it\n"); fclose(qf); return 1; }
+                    fclose(qf);
+                    QLAP("  placement streams decode");
+                    std::vector<std::pair<uint64_t,uint64_t>> rr;
+                    bool sq = !modearg.empty() &&
+                              modearg.find_first_not_of("ACGTNacgtn")==std::string::npos;
+                    if(sq){
+                        std::string q=modearg; for(auto&c:q) c=(char)toupper((unsigned char)c);
+                        std::string rc(q.rbegin(),q.rend());
+                        for(auto&c:rc) c=(c=='A'?'T':c=='T'?'A':c=='C'?'G':c=='G'?'C':c);
+                        std::string hay(plen,'\0');
+                        for(uint64_t i=0;i<plen;++i) hay[i]=base_at(i);
+                        for(const std::string* pat : { &q, &rc }){
+                            if(pat==&rc && rc==q) break;
+                            for(size_t at=hay.find(*pat); at!=std::string::npos; at=hay.find(*pat,at+1))
+                                rr.push_back({(uint64_t)at,(uint64_t)(at+pat->size())});
+                        }
+                        std::sort(rr.begin(),rr.end());
+                        fprintf(stderr,"[query] sequence of %zu bp -> %zu occurrence(s)\n",q.size(),rr.size());
+                    } else {
+                        const char* d=strchr(modearg.c_str(),'-');
+                        if(!d){ fprintf(stderr,"query needs START-END or a DNA sequence\n"); return 2; }
+                        rr.push_back({strtoull(modearg.c_str(),nullptr,10), strtoull(d+1,nullptr,10)});
+                    }
+                    QLAP("  locate ranges");
+                    FILE* of=fopen(outdir.c_str(),"wb");
+                    if(!of){ fprintf(stderr,"cannot write %s\n",outdir.c_str()); return 1; }
+                    size_t n=0; std::string obuf; obuf.reserve(1024);
+                    setvbuf(of,nullptr,_IOFBF,1<<20);
+                    for(size_t u=0;u<P.size();++u){
+                        uint64_t aa=P[u]; uint16_t l=u<L.size()?L[u]:0;
+                        if(!l||aa==UINT32_MAX||aa>=plen) continue;
+                        uint64_t b=aa+l; bool hit=false;
+                        for(const auto& r:rr) if(b>r.first && aa<r.second){ hit=true; break; }
+                        if(!hit) continue;
+                        uint64_t e=std::min<uint64_t>(plen,b);
+                        char hdr[96];
+                        int hl=snprintf(hdr,sizeof hdr,">r%zu pos=%llu len=%llu\n",u,
+                                        (unsigned long long)aa,(unsigned long long)(e-aa));
+                        obuf.resize(0); obuf.append(hdr,hl);
+                        for(uint64_t i=aa;i<e;++i) obuf.push_back(base_at(i));
+                        obuf.push_back('\n');
+                        fwrite(obuf.data(),1,obuf.size(),of); ++n;
+                    }
+                    fclose(of);
+                    QLAP("emit answer from sidecar");
+                    fprintf(stderr,"[query] %zu reads over %zu range(s) -> %s (via sidecar, no assembly decode)\n",
+                            n,rr.size(),outdir.c_str());
+                    return 0;
+                }
+            }
+            fclose(qf);
+            fprintf(stderr,"[query] sidecar %s unusable -- falling back to full rebuild\n",qidx.c_str());
+        }
+    }
+
     // ---- literal: 2-bit codes -> ACGT --------------------------------------
     auto litcode = seq_decode_mem(S["literal"].data(), S["literal"].size());
     std::vector<uint8_t> literal(litcode.size());
@@ -515,6 +602,38 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
     // ── CLAIM 3 / export ────────────────────────────────────────────────────
     // The pseudogenome IS the assembly; it was built at compress time. Emit it
     // as FASTA and stop -- no read reconstruction, no assembler.
+    // ── build the sidecar index: the pseudogenome, 2-bit packed ────────────
+    // One full rebuild, written once, so every later query skips the assembly
+    // layer. Costs an optional file (~9% of the archive here); costs the
+    // ARCHIVE nothing, which is the point.
+    if(mode=="index"){
+        FILE* f=fopen(outdir.c_str(),"wb");
+        if(!f){ fprintf(stderr,"cannot write %s\n",outdir.c_str()); return 1; }
+        const uint64_t magic=0x5158494451494451ULL, plen=pg.size(), mend=MAINEND;
+        fwrite(&magic,8,1,f); fwrite(&plen,8,1,f); fwrite(&mend,8,1,f);
+        std::vector<uint8_t> packed((plen+3)/4, 0);
+        for(uint64_t i=0;i<plen;++i){
+            unsigned c = pg[i]=='C'?1u : pg[i]=='G'?2u : pg[i]=='T'?3u : 0u;
+            packed[i>>2] |= (uint8_t)(c << (2*(3-(i&3))));
+        }
+        fwrite(packed.data(),1,packed.size(),f);
+        // Placements go in too. Without them the sidecar still had to decode
+        // pos_abs + read_lengths for ALL reads to answer a query about a few
+        // thousand -- measured 0.073 s of a 0.10 s query, i.e. the same
+        // decode-everything-to-use-a-slice disease one level down.
+        { auto pb=dec("pos_abs"), lb=dec("read_lengths",2);
+          if(has("pos_sec")||has("pos_region"))
+              pb = caps_join_positions(pb, has("pos_sec")?dec("pos_sec"):std::vector<uint8_t>(),
+                                       has("pos_region")?dec("pos_region"):std::vector<uint8_t>(), MAINEND);
+          const uint64_t np=pb.size()/4, nl=lb.size()/2;
+          fwrite(&np,8,1,f); fwrite(&nl,8,1,f);
+          fwrite(pb.data(),1,np*4,f); fwrite(lb.data(),1,nl*2,f);
+          fprintf(stderr,"[index] %llu bp + %llu placements -> %zu B sidecar -> %s\n",
+                  (unsigned long long)plen,(unsigned long long)np,
+                  packed.size()+40+np*4+nl*2, outdir.c_str()); }
+        fclose(f);
+        return 0;
+    }
     if(mode=="export"){
         FILE* f=fopen(outdir.c_str(),"wb");
         if(!f){ fprintf(stderr,"cannot write %s\n",outdir.c_str()); return 1; }
@@ -1296,11 +1415,12 @@ int main(int argc,char** argv){
     if(argc>=4 && !strcmp(argv[1],"call"))
         return capsule_call_from_archive(argv[2], argv[3], argc>4?argv[4]:std::string());
     // Claim 3 modes:  capsule_decode export|coverage|query <in.capsule> <out> [range]
-    if(argc>=4 && (!strcmp(argv[1],"export")||!strcmp(argv[1],"coverage")||!strcmp(argv[1],"query")))
+    if(argc>=4 && (!strcmp(argv[1],"export")||!strcmp(argv[1],"coverage")||!strcmp(argv[1],"query")||!strcmp(argv[1],"index")))
         return capsule_decode_all(argv[2], argv[3], std::string(), argv[1],
                                   argc>4?argv[4]:std::string());
     if(argc<3){ fprintf(stderr,"usage: capsule_decode <in.capsule> <outdir> [reads.out]\n"
                                "       capsule_decode export   <in.capsule> <out.fa>\n"
+                               "       capsule_decode index    <in.capsule> <out.qidx>\n"
                                "       capsule_decode coverage <in.capsule> <out.tsv>\n"
                                "       capsule_decode query    <in.capsule> <out.fa> <START-END>\n"
                                "       capsule_decode call     <in.capsule> <out.vcf> [workdir]\n"); return 2; }
