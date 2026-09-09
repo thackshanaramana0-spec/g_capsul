@@ -58,7 +58,21 @@ Asking by SEQUENCE resolves every parallel representative of a locus at once —
 both haplotypes, both strands — because they are parallel precisely in the
 sense of sharing content. The query then returns their union: a real pileup.
 
-Same 20 GIAB het sites, real tool, end to end:
+**Scale validation, 100 GIAB het SNVs, real tool, end to end, both query modes
+run on the identical archive and identical sites:**
+
+                              BOTH alleles   one allele   neither
+    COORDINATE query                     0          100         0
+    SEQUENCE  query (ours)              81           19         0
+
+    aggregate allele balance: 3,072 REF / 3,263 ALT  (ratio 1.06)
+
+**0/100 against 81/100.** The 1.06 ratio matters as much as the headline: the
+returned evidence is unbiased, which is what makes it a pileup rather than a
+read dump. An earlier n=20 run gave 16/18 by sequence and 0/12 by coordinate;
+the effect does not weaken with scale.
+
+Earlier 20-site detail, kept for the per-site view:
 
     sites where reads were returned      : 18 / 20
     sites returning BOTH alleles         : 16 / 18   (88.9%)
@@ -138,8 +152,33 @@ resolution implemented and validated against an external truth set.
   implemented.
 - Allele balance is not uniform (e.g. 20:3013473 gave 20 REF / 1 ALT). The
   query returns evidence; it does not genotype. Genotyping is Claim 2.
-- All measurements are HG002 chr20. Not replicated on other individuals or
-  chromosomes.
+- All measurements are HG002 chr20, 100 sites in a 600 kb window. Not
+  replicated on other individuals or chromosomes.
+- 19 of 100 sites returned only one allele. Cause not characterised (probe
+  landing in a repeat, or one haplotype absent from the assembly).
+
+## The claim, finalised
+
+> **No existing tool can retrieve the reads at a locus from a reference-free
+> read archive**, and the reason is structural rather than a missing feature.
+>
+> SPRING addresses by read index and Genozip by first-N; neither is a locus,
+> and `genocat --regions` is refused outright on FASTQ because the format
+> carries no coordinates to index. BEETL-fastq searches by sequence but returns
+> reads CONTAINING the query, not reads COVERING the locus (median 38% of ours
+> do not contain the probe). CRAM answers a locus but only after aligning to an
+> external reference. PgRC2 and NanoSpring build the coordinates and expose no
+> read-out at all.
+>
+> **And the obvious fix does not work.** Adding a coordinate API to an
+> assembly-based compressor returns ONE haplotype — measured, 0 of 100 GIAB het
+> sites recovered both alleles — because compressing a het locus optimally
+> splits its alleles onto separate contigs. The archive's own coordinate system
+> therefore cannot name a locus.
+>
+> Content addressing resolves every parallel representative at once and returns
+> a complete, balanced pileup: 81 of 100 sites, allele ratio 1.06. This is the
+> capability, and the mechanism is why nobody has it.
 
 ## Reproduce
 
