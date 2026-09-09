@@ -131,3 +131,35 @@ the conventional route.
   the paper until it is reconciled.
 - Phase 1 took 2h35m against a 1h21m projection (1.9x). The projection
   under-modelled competitor decompress on multi-GB inputs; results unaffected.
+
+### T3.3 competitor numbers — measured 2026-09-09, E. coli (SRR2584863)
+
+Retrieving a small subset from an already-compressed archive:
+
+    tool     command                        wall     its own full decode   addresses by
+    ours     query <range or sequence>      0.46 s   5.81 s                pseudogenome coordinate
+    Genozip  genocat --head=100             0.19 s   0.85 s                first-N only
+    SPRING   --decompress-range 1 100       4.93 s   5.28 s                read index
+
+Read this honestly, in three parts:
+
+1. GENOZIP IS FASTER THAN US at raw extraction, 0.19 s vs 0.46 s. Do not lead
+   with speed anywhere in Claim 3.
+2. COST vs POSITION. Ours is flat: 0.46-0.50 s for ranges at offset 0, 1 Mb,
+   3 Mb and 26.76 Mb of a 26.96 Mb pseudogenome. Genozip's is not -- --head=N
+   is sequential from the start and climbs 0.19 s -> 0.83 s as N goes
+   100 -> 2,000,000, i.e. to the full-decode cost. SPRING's range decode is
+   93-99% of a full decode at any N.
+3. WHAT CAN BE ASKED. Genozip's --regions (real locus retrieval) is refused on
+   a FASTQ archive -- "not supported for this file because it was not indexed
+   during compression" -- because FASTQ carries no coordinates. SPRING takes
+   read indices, which are file positions, not genome positions. Only ours
+   accepts a locus, and only ours accepts a bare DNA sequence.
+
+NOT RUN: BEETL-fastq, the one tool that also searches a compressed archive by
+sequence. The argument against it is structural rather than timed -- it is a
+BWT text index and returns reads CONTAINING the query, where we return reads
+COVERING the locus (median 38% of ours do not contain the probe, IQR 26-46%,
+n=50). That argument follows from what the index computes and does not need a
+timing run, but the head-to-head has not been done and should be expected as a
+reviewer request.
