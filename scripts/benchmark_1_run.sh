@@ -646,7 +646,7 @@ run_phase3(){
     banner "PHASE 3 — CLAIM 3 (archive analysis): reads the archives phase 1 kept"
     say "  T3.1 export   vs SPAdes                — 6 datasets (one per kingdom)"
     say "  T3.2 coverage vs bwa+samtools+mosdepth — same 6"
-    say "  T3.3 query    — every archive present (no competitor exists)"
+    say "  T3.3 query    — every archive present (partial random access; see note)"
     local SPADES="$HOME/SPAdes-4.0.0-Linux/bin/spades.py"
     local i=0 n t0 arc d t_a t_b sp ref src
 
@@ -659,7 +659,7 @@ run_phase3(){
             read -r sp qram <<< "$(parse_time_v "$WD/q.log")"
             local QB QR; QB=$(stat -c%s "$WD/q.fa" 2>/dev/null || echo 0); QR=$(grep -c . "$WD/q.fa" 2>/dev/null || echo 0)
             ok "T3.3 query  $ds  ${sp}s  RAM=$(ramg $qram)  $(mbs $QB)  $QR rows"
-            printf "T3.3,%s,query,%s,%s,%s,%s,none,,,,DONE,no competitor exists for coordinate-range retrieval\n" \
+            printf "T3.3,%s,query,%s,%s,%s,%s,none,,,,DONE,partial random access; competitors exist (SPRING --decompress-range by read index; genocat --regions and CRAM by REFERENCE coordinate) -- ours is by pseudogenome coordinate, reference-free\n" \
                 "$ds" "$sp" "$qram" "$QB" "$QR" >> "$CSV3"
         else
             err "T3.3 query failed on $ds"; debug_dump "$ds query" "$WD/q.log"

@@ -15,7 +15,7 @@ results; this is the mapping, kept so those remain readable.
 | T5.3 | **T2.5** | tetraploid SNV + indel (Cooke et al. 2022) | `claim2_T2.5_tetraploid.csv` |
 | T6a | **T3.1** | export vs SPAdes | `claim3_T3.1_T3.2_T3.3.csv` |
 | T6b | **T3.2** | coverage vs bwa+samtools+mosdepth | same CSV |
-| T6c | **T3.3** | query (no competitor exists) | same CSV |
+| T6c | **T3.3** | query (partial random access, reference-free coordinates) | same CSV |
 
 **Caution when reading old documents:** under the OLD scheme `T3` meant
 het-SNV; under the NEW scheme `T3.x` means Claim 3 (addressability). A bare
