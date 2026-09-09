@@ -32,7 +32,18 @@ DEC="${1:?usage: run_locus_fidelity.sh <capsule_decode> <archive> <ref.fa> [IND]
 ARC="${2:?}"; REF="${3:?}"
 IND="${4:-HG002}"; OUT="${5:-/tmp/t34_$IND}"; N="${6:-100}"
 TRUTH="$HOME/giab_truth/${IND}_GRCh37_1_22_v4.2.1_benchmark.vcf.gz"
-CHROM=20; LO=3000000; HI=3600000          # a window with dense GIAB truth
+# Window is overridable so the result can be shown NOT to depend on one region
+# -- the obvious objection to a single-window measurement.
+CHROM="${T34_CHROM:-20}"; LO="${T34_LO:-3000000}"; HI="${T34_HI:-3600000}"
+
+# WHY THE CONTROL IS INTERNAL (coordinate vs content on the SAME archive)
+# rather than an external tool: no other tool can produce a row of this table.
+# SPRING addresses by read INDEX, Genozip's --regions is refused on FASTQ for
+# want of coordinates, PgRC2/NanoSpring expose no read-out at all, and BEETL
+# returns reads CONTAINING a string rather than covering a locus. CRAM could,
+# but only with an external reference, which is a different experiment. The
+# internal control is therefore not a convenience -- it is the only comparison
+# that exists, and it is the strict one, since both arms share an archive.
 PAR="${T34_PAR:-6}"                        # correctness only: parallel is safe
 
 # Resolve to absolute paths BEFORE the cd below. The script cd's into its
@@ -95,7 +106,7 @@ import sys
 IND=sys.argv[1]
 comp={'A':'T','C':'G','G':'C','T':'A'}
 def rc(s): return "".join(comp.get(c,'N') for c in reversed(s))
-sb=so=sn=cb=co=cn=0; SR=SA=0; n=0
+sb=so=sn=cb=co=cn=0; SR=SA=0; n=0; one_locus=0; multi_same=0
 for line in open("probes.tsv"):
     pos,r,a,probe,v=line.rstrip("\n").split("\t"); v=int(v); n+=1
     seqs=[]
@@ -129,6 +140,20 @@ for line in open("probes.tsv"):
     except FileNotFoundError: pass
     cb+= 1 if (cr and ca) else 0; co+= 1 if ((cr or ca) and not (cr and ca)) else 0
     cn+= 1 if not (cr or ca) else 0
+    # WHY did a site return only one allele? Two very different causes, and
+    # they matter differently: either the probe resolved only ONE locus (the
+    # assembly carries a single representative here, so the other haplotype is
+    # genuinely absent), or it resolved SEVERAL and they all agree (the
+    # parallel contigs exist but carry the same base). Recorded rather than
+    # left as an unexplained residue.
+    if (nr or na) and not (nr and na):
+        loci=set()
+        try:
+            for l in open(f"q/s_{pos}.fa"):
+                if l[0]=='>': loci.add(int(l.split("pos=")[1].split()[0])//100000)
+        except FileNotFoundError: pass
+        if len(loci)<=1: one_locus+=1
+        else: multi_same+=1
 print()
 print(f"======== T3.4 LOCUS RETRIEVAL FIDELITY — {IND} ========")
 print(f"{'addressing mode':24}{'both alleles':>14}{'one allele':>12}{'neither':>9}")
@@ -136,6 +161,7 @@ print(f"{'coordinate':24}{cb:>14}{co:>12}{cn:>9}")
 print(f"{'content (sequence)':24}{sb:>14}{so:>12}{sn:>9}")
 print(f"sites tested: {n}   content recovers both at {100*sb/max(n,1):.1f}%, coordinate at {100*cb/max(n,1):.1f}%")
 print(f"allele balance across all returned evidence: {SR} REF / {SA} ALT  (ratio {SA/max(SR,1):.2f})")
+if so: print(f"one-allele sites explained: {one_locus} resolved a SINGLE locus (other haplotype absent from the assembly), {multi_same} resolved SEVERAL loci that agree")
 print("=======================================================")
-print(f"T34,{IND},{n},{cb},{co},{cn},{sb},{so},{sn},{SR},{SA}")
+print(f"T34,{IND},{n},{cb},{co},{cn},{sb},{so},{sn},{SR},{SA},{one_locus},{multi_same}")
 PY
