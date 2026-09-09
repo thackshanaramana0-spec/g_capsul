@@ -531,3 +531,60 @@ of the two ratios.
 container header) against a run without it — **0.041%** of a 573,767,964 B
 archive. Claim 2's archive-path calling and Claim 3's addressability are paid
 for out of four hundredths of one percent.
+
+---
+
+## Addendum 2 — what Claim 3's novelty actually is, verified 2026-09-09
+
+Two statements this document and the scripts had been carrying were false and
+are removed: "no competitor exists" (SPRING `--decompress-range`, Genozip
+`--head=N`, BEETL-fastq sequence search, CRAM all do partial retrieval), and
+any framing that leads with speed (`genocat --head=100` is 0.19 s against our
+0.46 s -- Genozip is faster at raw extraction).
+
+### Verified by running the tools, not by reading source
+
+**PgRC2 offers no read-out but full decompression.** From `PgRC -h`: compress,
+`-d` decompress, `-o`, `-t`, and expert tuning flags. No export, query,
+coverage or region extraction. Note carefully: its source DOES keep per-read
+positions (`pseudogenome/readslist/`), so the correct claim is that it lacks
+the INTERFACE, not the data. A reviewer who knows PgRC2 will check this.
+
+**Retrieval is neighbourhood, not substring -- the real difference from
+BEETL-fastq.** 50 random 40 bp probes from the E. coli pseudogenome:
+
+    reads returned that do NOT contain the probe
+      median 38%   IQR 26-46%   min 0%   max 100%
+      excluding 4 repeat probes: 46 probes / 1692 reads -> 35.9%
+
+    The pooled figure (1.9%) is misleading: 4 probes landed in repeats and
+    returned >1000 reads each, nearly all containing the probe. Report the
+    median.
+
+A BWT text index returns only reads *containing* the query. The ~38% it cannot
+return are the reads overlapping the locus without spanning the probe -- the
+ones at the region's edges, which carry the alleles a caller needs.
+
+**Query cost is position-independent.** 0.46-0.50 s at offsets 0, 1 Mb, 3 Mb
+and 26.76 Mb of a 26.96 Mb pseudogenome. `genocat --head=N` is not: 0.19 s at
+N=100 rising to 0.83 s at N=2,000,000 against a 0.85 s full decode, because it
+reads sequentially from the start. SPRING's `--decompress-range 1 100` costs
+4.93 s against a 5.28 s full decode -- 93-99% of decoding everything.
+
+**Sequence query, added 2026-09-09.** `capsule_decode query` now accepts a DNA
+string as well as `START-END`. This matters because our offsets are
+pseudogenome offsets, not chromosome positions, so "give me BRCA1" previously
+required reintroducing a reference. Querying by sequence removes the coordinate
+system from the interface: the user supplies the gene or primer they already
+hold. The numeric form is byte-identical to before (11,523 reads on the same
+range, `cmp`-verified). A chromosome-coordinate overlay was considered and
+rejected -- it would need an external reference and break the reference-free
+property.
+
+### The statement that survives
+
+> Everyone else's archive stores what the reads SAY. Ours stores where they
+> SIT. The compressor had to assemble in order to compress, so the coordinate
+> system is a byproduct rather than an addition -- which is why locus
+> retrieval, per-base coverage and reference-free variant calling all come out
+> of the same structure, for 0.041% of the archive.
