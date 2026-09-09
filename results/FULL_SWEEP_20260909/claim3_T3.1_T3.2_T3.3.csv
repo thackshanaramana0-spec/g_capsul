@@ -1,0 +1,32 @@
+table,dataset,operation,ours_s,ours_peak_ram_kb,output_bytes,rows,baseline_tool,baseline_s,baseline_peak_ram_kb,speedup,status,note
+T3.3,DRR976266,query,1.57,248704,2174121,24348,none,,,,DONE,no competitor exists for coordinate-range retrieval
+T3.3,ERR12954017,query,0.20,45920,2193533,15744,none,,,,DONE,no competitor exists for coordinate-range retrieval
+T3.3,ERR17740259,query,0.57,212008,3199621,36328,none,,,,DONE,no competitor exists for coordinate-range retrieval
+T3.3,ERR5181310,query,0.50,98064,3754192,30510,none,,,,DONE,no competitor exists for coordinate-range retrieval
+T3.3,ERR552797,query,0.34,99664,1636156,10334,none,,,,DONE,no competitor exists for coordinate-range retrieval
+T3.3,HG002,query,6.27,1072748,1460485,16506,none,,,,DONE,no competitor exists for coordinate-range retrieval
+T3.3,HG003,query,6.17,1067580,1468698,16598,none,,,,DONE,no competitor exists for coordinate-range retrieval
+T3.3,HG004,query,6.77,1139908,1401715,15844,none,,,,DONE,no competitor exists for coordinate-range retrieval
+T3.3,HG005,query,10.15,2071044,1553639,11356,none,,,,DONE,no competitor exists for coordinate-range retrieval
+T3.3,SRR065390,query,12.11,1912072,1972866,30458,none,,,,DONE,no competitor exists for coordinate-range retrieval
+T3.3,SRR10676752,query,118.48,7227576,682895,4990,none,,,,DONE,no competitor exists for coordinate-range retrieval
+T3.3,SRR2584863,query,0.46,151692,2100529,23604,none,,,,DONE,no competitor exists for coordinate-range retrieval
+T3.3,SRR29296997,query,0.15,46348,1607448,18002,none,,,,DONE,no competitor exists for coordinate-range retrieval
+T3.3,SRR32429602,query,3.79,368164,3570373,40964,none,,,,DONE,no competitor exists for coordinate-range retrieval
+T3.3,SRR36741279,query,3.14,414056,1081420,16816,none,,,,DONE,no competitor exists for coordinate-range retrieval
+T3.3,SRR37283774,query,1.95,246772,1184092,18486,none,,,,DONE,no competitor exists for coordinate-range retrieval
+T3.3,SRR39257532,query,3.77,476020,641066,7184,none,,,,DONE,no competitor exists for coordinate-range retrieval
+T3.3,SRR40271341,query,0.20,71276,2470198,15082,none,,,,DONE,no competitor exists for coordinate-range retrieval
+T3.3,SRR554369,query,0.65,144676,1632385,25470,none,,,,DONE,no competitor exists for coordinate-range retrieval
+T3.1,ERR5181310,export,0.40,97952,12161407,2,SPAdes,51.73,5004392,129.3,DONE,
+T3.2,ERR5181310,coverage,0.15,71236,644549,22833,bwa+samtools+mosdepth,4.15,1193392,27.7,DONE,
+T3.1,SRR2584863,export,0.37,118164,27410150,2,SPAdes,205.04,5320344,554.2,DONE,
+T3.2,SRR2584863,coverage,0.33,208448,49788839,1861947,bwa+samtools+mosdepth,7.57,1222292,22.9,DONE,
+T3.1,SRR29296997,export,0.13,46512,10152200,2,SPAdes,83.95,1659560,645.8,DONE,
+T3.2,SRR29296997,coverage,0.11,68428,18636836,707845,bwa+samtools+mosdepth,2.53,476156,23.0,DONE,
+T3.1,SRR37283774,export,1.49,232460,46161187,2,SPAdes,380.88,6376480,255.6,DONE,
+T3.2,SRR37283774,coverage,0.56,297244,64037522,2333573,bwa+samtools+mosdepth,15.98,1398756,28.5,DONE,
+T3.1,DRR976266,export,0.70,145196,38675617,2,SPAdes,548.82,9387432,784.0,DONE,
+T3.2,DRR976266,coverage,1.49,300460,177388280,6275308,bwa+samtools+mosdepth,23.98,2009320,16.1,DONE,
+T3.1,HG002,export,5.67,925076,181556800,2,SPAdes,2678.83,11586416,472.5,DONE,
+T3.2,HG002,coverage,3.04,1465304,625464597,21315575,bwa+samtools+mosdepth,164.90,3559960,54.2,DONE,
