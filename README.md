@@ -41,7 +41,7 @@ purposes instead of discarding it after compression:
 
 - **Smallest lossless archive** on 19 real datasets, 55.0 GB of FASTQ: **19/19 wins against SPRING (−6.03% aggregate) and 19/19 against Genozip (−43.26%)**, with **57/57 archives decoded back to byte-identical input**
 - **Reference-free variant calling from the archive itself** — no FASTQ, no reference, no second assembly pass: het-SNV mean F1 **0.876** vs DiscoSNP++ 0.853 and Kmer2SNP 0.475, across four GIAB individuals
-- **Multi-allelic and tetraploid calling**: **21/26** multi-allelic sites recovered — a *complete* chr20 census — where DiscoSNP++ emits **zero** multi-allelic records in 3,989; and tetraploid SNV F1 **0.897** vs 0.782 from real HG003+HG004 reads, nothing simulated
+- **Multi-allelic and tetraploid calling**: **17/26** multi-allelic sites recovered — a *complete* chr20 census — where DiscoSNP++ emits **zero** multi-allelic records in 3,989; and tetraploid SNV F1 **0.897** vs 0.782 from real HG003+HG004 reads, nothing simulated
 - **Archive-native addressability**: pseudogenome export **129–784×** faster than SPAdes and per-base coverage **16–54×** faster than bwa+mosdepth — plus `query`, which resolves a heterozygous locus that **no coordinate can name** (see below)
 - **Byte-exact lossless**: sequence, read order, names, quality and line-3 mode all verified to reconstruct the original file, same MD5
 
@@ -158,7 +158,7 @@ regions, normalisation and scorer; only the caller differs.
 |---|---:|---:|---:|
 | het-SNV F1 (mean of 4 individuals) | **0.876** | 0.853 | 0.475 |
 | het-indel F1 (mean of 4) | **0.621** | 0.591 | not applicable (SNP-only by construction) |
-| multi-allelic sites recovered | **21 / 26** | **0 / 26** | not applicable |
+| multi-allelic sites recovered | **17 / 26** | **0 / 26** | not applicable |
 | tetraploid SNV F1 | **0.897** | 0.782 | not applicable |
 | tetraploid indel F1 | **0.597** | 0.553 | not applicable |
 

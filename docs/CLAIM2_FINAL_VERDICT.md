@@ -9,7 +9,7 @@
 > | Claim 1 | 14 datasets, various margins | **19/19 vs SPRING (−6.03%), 19/19 vs Genozip (−43.26%), 57/57 LOSSLESS** |
 > | het-SNV F1 | 0.890 | **0.876** (mean of 4 individuals, full chr20, called from the archive) |
 > | het-indel F1 | 0.637 / 0.666 | **0.621** |
-> | multi-allelic | 11/18 | **21/26**, a complete chr20 census; DiscoSNP++ 0 of 3,989 records |
+> | multi-allelic | 11/18 | **17/26**, a complete chr20 census (corrected 2026-09-10, was 21/26); DiscoSNP++ 0 of 3,989 records |
 > | tetraploid SNV | 0.836 | **0.897** |
 > | export vs SPAdes | 555–656x | **129–784x** |
 > | T3.4 coordinate | 0/400 | **81/400** (the 0 was our query emitting consensus, not reads) |

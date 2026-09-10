@@ -6,7 +6,7 @@
 > reconcile 5/111 with an earlier 11/18. That reconciliation has since been
 > done, and the window was replaced by a COMPLETE chr20 census:
 >
->     T2.4  21/26 (80.8%)  every SNV-only multi-allelic site on chr20
+>     T2.4  17/26 (65.4%)  every SNV-only multi-allelic site on chr20  [corrected 2026-09-10, was 21/26]
 >           DiscoSNP++  0 multi-allelic records in 3,989 records
 >
 > The 5/111 was meaningless because 104 of those 111 sites are indel-bearing

@@ -24,7 +24,7 @@ supersedes every size, F1 and speedup figure elsewhere in this document.
 |---|---|
 | Claim 1 COMPACT | **19/19 vs SPRING (−6.03%), 19/19 vs Genozip (−43.26%), 57/57 LOSSLESS** |
 | Claim 2 FAITHFUL | het-SNV mean F1 **0.876** vs DiscoSNP++ 0.853, Kmer2SNP 0.475 — **called from the archive**, no FASTQ, no reference |
-| | het-indel 0.621 vs 0.591 · multi-allelic **21/26** vs **0/26** (complete chr20 census) · tetraploid SNV **0.897** vs 0.782 |
+| | het-indel 0.621 vs 0.591 · multi-allelic **17/26** vs **0/26** (complete chr20 census, corrected 2026-09-10) · tetraploid SNV **0.897** vs 0.782 |
 | Claim 3 ADDRESSABLE | export **129–784×** vs SPAdes · coverage **16–54×** vs bwa+mosdepth · locus retrieval **345/400** by content vs **81/400** by coordinate |
 
 **Rule, and it decides every disagreement: where a document and a result file
@@ -46,9 +46,13 @@ regenerate it disagree, re-run the script.** Nothing was typed in from memory.
 - **T3.4 coordinate was published as 0/400. It is 81/400.** The 0 was an
   artifact of our own query emitting the consensus rather than the reads.
   A 4.3× gap, not an infinite one. Any doc saying 0/400 is superseded.
-- **T2.4's "5/111" and "11/18" are both withdrawn.** 5/111 scored 104
-  indel-bearing sites a single-base check cannot evaluate; 11/18 is
-  unreproducible. The answer is 21/26.
+- **T2.4's "5/111", "11/18", and "21/26" are all withdrawn.** 5/111 scored
+  104 indel-bearing sites a single-base check cannot evaluate; 11/18 is
+  unreproducible; 21/26 (published earlier this session) had no supporting
+  raw log and could not be reproduced on re-derivation -- three independent
+  runs all gave 17/26 instead, with identical intermediate counts each time.
+  The verified answer is **17/26**. See
+  `benchmark/documentation/T2.4_reproduction_20260910/README.md`.
 
 Inventories, because the tree is bigger than the live surface:
 `benchmark/documentation/SCRIPT_INVENTORY.md` (55 scripts, 17 live) and

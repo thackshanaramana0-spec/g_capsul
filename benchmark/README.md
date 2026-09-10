@@ -31,7 +31,7 @@ script in `scripts/` and land in a file in `results/`.**
 | T2.1 | FAITHFUL | het-SNV mean F1 **0.876** / 0.853 / 0.475 — 3 wins, 1 loss | `claim2_T2.1_snv.csv` |
 | T2.2 | FAITHFUL | 10× 0.487 → 30× 0.888, monotone | `claim2_T2.2_coverage_sweep.csv` |
 | T2.3 | FAITHFUL | het-indel, 3 wins 1 loss vs DiscoSNP++ | `claim2_T2.3_indel.csv` |
-| T2.4 | FAITHFUL | **21/26** (complete chr20 census); DiscoSNP++ 0 of 3,989 records | `claim2_T2.4_multiallelic.csv` |
+| T2.4 | FAITHFUL | **17/26** (complete chr20 census, corrected 2026-09-10 -- see `documentation/T2.4_reproduction_20260910/`); DiscoSNP++ 0 of 3,989 records | `claim2_T2.4_multiallelic.csv` |
 | T2.5 | FAITHFUL | tetraploid SNV **0.897**/0.782, INDEL **0.597**/0.553 | `claim2_T2.5_tetraploid.csv` |
 | T3.1/3.2/3.3 | ADDRESSABLE | export 129–784×, coverage 16–54×, query ×19 | `claim3_T3.1_T3.2_T3.3.csv` |
 | T3.4 | ADDRESSABLE | coordinate **81/400**, content **345/400** | `claim3_T3.4_locus_fidelity.csv` |

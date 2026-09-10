@@ -49,9 +49,12 @@ T2.4 multi-allelic (HG002 chr20:1-6Mb, 111 truth sites)
 
     CURRENT -- complete chr20 census, strict metric scored only on the sites a
     single-base comparison can actually evaluate:
-      both ALT alleles recovered:  ours 21/26 (80.8%)   DiscoSNP++ 0/26
+      both ALT alleles recovered:  ours 17/26 (65.4%)   DiscoSNP++ 0/26
       DiscoSNP++ emits ZERO multi-allelic records in 3,989 total records.
     The 5/111 counted 104 indel-bearing sites as misses BY CONSTRUCTION.
+
+    CORRECTED 2026-09-10: this entry previously read 21/26. Withdrawn as
+    unreproduced -- see benchmark/documentation/T2.4_reproduction_20260910/.
     Both recorded because they disagree in DIRECTION. The strict metric is
     what the claim asserts; DiscoSNP++'s 0 is the documented structural result.
 

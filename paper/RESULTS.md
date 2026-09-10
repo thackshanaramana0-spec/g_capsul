@@ -103,8 +103,15 @@ model, so the blank is a property of the tool, not a gap in the benchmark.
 
 ### T2.4 — multi-allelic sites
 
-**21 / 26 (80.8%)** — and **26 is the complete census** for chr20, every
+**17 / 26 (65.4%)** — and **26 is the complete census** for chr20, every
 SNV-only multi-allelic site there is, not a sample.
+
+> **Corrected 2026-09-10.** Published earlier as 21/26. Withdrawn during a
+> reproducibility audit: no raw log on this server supported that figure, and
+> three independent re-derivations (two encoder builds, one exact repeat)
+> each gave 17/26 with identical intermediate counts. The denominator (26)
+> is independently confirmed and unaffected.
+> `benchmark/documentation/T2.4_reproduction_20260910/README.md`.
 
 **DiscoSNP++ recovers 0 of 26**, because across its entire 3,989-record output
 it emits no record with more than one ALT allele. That is a structural inability,

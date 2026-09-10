@@ -156,11 +156,14 @@ or corrected. Current status:**
   is the mechanism's own complement: variants stored as per-read deviations
   rather than as separate contigs. `query` now applies those deviations and
   returns true reads, and the residue is 13.8%.
-- **T2.4: RECONCILED and quotable.** 21/26 (80.8%), where 26 is every SNV-only
+- **T2.4: RECONCILED and quotable.** 17/26 (65.4%), where 26 is every SNV-only
   multi-allelic site on chr20 -- a complete census, not a sample. DiscoSNP++
   emits ZERO multi-allelic records in 3,989 output records: structural, not a
   miss. The old "5/111" scored 104 indel-bearing sites that a single-base check
   cannot evaluate; the "11/18" denominator is unreproducible and is withdrawn.
+  **A THIRD figure, 21/26, was also published and withdrawn (2026-09-10):**
+  no raw log supported it, and three independent re-derivations all gave
+  17/26. See `benchmark/documentation/T2.4_reproduction_20260910/README.md`.
 - **HG005: EXPLAINED.** Not a precision collapse of unknown origin. HG005 is
   the only variable-length dataset -- 250 bp quality-trimmed, 216 distinct
   lengths, against 148 bp fixed for HG002/3/4. Truncated to fixed 148 bp the

@@ -23,7 +23,7 @@ copies agree:
 
 | table | why re-measured | value now in both copies |
 |---|---|---|
-| T2.4 | the windowed 5/111 scored 104 indel-bearing sites a single-base check cannot evaluate | **21/26**, complete chr20 census |
+| T2.4 | the windowed 5/111 scored 104 indel-bearing sites a single-base check cannot evaluate | **17/26**, complete chr20 census (corrected 2026-09-10, was 21/26 -- see `T2.4_reproduction_20260910/`) |
 | T3.4 | our query emitted the consensus, so no allele difference could appear | coordinate **81/400**, content **345/400** |
 
 ## Everything else, and what it actually is
