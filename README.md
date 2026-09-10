@@ -82,6 +82,7 @@ your machine right now. Full detail: `industry/README.md`.
 
 | you want | go to |
 |---|---|
+| **whether the numbers were audited** | **[`AUDIT.md`](AUDIT.md)** — every table's verification status, one correction, and what the audit did NOT establish |
 | the results, as executed | [`benchmark/results/`](benchmark/results/) — 8 CSVs, one run |
 | **where any number came from** | [`benchmark/documentation/RESULT_CODE.md`](benchmark/documentation/RESULT_CODE.md) |
 | to re-run it all yourself | [`benchmark/documentation/REPRODUCE_EVERYTHING.md`](benchmark/documentation/REPRODUCE_EVERYTHING.md) |

@@ -1,6 +1,6 @@
 # MANIFEST.sha256 — checksums of every file a published number depends on
 #
-# Generated 2026-09-10 14:43:35 UTC at commit e1850b66defba1005cc1a1d27d6de1f9feb3e61b.
+# Generated 2026-09-10 14:58:39 UTC at commit 0f7a145ea50d93e0df05c86f81baf7863c4d5fab.
 # Verify with: sha256sum -c benchmark/documentation/MANIFEST.sha256
 # from the repository root -- including on a FRESH CLONE. Generate ONLY
 # from 'git ls-files' (a 2026-09-10 bug pulled in a concurrent agent's
@@ -8,8 +8,9 @@
 #
 # Regenerate with:
 #   cd $(git rev-parse --show-toplevel)
-#   git ls-files benchmark/results benchmark/documentation paper stages include \
-#     | grep -E '\.(csv|txt|md|cpp|h|log|vcf)$' | grep -v MANIFEST.sha256 | sort | xargs sha256sum
+#   { git ls-files benchmark/results benchmark/documentation paper stages include \
+#       | grep -E '\.(csv|txt|md|cpp|h|log|vcf)$' | grep -v MANIFEST.sha256; \
+#     git ls-files AUDIT.md README.md CLAUDE.md; } | sort | xargs sha256sum
 #
 4b7c369c7f7a7dddfd48df3f42847309f01afe76fb2f387efed9676c8e5a25d6  benchmark/documentation/CLAIM2_RESULTS_V2.md
 f5bb72efa185f9d26aaa90cd4270a9d80936ed214d104ab02474be67b359064b  benchmark/documentation/CLAIM2_TABLES_AND_INDEL_SCAN.md
@@ -52,6 +53,7 @@ d5a9203c579b0ac7dccb8abb558715e075baad959f954e936add169003b93725  benchmark/resu
 f29911567cd390fb25eb217f911bb6dda471115109ef3fefc9ac9be4e5577d38  benchmark/results/claim3_T3.4_locus_fidelity.csv
 45e10abcc87203d8e7860e965e4677b1840d90a0cc4d0037a208082a8dfb68a8  benchmark/results/PROGRESS.txt
 c7c993c851e0d394f842fbd8194b7e8bdc39145e7150b727092478cef54af4ce  benchmark/results/run.log.txt
+7bbf68e5a1ba8fa9f29841eda0d7ea424264db7ad641f437895b59c6a876404e  CLAUDE.md
 17c5ec6f8699baa0748177743d0f52cc2a968dd4bcce11b70365348c1018fb70  include/caps_caller.h
 c6c6599a00c9d2f991b0c18dde05f9c6090d1abfc6e64e9b66699b204c05a879  include/caps_pack.h
 948d8f5a6345395c712a50761ff36ed60c47dc2b097c82ee4dbd60f7c52357d7  include/coders_inproc.h
@@ -69,9 +71,10 @@ d2c709f22f0d4503df33647b9d50419eff4863fdfca5889a2c510f066d711416  paper/COMPRESS
 605d4ec48c25fd599a7c917b950657ed66c0838c3612f2f00fe0af648fcca684  paper/LIMITATIONS.md
 bd7c5d88e28f8107491c34ccabfe1387a7fb6c4e959d03788703d8ac61c41740  paper/METHODS.md
 2228d33bd4075cebdc2ef1106263c51a8d55806dcc7aed42fc6872beb4722e6c  paper/NOVELTY_FINAL.md
-9506c5477656e2628ce22b68a553bf8389c5b6e4c3762bf471389302387aeb08  paper/PAPER.md
+affbfc459a5f59ceb72014f40d4e690a1a995c580c3816aba76146e10da7a603  paper/PAPER.md
 f865fac110db59d5ad666f08c034c16cc0f880507642df61ca65ced1c5eaeb84  paper/PIPELINE.md
 d0386314966ed13621f08145fb85bd91c1efe419eb5da16524319e7cf17860ba  paper/RESULTS.md
+0c24ce10688c509c7f5712ee3f0bfeb8caf8884f22f0bb73f4b2dc0d56594dad  README.md
 d4f8031a479e99b09205649dc3492a0e03f9d40d813398c264bf641002883d00  stages/01_greedy_exact.cpp
 3a51af6b6c61e5c7b2e29e9b0a2497a8d1a06a89b2123e355fd0ee958d234173  stages/02_minimizer_tolerant.cpp
 490b9ae0281f3432ada1d9a8bf5889ddf70b24708d0b60b9a171200260ecb042  stages/03_pigeonhole_mapping.cpp

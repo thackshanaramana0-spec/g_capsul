@@ -94,6 +94,10 @@ the mechanism: adding a coordinate API would not work, and 81/400 measures why.
 
 ## What a reviewer should check first
 
+0. **[`../AUDIT.md`](../AUDIT.md)** — read this first if you want to know how
+   far to trust the numbers below. Every table's verification status, the one
+   figure this audit withdrew (T2.4, 21/26 → 17/26), and an explicit list of
+   what the audit did *not* establish.
 1. **`../scripts/test_0_scope_and_capability.sh`** — run this before anything
    else. Self-contained (no locked dataset needed), it states this build's
    exact scope — short-read only, up to 1023 bases, no long-read technology —
@@ -105,8 +109,9 @@ the mechanism: adding a coordinate API would not work, and 81/400 measures why.
    `CLAIMS=1 bash benchmark/scripts/sanity_archive_one.sh SRR2584863`
    → archive **68,429,027 B exactly**, 3/3 LOSSLESS. Verified byte-identical
    across 2/3/7/12 cores. A different size on any machine is a real regression.
-3. **`LIMITATIONS.md`** — including the two corrections we made against
-   ourselves (T3.4's 0/400 → 81/400, and het-indel's withdrawal → 3-win).
+4. **`LIMITATIONS.md`** — including the corrections we made against ourselves
+   (T3.4's 0/400 → 81/400, het-indel's withdrawal → 3-win, and T2.4's
+   21/26 → 17/26).
 
 ## Provenance
 
