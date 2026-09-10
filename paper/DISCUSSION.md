@@ -1,5 +1,9 @@
 # DISCUSSION — what this work claims, against the field that already exists
 
+> **Status:** frozen 2026-09-10 at tag `v1.0-capsule` — code and results final.
+> Authoritative numbers live in `../benchmark/results/`; verification status in
+> [`../AUDIT.md`](../AUDIT.md). Where this file and a result file disagree, the result file wins.
+
 Condensed from the project's literature record: `docs/NOVELTY_FINAL.md`,
 `docs/CLAIM3_PRIOR_ART.md`, `docs/HET_INDEL_SOTA.md`,
 `docs/EBWT_LITERATURE_CORRECTION.md`, `docs/NOVELTY_SCAN_DBG_CHANNEL.md`,

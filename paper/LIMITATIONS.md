@@ -1,5 +1,9 @@
 # LIMITATIONS — what this work does not establish
 
+> **Status:** frozen 2026-09-10 at tag `v1.0-capsule` — code and results final.
+> Authoritative numbers live in `../benchmark/results/`; verification status in
+> [`../AUDIT.md`](../AUDIT.md). Where this file and a result file disagree, the result file wins.
+
 Written from the measurements, not from caution. Each item states the limit, the
 evidence for it, and whether a cause is known. Nothing here is hedging language
 around a result that is actually fine; every entry is a real boundary.

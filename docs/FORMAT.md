@@ -1,5 +1,9 @@
 # The G_CAPSUL archive format (version 2)
 
+> **Status:** frozen 2026-09-10 at tag `v1.0-capsule` — code and results final.
+> Authoritative numbers live in `../benchmark/results/`; verification status in
+> [`../AUDIT.md`](../AUDIT.md). Where this file and a result file disagree, the result file wins.
+
 Read directly from `read_capsule()` in `stages/capsule_decode.cpp` and the
 emission sites in `stages/106_inprocess.cpp`. All integers are little-endian.
 An implementation that follows this document can read a `.capsule` without

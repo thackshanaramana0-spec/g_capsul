@@ -542,7 +542,7 @@ candidates are graph-traversal *hypotheses* that can be unsupported by any
 single read; ours cannot be. Four filter attempts confirmed this
 empirically (net negative or neutral, every time) — closing the gap
 requires a different candidate *generator* (both-ends k-mer anchoring, the
-eBWT/dBG route in `docs/CALLER_ARCHITECTURE_PLAN.md`), not another filter
+eBWT/dBG route in `docs/_removable/CALLER_ARCHITECTURE_PLAN.md`), not another filter
 on top of the current one.
 
 ### 9.6 Testing

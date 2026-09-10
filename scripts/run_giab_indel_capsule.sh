@@ -16,7 +16,7 @@ VCFURL="$FTP/HG002_GRCh37_1_22_v4.2.1_benchmark.vcf.gz"
 BEDURL="$FTP/HG002_GRCh37_1_22_v4.2.1_benchmark_noinconsistent.bed"
 
 # 1. CAPSULE reference-free call + dump contigs (fixed MAXMAP/MINOV, not the
-#    encode_adaptive.sh sweep -- see docs/CLAIM2_BUILDER.md for why).
+#    encode_adaptive.sh sweep -- see docs/_removable/CLAIM2_BUILDER.md for why).
 log "[1/6] running CAPSULE caller (CAPS_CALL=1) on $READS..."
 export CAPS_CALL=1 CALL_VCF="$WD/calls.vcf" CAPS_DUMP_CONTIGS="$WD/contigs.tsv"
 if [ -s calls.vcf ]; then

@@ -1,5 +1,9 @@
 # Architecture, layer by layer: G_CAPSUL vs DiscoSNP++
 
+> **Status:** frozen 2026-09-10 at tag `v1.0-capsule` — code and results final.
+> Authoritative numbers live in `../benchmark/results/`; verification status in
+> [`../AUDIT.md`](../AUDIT.md). Where this file and a result file disagree, the result file wins.
+
 Third column answers one question only: **is this layer textbook (free to any
 implementer), theirs (a DiscoSNP++/GATB design decision we adopted), or ours?**
 Written from `~/DiscoSnp/tools/kissnp2/src/*.cpp` and our own source.

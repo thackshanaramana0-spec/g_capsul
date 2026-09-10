@@ -1,5 +1,9 @@
 # Claim 3's mechanism: a heterozygous locus is not one place
 
+> **Status:** frozen 2026-09-10 at tag `v1.0-capsule` — code and results final.
+> Authoritative numbers live in `../benchmark/results/`; verification status in
+> [`../AUDIT.md`](../AUDIT.md). Where this file and a result file disagree, the result file wins.
+
 
 **Discovered and verified 2026-09-09 on HG002 chr20 against GIAB v4.2.1 truth.**
 This supersedes the earlier framing of Claim 3 as speed or as "nobody else

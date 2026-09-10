@@ -11,7 +11,7 @@ cd "$WD"
 
 # 1. CAPSULE reference-free call (fixed MAXMAP/MINOV — NOT encode_adaptive.sh's
 #    4-candidate sweep, which would race 4 writers on the same CALL_VCF path;
-#    see docs/CLAIM2_BUILDER.md). Args after reads.fq are the standard
+#    see docs/_removable/CLAIM2_BUILDER.md). Args after reads.fq are the standard
 #    ENC_ARGS positional set (3 16 16 22 16 16 1 24 64 1).
 export CAPS_CALL=1 CALL_VCF="$WD/calls.vcf" CAPS_DUMP_CONTIGS="$WD/contigs.tsv"
 "$CAPS" reads.fq 3 16 16 22 16 16 1 24 64 1 > /dev/null 2> capsule_call.log

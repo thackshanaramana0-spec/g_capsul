@@ -291,7 +291,7 @@ through the caller -- Method B skips `build_substrate` entirely, so the seed
 index, the placement scan and the collapse set (the three biggest levers above)
 do not run at all there.
 
-The competitive picture, from `docs/INDEL_PASS_SPEED_PLAN.md` and
+The competitive picture, from `docs/_removable/INDEL_PASS_SPEED_PLAN.md` and
 `docs/COMPRESSION_DERIVED_CALLING.md`:
 
 | | wall | RAM | SNV F1 |

@@ -77,7 +77,7 @@ Two findings that matter more than the ranking:
    exactly the mistake this document originally made.
 2. **G_CAPSUL beats ARCS's shipped default** (0.419 vs 0.000) because the
    cross-contig bubble pass is default-ON here and off there — the finding
-   recorded in `docs/CLAIM2_BUILDER.md`. Against ARCS with that same pass
+   recorded in `docs/_removable/CLAIM2_BUILDER.md`. Against ARCS with that same pass
    enabled, G_CAPSUL still loses 0.419 vs 0.771. The honest gap is **0.771 vs
    0.419 on equal footing**, not 0.954 vs 0.419.
 
@@ -116,7 +116,7 @@ both haplotypes co-occupy one contig and het sites appear as pileup columns.
 G_CAPSUL's exact-overlap chaining splits them instead. **Same caller, same
 frozen parameters, different assembly — and the assembly is the whole
 difference.** This confirms, from the opposite direction, the finding
-recorded in `docs/CLAIM2_BUILDER.md`.
+recorded in `docs/_removable/CLAIM2_BUILDER.md`.
 
 ## The "contigs are too short" hypothesis — MEASURED AND REFUTED
 

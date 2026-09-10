@@ -83,7 +83,7 @@ sequence before the test becomes informative.
 the candidate generator itself to propose fewer bad bubbles** — i.e. a
 bubble anchored at both ends by shared k-mers, rather than a pair of contigs
 sharing one 25-mer anchor with 15 bp flank checks. That is a substrate change
-(the eBWT or dBG route in `docs/CALLER_ARCHITECTURE_PLAN.md`), not another
+(the eBWT or dBG route in `docs/_removable/CALLER_ARCHITECTURE_PLAN.md`), not another
 filter.
 
 ## 5. Is the win generalized?
