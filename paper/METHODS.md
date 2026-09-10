@@ -203,6 +203,16 @@ not one place but **N parallel places** — median 4, two haplotypes × two
 strands — measured **up to 18.6 Mb apart**. A coordinate therefore names one
 of them and returns a single haplotype, with the variation gone.
 
+**This is not a missing feature, and no API can patch it.** The fragmentation
+is not in the read-out layer — it is in the representation the compressor
+chose, and it was chosen because it is the one that costs fewest bits. A
+coordinate is a single integer into a single frame; the locus has no single
+frame to be an integer into. Exposing a richer coordinate call, adding a
+locus-to-offset table, or indexing the pseudogenome harder all answer the same
+malformed question faster. The only fix is to address the archive by *content*,
+which is a different question, and 81/400 against 345/400 is the size of the
+difference between the two.
+
 Measured on 400 GIAB het SNV sites across four individuals, both addressing
 modes against the **same archive and the same sites** — an internal control,
 because no other tool can produce a row of this table:
@@ -227,9 +237,9 @@ at a locus here do not contain the probe (n=50). CRAM can answer a locus, but
 only after aligning to an external reference, which is a different experiment.
 
 **What this does not claim.** Not speed: `genocat --head=100` extracts in
-0.19 s against 0.46 s here. The claim is that the question can be asked at all,
-and that adding a coordinate API would not have answered it — 81/400 is what
-that failure measures.
+0.19 s against 0.46 s here. The claim is that the question can be asked at all
+of a reference-free archive, and — per the mechanism above — that it cannot be
+asked by coordinate.
 
 ### The sidecar, and the limit it works around
 
