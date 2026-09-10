@@ -1,5 +1,12 @@
 # ARCS Benchmark Dataset — FINAL LOCKED 2026-08-25
 
+> **This is NOT the locked set for this repository.** This is the outer ARCS
+> project's 17-accession list, copied in for reference. G_CAPSUL/CAPSULE is
+> governed by [`NEW_DATASET_LOCKED.md`](NEW_DATASET_LOCKED.md) — 15 non-human
+> accessions plus the 4 GIAB human chr20 sets, 19 in total, which is what the
+> published tables in `benchmark/results/` contain. Do not count or cite from
+> this file for CAPSULE results.
+
 **DO NOT CHANGE THIS FILE.** All accessions verified via NCBI SRA/DDBJ 2026-08-25.
 
 **2026-08-30 addendum: 7 datasets added, deliberately, per explicit user
