@@ -827,6 +827,19 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
             std::sort(ranges.begin(),ranges.end());
             fprintf(stderr,"[query] sequence of %zu bp -> %zu occurrence(s) in the pseudogenome\n",
                     q.size(), ranges.size());
+            // A probe inside a repeat family resolves to many loci. That is the
+            // correct answer -- the sequence really does occur there -- and it
+            // is cheap: the worst case measured on HG002 (a 12 bp probe, 2,029
+            // loci, 22,371 reads) cost 3.9 MB of output and 15.7 s, with RAM
+            // flat because it is dominated by loading the pseudogenome. So this
+            // is NOT capped: silently truncating would turn a correct answer
+            // into an arbitrary one. It is flagged instead, because a caller
+            // could otherwise read a repeat hit as a specific locus.
+            if(ranges.size() > 32)
+                fprintf(stderr,"[query] NOTE: %zu loci -- this sequence is repetitive, so the "
+                               "reads returned span many places. A longer probe is more "
+                               "specific (measured on HG002: 12bp->2029 loci, 40bp->76, "
+                               "100bp->2).\n", ranges.size());
             if(ranges.empty()){
                 fprintf(stderr,"[query] not found -- no reads emitted. A long query may "
                                "carry a sequencing error; try a 30-60 bp sub-sequence.\n");
