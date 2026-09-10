@@ -22,6 +22,34 @@ Raw log: `benchmark/results/run.log.txt`. Checkpoints:
 `benchmark/results/PROGRESS.txt`. Preflight verdict:
 `benchmark/results/benchmark_0_status.txt`.
 
+**Code changes after the sweep, and whether they affect any published
+number.** Three commits landed after `21ee619` and before this document's
+current revision, each fixing a defect in how the encoder handles input
+*outside* the locked 19-dataset set (an unconditional refusal on reads past
+1023 bases, a `std::thread` teardown crash exposed while fixing that, and a
+names-tokenizer bound on pathological headers — see `industry/README.md` for
+the full account and `paper/LIMITATIONS.md` §0):
+
+    b28dd40  the three defect fixes
+    478a241  scope self-test + industry/ safety layer
+    7410a6a  paper documentation of the scope decision
+
+**None of them changes a single published number.** Verified directly, not
+assumed: the canonical checkpoint
+(`CLAIMS=1 bash benchmark/scripts/sanity_archive_one.sh SRR2584863`) reproduces
+**68,429,027 B, byte-identical**, both before and after all three commits, and
+the fixes only ever engage on input that fails a condition none of the 19
+locked datasets meet (every read in every locked dataset is well under the
+structural bound; every header is far short of the tokenizer bound). The
+manifest below fixes the exact file states this applies to.
+
+**File integrity.** `benchmark/documentation/MANIFEST.sha256` lists a SHA-256
+for every file a published number depends on — every results CSV and log,
+every paper document, and the encoder/decoder source itself. Verify with
+`sha256sum -c benchmark/documentation/MANIFEST.sha256` from the repository
+root; a mismatch means something changed after the manifest was generated and
+should be investigated before trusting any number here.
+
 ---
 
 ## Claim 1 — COMPACT

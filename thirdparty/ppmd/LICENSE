@@ -1,0 +1,21 @@
+PPMd variant H (Ppmd7*), as distributed in the LZMA SDK
+=========================================================
+
+Public domain.
+
+From the source headers (Ppmd7.c, Ppmd7aDec.c, Ppmd7Dec.c, Ppmd7Enc.c):
+
+    2023-09-07 : Igor Pavlov : Public domain
+    This code is based on PPMd var.H (2001): Dmitry Shkarin : Public domain
+
+Vendored unmodified from the 7-Zip / LZMA SDK (https://www.7-zip.org/sdk.html)
+for use as one of this project's general-purpose stream coders
+(`include/coders_pgrc.h`), selected automatically per stream by
+`best_encode` when it produces the smallest result — see
+`paper/ARCHITECTURE.md` §3.
+
+Added for consistency with `thirdparty/fse/LICENSE` and
+`thirdparty/htscodecs/LICENSE.md`, which document the same fact for this
+project's other two vendored dependencies: no code in `thirdparty/` is
+included without its licensing being stated in its own directory, not only
+inline in a header comment.
