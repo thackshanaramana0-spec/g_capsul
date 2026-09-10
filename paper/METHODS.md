@@ -19,12 +19,30 @@ proves *what it produced*.
 
 ### Attribution: the pseudogenome is PgRC's idea, and it is cited as such
 
-**The central data structure of this compressor — a *pseudogenome* assembled
-from the reads by greedy suffix-prefix overlap, onto which the remaining reads
-are mapped — is not ours. It is PgRC's** (Grabowski & Kowalski, *Bioinformatics*
-36(7):2082, 2020; PgRC2, Kowalski & Grabowski, *Bioinformatics* 41(3), 2025).
-This work is in that lineage and says so plainly; any claim here that reads as
-"we invented compressing reads onto an assembled pseudogenome" would be false.
+Attribution here has to be split three ways, because collapsing it in either
+direction would be inaccurate:
+
+| layer | whose |
+|---|---|
+| **Assembly-based read compression** — assemble the reads, then store each read as a position in the assembly | **Quip** (Jones et al., *NAR* 40(22):e171, 2012), the first. Eight years before PgRC. |
+| **The component algorithms** — greedy shortest-common-superstring by suffix-prefix overlap, and q-gram/pigeonhole read-to-reference matching | **Textbook.** Both long predate every tool named here and are free to any implementer. |
+| **The *pseudogenome* specifically** — one concatenated sequence built by that greedy chaining, with the reads that fail to chain mapped onto it and a divided remainder handled separately | **PgRC's** (Grabowski & Kowalski, *Bioinformatics* 36(7):2082, 2020; PgRC2, Kowalski & Grabowski, *Bioinformatics* 41(3), 2025). This is the design this work follows. |
+
+So: the paradigm is Quip's, the primitives are textbook, and **the specific
+architecture is PgRC's**. Any reading of this work as "we invented compressing
+reads onto an assembled pseudogenome" would be false, and it is stated here
+rather than left to inference.
+
+**We do not, however, use their construction.** Their sweep was implemented
+here and measured against ours (`docs/REIMPL_NOTES.md`, stage 39): PgRC2 finds
+its overlaps with a parallel sort and a serial merge, which needs **11× fewer
+comparisons** than the hash sweep used here — and ran **3.2× slower** on this
+machine, because the merge's per-level maintenance is inherently sequential
+while a hash sweep is embarrassingly parallel across 12 cores. Their algorithm
+is better; ours is better *on this hardware*, and the measurement is recorded
+either way. Their quality-based HQ/LQ division is also **inactive by default in
+their own released binary** — the division that does the work in both tools is
+structural, computed from round-1 chain topology.
 
 **What was done independently, and why.** PgRC2 is GPL-3. To keep this
 repository MIT-licensable, no PgRC2 source is included or linked — its
