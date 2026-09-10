@@ -63,6 +63,13 @@ CAPS_CALL=1 CALL_VCF=out.vcf /tmp/capsule reads.fq 3 16 16 22 16 16 1 24 64 1
 # Claim 2 graph caller alone (Method B), for head-to-head benchmarking
 CAPS_CALL=1 CAPS_DBG=1 CAPS_DBG_ONLY=1 CALL_VCF=out.vcf \
   /tmp/capsule reads.fq 3 16 16 22 16 16 1 24 64 1
+
+# Claim 2 calling FROM AN EXISTING ARCHIVE (no FASTQ read) -- what T2.1/T2.3/
+# T2.4/T2.5 actually run. CAPS_CALL_INDELS=1 is REQUIRED: without it the
+# decoder's `call` subcommand takes the graph-only (SNV-only) path silently --
+# not an error, just a different, narrower configuration -- and every
+# published het-indel, multi-allelic and tetraploid number depends on it.
+CAPS_CALL_INDELS=1 /tmp/capsule_decode call archive.capsule out.vcf callwk/
 ```
 
 Benchmarks:
