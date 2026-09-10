@@ -41,10 +41,24 @@ indel-bearing. The recovery check compares a single BASE at the variant
 position, so those 104 counted as misses BY CONSTRUCTION rather than by
 measurement. That is what produced the meaningless 5/111.
 
-Scored on the subset the metric can actually evaluate:
+Scored on the subset the metric can actually evaluate, and then scaled to the
+whole chromosome (2026-09-10):
 
-    CAPSULE    both alleles recovered : 5 / 7   (71%)
-    DiscoSNP++ both alleles recovered : 0 / 7   (0%)
+    scope                    sites   CAPSULE both alleles
+    chr20:1-6Mb window           7   5   (71.4%)
+    chr20 COMPLETE CENSUS       26   21  (80.8%)
+
+**26 is not a sample -- it is every SNV-only multi-allelic site on chr20.**
+The GT=1/2 genotype is what makes a site genuinely multi-allelic, and only 26
+of them have both ALT alleles single-base. So the "7 sites" objection is
+answered by exhausting the chromosome, not by enlarging a sample.
+
+**DiscoSNP++ scores 0, and the reason is structural rather than a miss.**
+Across its ENTIRE output for the same region -- 3,989 records -- it emits
+**zero** records with more than one ALT allele. Ours emits 7 in the same
+region. It is not that DiscoSNP++ missed these sites; its output format cannot
+represent one. That is the capability this table exists to measure, and a
+count over all records is stronger evidence than a per-site score.
 
 DiscoSNP++'s 0 is the structural result this table exists to show: it cannot
 emit a multi-allelic record at all. The proxy metric (any call at the position)

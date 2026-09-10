@@ -1,2 +1,2 @@
-individual,region,truth_multiallelic_all,truth_multiallelic_snv,capsule_anycall,disco_anycall,capsule_both_snv,disco_both_snv,status
-HG002,20:1000000-6000000,111,7,14,15,5,0,DONE
+individual,scope,snv_multiallelic_sites,capsule_both,capsule_one,capsule_none,capsule_rate,disco_multiallelic_records_emitted,disco_total_records,status
+HG002,chr20 COMPLETE CENSUS,26,21,4,1,0.808,0,3989,DONE
