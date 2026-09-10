@@ -1,21 +1,41 @@
 # MANIFEST.sha256 — checksums of every file a published number depends on
 #
-# Generated 2026-09-10 12:55:28 UTC at commit 7410a6a9aeb42e7d493ab3068993d3c0dfdfd535.
+# Generated 2026-09-10 13:03:28 UTC at commit b4c71e6ee6155aba1b54fc3050ede4f6de4a2f99.
 # Verify with: sha256sum -c benchmark/documentation/MANIFEST.sha256
-# from the repository root. A mismatch means a results file, a paper
-# or traceability document, or the code that produced them changed
-# after this manifest was generated -- re-derive it before trusting
-# any published number again.
+# from the repository root -- including on a FRESH CLONE (this is the
+# point of the manifest: every path below must be a file git actually
+# tracks, or a clone with no other working-tree state will fail to
+# verify it, which is exactly the bug this fixed 2026-09-10 -- the
+# first version of this file was generated with a plain 'find' over
+# the working directory, which silently included a concurrent agent's
+# UNTRACKED gpt2026_* files. Generate ONLY from 'git ls-files'.
+#
+# A mismatch on a tracked file means it changed after this manifest
+# was generated -- re-derive it before trusting any published number.
 #
 # Regenerate with:
 #   cd $(git rev-parse --show-toplevel)
-#   { find benchmark/results benchmark/documentation paper -type f \( -name '*.csv' -o -name '*.txt' -o -name '*.md' \) ! -type l ! -name MANIFEST.sha256; \
-#     find stages include -maxdepth 1 -type f \( -name '*.cpp' -o -name '*.h' \); } | sort | xargs sha256sum
+#   git ls-files benchmark/results benchmark/documentation paper stages include \
+#     | grep -E '\.(csv|txt|md|cpp|h)$' | grep -v MANIFEST.sha256 | sort | xargs sha256sum
 #
+4b7c369c7f7a7dddfd48df3f42847309f01afe76fb2f387efed9676c8e5a25d6  benchmark/documentation/CLAIM2_RESULTS_V2.md
+671a9c4d6cf2feb39a5ccdecfe0cf0fec726c4c317fe8633e84cad7ab567a9ef  benchmark/documentation/CLAIM2_TABLES_AND_INDEL_SCAN.md
+4bc3f27a87642336b3e7b53854e6d405558c61a9f8c32de4ce7021e31a0e9220  benchmark/documentation/CLAIM3_APPLICATIONS.md
+4b31e90c37fd416fa8d5f9ae2f692eaf179276efb88725117b350410688b1f4d  benchmark/documentation/CLAIM3_LOCKED.md
+a4250439596d951e2d164923e0e43df29d7d2fbc08bc58b96a97fce5059379b8  benchmark/documentation/CLAIM3_MECHANISM.md
+827da7395222a9820d0d7f0504ab62962c6441da23e11b2833cc077a50d4f3d2  benchmark/documentation/CLAIMS_FINAL.md
+45c1164ab9fce58569a9a1002deb0c11bd389b053c787b1f562198e0baf27f91  benchmark/documentation/COMPACT_HEADROOM.md
+8d2d8ef6e5a8ea1b716fd8b042a2beb4e94d69d130e5dba7a7bce000c5729b48  benchmark/documentation/HG005_EXPLAINED.md
+524651e43b64b804debc8cb03ed5e250ed5338b84714eb6fbd22a7178edb9895  benchmark/documentation/INDEL_BOUND.md
+0d3e696d76fb18f6a2695643d371d96aac1f4d1dfba3af08c3111ed5036de662  benchmark/documentation/INVOCATION_ERRORS.md
+99a31119f140fd90d1cdf71721a27adf00d0433226ce5e03f08129aa07f30a0c  benchmark/documentation/LOCALITY_TENSION.md
+63a443b8a0be629c9b6fe244cb191eba82b5684445015b768c599813bf974a35  benchmark/documentation/NOVELTY_FINAL.md
 7b69369afa5df53defd33054a1219f36ff10b5649a553c80cec365b176362fdf  benchmark/documentation/REPRODUCE_EVERYTHING.md
+2882dc1ec4773e9e0f9383607abccd75cd0a50686cc167b267f88c65fcc57215  benchmark/documentation/REPRODUCIBILITY.md
 774b9e2cbbda11cdb0be651272dcd608286f909698c6bbd208aa577833e7a762  benchmark/documentation/RESULT_CODE.md
 2e967fd6f941098b0a63662ba6949f34a30b41835d6cebb184fdc47e56b7785a  benchmark/documentation/RESULTS_INVENTORY.md
 86eed934765569a286e12fd0267bcd36f20a27dd5edacb676e7a53dd207b92ba  benchmark/documentation/SCRIPT_INVENTORY.md
+df4dff9c88e6f42880558dbca261fd7f1cfd2ea0f5a6d49af52af59a9130e9a9  benchmark/documentation/TABLE_MAP.md
 a074972b6a9802a74fce018d1a97d2219acc921ab14a2f4c3a1056d599620a91  benchmark/results/benchmark_0_status.txt
 07a73302a1faa5b1c088c3b985469101f5686344017a9378f50eccf308cd557d  benchmark/results/claim1_T1.1_T1.2.csv
 750553d5e8c91cbf393eef23f0a1bfffeacd9eac48c3da4369a9262c2f5aa1bd  benchmark/results/claim2_T2.1_snv.csv
@@ -31,18 +51,21 @@ c7c993c851e0d394f842fbd8194b7e8bdc39145e7150b727092478cef54af4ce  benchmark/resu
 c6c6599a00c9d2f991b0c18dde05f9c6090d1abfc6e64e9b66699b204c05a879  include/caps_pack.h
 948d8f5a6345395c712a50761ff36ed60c47dc2b097c82ee4dbd60f7c52357d7  include/coders_inproc.h
 dab7328de7207ad968f134386bc0a7e410330c6164ed2245d7ef3f056671497e  include/coders_pgrc.h
-342bfab17dfbbdf4b06a68df4fdb78341f870297b6156b153da0e57253b5994e  include/gpt2026_buffer_ownership.h
-793722974cfd42f8fdd68adaca585b83a1650633d40395fb4c9568435de3d338  include/gpt2026_mapping_extension.h
-dc64e5d2baa0862f907545e2c8cd8082f4562b90931dadbe1adcfc1352f5b556  include/gpt2026_map_profile.h
-fd72bcc148ac0ff124dc7d50110fa186e18697e4484c1d603e91d55d8cd2d503  include/gpt2026_owned_mapping.h
 13a6f9faa86f24a9b6d1290d332666f81039928ab0d07390a5e5226e12a201f5  include/names_coder.h
 4c67410584e28584796708d8d250436ca9b9b6b6fb1f25f9989255ad703328dc  include/quality_coder.h
 0ae9275bf88ac1d00cc3b36d48005317068734933c95f98a35d6c5361b9a3e28  include/seqpar_core.h
 d82422f7c611a1a14c787e80b680dab16394cdbc03775ab2baf5e2925e6056b6  paper/ARCHITECTURE.md
+fe588a372e128ea6f0155a8e92f9afa691e05cf7de53221f4f7fc702264299ba  paper/ARCHITECTURE_VS_DISCOSNP.md
+a4250439596d951e2d164923e0e43df29d7d2fbc08bc58b96a97fce5059379b8  paper/CLAIM3_MECHANISM.md
+827da7395222a9820d0d7f0504ab62962c6441da23e11b2833cc077a50d4f3d2  paper/CLAIMS_FINAL.md
+d2c709f22f0d4503df33647b9d50419eff4863fdfca5889a2c510f066d711416  paper/COMPRESSION_DERIVED_CALLING.md
 3c98adcf01aafad4860273f85930c9ccadef374f9d19ca0a5b1c2fac818c9ba6  paper/DISCUSSION.md
+376ca8b4fe9cdc7b7bc392f04fcd5a690434f0d6c6f6db2588f17b3d9d22a572  paper/FORMAT.md
 605d4ec48c25fd599a7c917b950657ed66c0838c3612f2f00fe0af648fcca684  paper/LIMITATIONS.md
 bd7c5d88e28f8107491c34ccabfe1387a7fb6c4e959d03788703d8ac61c41740  paper/METHODS.md
+63a443b8a0be629c9b6fe244cb191eba82b5684445015b768c599813bf974a35  paper/NOVELTY_FINAL.md
 345aa6b0df4d5e7c1cbc5b2a5158bac68cbe9caff3cffa130eae1bafde122266  paper/PAPER.md
+f865fac110db59d5ad666f08c034c16cc0f880507642df61ca65ced1c5eaeb84  paper/PIPELINE.md
 7ef460db3464a35075eac0dabecf9cd0a14981057ea3fc827ae5e4090ed63c5f  paper/RESULTS.md
 d4f8031a479e99b09205649dc3492a0e03f9d40d813398c264bf641002883d00  stages/01_greedy_exact.cpp
 3a51af6b6c61e5c7b2e29e9b0a2497a8d1a06a89b2123e355fd0ee958d234173  stages/02_minimizer_tolerant.cpp
@@ -142,7 +165,3 @@ dfeabc9ee2cbc9f64487cd271dfd4342e47f8a1227f5296c0d2858630f677af5  stages/96_full
 c3ca53f93b50bee4721d9263a7d21a556555968a8f9adc4e69100ca508edc0cb  stages/98_o1_removal.cpp
 8899c995d8d354e786b190fd4af3fba4d257b5f1aa5c8a67faac77eb6c4463a3  stages/99_repeat_exclude.cpp
 a99f7b8e5933d86bbb215d3e0a4486e5278c737352cde063adbcee4b48b85398  stages/capsule_decode.cpp
-8e237e98efb2c2b7fb1beb5cf5f469b80f0d76b109439906cbecc72925c66f80  stages/gpt2026_fastq_domain.cpp
-6d3fd90cb1fffc3d537e9604e99d72e3e1cb7954c5e16781f1471ee4b691ee57  stages/gpt2026_fastq_verify.cpp
-27bdbf85390cfe0c8d27f21774b1f7a5776ce4deac9a27e3a0b6bf7b6562e76f  stages/gpt2026_fqz_compact_test.cpp
-0e00488563658c2a67572483fa61c725d524e21a43191f99bbcc0b7dd3000271  stages/gpt2026_quality_probe.cpp
