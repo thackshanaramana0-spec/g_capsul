@@ -105,8 +105,22 @@ the read already has, so better placements also mean less work.
 `capsule_decode call <archive> <out.vcf>` — no FASTQ, no reference, no separate
 assembly graph. Implemented in `include/caps_caller.h`.
 
-The caller reads the archive's assembly layer and placements and adds two
-passes, **to the caller only; the compression path is untouched**:
+### What is reused, and what that is worth
+
+Reference-free callers build their own substrate from raw reads: DiscoSNP++
+constructs a GATB de Bruijn graph, then runs `kissreads2`, a **separate binary**
+that re-maps every read onto every candidate bubble. Here the assembly already
+exists — it is what the compressor built in order to compress — and the caller
+consumes the encoder's contigs directly. The alternative was implemented and
+measured: re-deriving the substrate re-places all 12.6 M reads and costs **738 s
+serially at full chr20**, against reusing what the archive already holds.
+
+Read coherence is likewise done in one indexed sweep over reads held in memory,
+which makes a **per-base** quality test affordable where a separate mapping tool
+uses a per-path mean: quality enters as a 1-bit-per-base bitmap at 233 MB rather
+than 2.27 GB of phred strings.
+
+Two passes are added, **to the caller only; the compression path is untouched**:
 
 1. **`collapse_contigs()`** — a greedy longest-first non-redundant contig set,
    putting both haplotypes of a locus into one frame.
@@ -124,45 +138,115 @@ it; the pseudogenome has to be re-framed.
 
 Measured, full chr20, HG002, called from the archive:
 
-    neither             F1 0.431   P 0.967   R 0.278
-    re-placement only      0.426     0.962     0.274   <- worse than neither
-    collapse only          0.648     0.963     0.488
-    both                   0.888     0.956     0.830
+| configuration | F1 | precision | recall |
+|---|---|---|---|
+| neither pass | 0.431 | 0.967 | 0.278 |
+| re-placement only | **0.426** | 0.962 | 0.274 |
+| collapse only | 0.648 | 0.963 | 0.488 |
+| **both** | **0.888** | 0.956 | 0.830 |
 
-Synergy, not additivity: +0.217 and −0.005 alone, **+0.457 together**. And the
-error *shape* confirms the cause rather than merely fitting it — without
-collapse, precision holds at 0.96 while recall collapses to 0.27. The caller is
-not mistaken, it is **blind**, which is what "the alt reads are on another
-contig" predicts. Noise or a bad threshold would cost precision instead.
+**The passes are not additive, and that is the evidence they are mechanistic
+rather than fitted.** Collapse alone gains +0.217; re-placement alone *loses*
+0.005 — it is worse than doing nothing. Additivity predicts 0.212; the measured
+joint effect is **+0.457**. Neither pass is a filter that happens to help:
+collapse puts the two haplotypes into one frame, re-placement puts the reads
+onto that frame, and either alone leaves the other half of the operation
+undone.
 
-**The correction costs nothing in compression ratio.**
+The **error shape** independently confirms the cause. Without collapse,
+precision holds at 0.96 while recall falls to 0.27 — the caller is not
+mistaken, it is **blind**, which is exactly what "the alt-allele reads are
+filed on a different contig" predicts. A tuning artefact or a bad threshold
+would cost precision instead; this costs only sensitivity.
+
+**The correction costs nothing in compression ratio**, because it exists only
+in the caller's view of the archive, not in the archive.
+
+### Parameters are functions of measured depth, not fitted constants
+
+The coverage ceiling is `2 × ploidy × H` and the coherence floor `max(2, H/10)`,
+where `H` is the sample's own haploid depth read off the k-mer histogram. This
+is why precision holds between 0.911 and 0.950 across a 10–30× sweep, and why
+the tetraploid arm works without retuning. The comparable tool exposes `-b`,
+`-P`, `-D` and `-max_ambigous_indel` as fixed numbers.
+
+### Multi-allelic sites
+
+`CAPS_PLOIDY=k` admits up to *k* co-occurring alleles and emits a native
+multi-allelic VCF record. Across DiscoSNP++'s entire output for the same
+region — 3,989 records — it emits **zero** with more than one ALT allele. That
+is a property of its output model, not a miss, and it is why this is reported
+as a capability rather than as a rate.
 
 ## 3. Addressability — export, coverage, query
 
-Served directly from the archive; the work a conventional pipeline does at
-query time (assembling, or aligning and indexing) was already done at
-compression time.
+Served directly from the archive: the work a conventional pipeline does at
+query time — assembling, or aligning and indexing — was already done at
+compression time. Each operation decodes only the streams it needs and stops.
 
-| operation | what it decodes | what it does NOT |
-|---|---|---|
-| `export` | `literal` + `mem_triples` (+ companions) → the pseudogenome | no per-read stream |
-| `coverage` | `pos_abs` + `read_lengths` → per-base depth via a difference array | **no pseudogenome content at all** — hoisted above the rebuild |
-| `query` | the assembly layer + placements, then stops | never touches quality or names, never reconstructs all reads |
+| operation | decodes | never touches | cost |
+|---|---|---|---|
+| `export` | `literal` + `mem_triples` (+ companions) → the pseudogenome | any per-read stream | 1 pg rebuild, 36 MB |
+| `coverage` | `pos_abs` + `read_lengths` → per-base depth by difference array | **no pseudogenome content at all** — the exit is hoisted above the rebuild | **0 pg rebuilds, 4 MB** |
+| `query` | the assembly layer + placements, then stops | quality, identifiers, full read reconstruction | 1 pg rebuild, 42 MB |
 
-`query` accepts either a pseudogenome coordinate range or a **DNA sequence**.
-The sequence form matters because of the same fragmentation the caller has to
-undo: a heterozygous locus is not one place in the pseudogenome but N parallel
-places (median 4 — two haplotypes × two strands), so a coordinate names one of
-them and returns a single haplotype. Content addressing resolves every parallel
-representative at once.
+`coverage` running in 9× less memory than the other two is the amortisation
+claim made concrete rather than asserted: it needs only where the reads sit,
+which the compressor stored, so it never materialises what they say.
 
-An optional sidecar index (`capsule_decode index`) caches the pseudogenome,
-the placements and each read's deviations. It is **not part of the archive**;
-without it every operation still works. With it, `query` returns the true reads
-rather than the consensus, and runs about 15× faster.
+### A heterozygous locus is not one place — and that is why `query` takes a sequence
 
-**Cost of addressability:** the `contig_spans` stream is 232,509 B — **0.041%**
-of a 573 MB archive.
+`query` accepts a pseudogenome coordinate range **or a DNA sequence**, and the
+second form is not a convenience. It is required by the same fragmentation the
+caller has to undo. In a pseudogenome built to minimise bits, a het locus is
+not one place but **N parallel places** — median 4, two haplotypes × two
+strands — measured **up to 18.6 Mb apart**. A coordinate therefore names one
+of them and returns a single haplotype, with the variation gone.
+
+Measured on 400 GIAB het SNV sites across four individuals, both addressing
+modes against the **same archive and the same sites** — an internal control,
+because no other tool can produce a row of this table:
+
+| addressing mode | both alleles returned | one allele | neither |
+|---|---|---|---|
+| by coordinate | **81 / 400** (20.2%) | 316 | 3 |
+| by content (sequence) | **345 / 400** (86.2%) | 55 | 0 |
+
+pooled allele balance 1.00 — the returned evidence is not skewed toward either
+haplotype.
+
+The probe is 40 bp of **reference** ending 6 bp *before* the variant, so it
+never contains the variant: a probe taken from one haplotype's own sequence
+could only match that haplotype and would rig the result.
+
+**Why the control is internal.** SPRING addresses by read index; Genozip's
+`--regions` is refused on FASTQ for want of coordinates; PgRC2 and NanoSpring
+expose no read-out at all; BEETL-fastq returns reads *containing* a string,
+which is a different object — measured, a median **38%** of the reads returned
+at a locus here do not contain the probe (n=50). CRAM can answer a locus, but
+only after aligning to an external reference, which is a different experiment.
+
+**What this does not claim.** Not speed: `genocat --head=100` extracts in
+0.19 s against 0.46 s here. The claim is that the question can be asked at all,
+and that adding a coordinate API would not have answered it — 81/400 is what
+that failure measures.
+
+### The sidecar, and the limit it works around
+
+An optional index (`capsule_decode index`) caches the pseudogenome, the
+placements, and each read's deviations. It is **not part of the archive** and
+its cost is not counted in any compression number; every operation works
+without it. With it, `query` returns the true reads rather than the consensus
+beneath them, and runs about 15× faster.
+
+The deviations cannot be reached from the archive on demand, and the reason is
+structural: `mm_sym` is coded with an **adaptive model in read order**, so read
+*k*'s deviations require decoding all *k−1* before it. That is a property of
+the coding — decompression only ever walks reads in order — and the sidecar
+breaks the ordering dependency by decoding once.
+
+**Cost of addressability in the archive itself:** the `contig_spans` stream is
+232,509 B — **0.041%** of a 573 MB archive.
 
 ## 4. What is novel, and what is not
 
