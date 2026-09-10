@@ -17,60 +17,20 @@ proves *what it produced*.
 
 ## 1. Compression — the pipeline
 
-### Attribution: the pseudogenome is PgRC's idea, and it is cited as such
+The compressor builds a **pseudogenome** — one sequence assembled from the
+reads by greedy suffix-prefix overlap, onto which reads that fail to chain are
+mapped — following the architecture of PgRC [Grabowski & Kowalski 2020] and
+PgRC2 [Kowalski & Grabowski 2025]. Assembly-based read compression dates to
+Quip [Jones et al. 2012]; greedy shortest-common-superstring and q-gram
+matching are standard.
 
-Attribution here has to be split three ways, because collapsing it in either
-direction would be inaccurate:
-
-| layer | whose |
-|---|---|
-| **Assembly-based read compression** — assemble the reads, then store each read as a position in the assembly | **Quip** (Jones et al., *NAR* 40(22):e171, 2012), the first. Eight years before PgRC. |
-| **The component algorithms** — greedy shortest-common-superstring by suffix-prefix overlap, and q-gram/pigeonhole read-to-reference matching | **Textbook.** Both long predate every tool named here and are free to any implementer. |
-| **The *pseudogenome* specifically** — one concatenated sequence built by that greedy chaining, with the reads that fail to chain mapped onto it and a divided remainder handled separately | **PgRC's** (Grabowski & Kowalski, *Bioinformatics* 36(7):2082, 2020; PgRC2, Kowalski & Grabowski, *Bioinformatics* 41(3), 2025). This is the design this work follows. |
-
-So: the paradigm is Quip's, the primitives are textbook, and **the specific
-architecture is PgRC's**. Any reading of this work as "we invented compressing
-reads onto an assembled pseudogenome" would be false, and it is stated here
-rather than left to inference.
-
-**We do not, however, use their construction.** Their sweep was implemented
-here and measured against ours (`docs/REIMPL_NOTES.md`, stage 39): PgRC2 finds
-its overlaps with a parallel sort and a serial merge, which needs **11× fewer
-comparisons** than the hash sweep used here — and ran **3.2× slower** on this
-machine, because the merge's per-level maintenance is inherently sequential
-while a hash sweep is embarrassingly parallel across 12 cores. Their algorithm
-is better; ours is better *on this hardware*, and the measurement is recorded
-either way. Their quality-based HQ/LQ division is also **inactive by default in
-their own released binary** — the division that does the work in both tools is
-structural, computed from round-1 chain topology.
-
-**What was done independently, and why.** PgRC2 is GPL-3. To keep this
-repository MIT-licensable, no PgRC2 source is included or linked — its
-assembler was reimplemented from the published algorithm, stage by stage, with
-the full progression and every refuted step recorded in `docs/REIMPL_NOTES.md`.
-That document is also the honest record of where the reimplementation was
-*worse* than theirs before it was better.
-
-**What is genuinely added on top**, each measured rather than asserted:
-
-| addition | measured |
-|---|---|
-| Sweep starts at `Lmax`, not `Lmax−1`, so exact duplicates chain for free instead of needing a separate dedup pass | one pseudogenome 9,134,100 → 6,157,270 B |
-| Best-match rather than first-acceptable placement | 10.74 → **4.94** mismatches/read |
-| Permutation coder (Lehmer code + Fenwick tree + range coder) for read order | 18.49 bits/read vs PgRC2's 22.82 — **−19%**, and 0.022% off the information-theoretic floor |
-| Mismatch symbols coded against the reference base rather than independently | 124,280 B vs their 208,234 — **−40%** |
-| Multi-order context-mixing DNA coder | 1.9174 bpb vs their 1.9261 |
-| **Names, line 3 and quality columns** | PgRC2 has none of these — it emits bare DNA and cannot reproduce a FASTQ |
-
-The last row is the substantive scope difference: **PgRC2 is a DNA-stream
-compressor; this is a complete lossless FASTQ archive.** That is why the +1.88%
-against PgRC2 is reported separately from the SPRING/Genozip comparison, and
-why it is stated as a DNA-stream-only number.
-
-**And Claims 2 and 3 — calling variants from the archive, and locus retrieval —
-have no counterpart in PgRC at all.** `PgRC -h` offers compress and decompress
-and nothing else. Those claims rest on the pseudogenome being *retained and
-served*, which is precisely what this lineage discards.
+Our implementation is independent — PgRC2 is GPL-3 and no source is shared —
+and differs in construction: overlaps are found by a parallel hash sweep rather
+than their sort-merge, which needs 11× more comparisons but runs 3.2× faster on
+12 cores (`docs/REIMPL_NOTES.md` §39). We extend the architecture to a complete
+FASTQ archive — identifiers, line 3 and quality, none of which PgRC stores —
+and, for Claims 2 and 3, retain and serve the pseudogenome rather than
+discarding it.
 
 Implemented in `stages/106_inprocess.cpp` (the encoder) and
 `stages/capsule_decode.cpp` (the decoder), with stream coders in
