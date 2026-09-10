@@ -107,15 +107,20 @@ is not one place in a compression-optimal pseudogenome; it is N parallel places
 (median 4: two haplotypes x two strands), up to 18.6 Mb apart. So the archive's
 own coordinate system **cannot name a locus**. Measured:
 
-    640 GIAB het sites, 4 individuals, 5 windows on chr20
-      coordinate addressing :   0 / 640   (0.0%)
-      content addressing    : 549 / 640   (85.8%)
-      pooled allele balance : 0.97
+    400 GIAB het sites, 4 individuals, true reads returned
+      coordinate addressing :  81 / 400   (20.2%)
+      content addressing    : 345 / 400   (86.2%)
+      pooled allele balance : 1.00
 
-**0 of 640.** That is what turns "nobody has done it" into "here is why it
-cannot be done that way, and here is what does". Content addressing — ask by
-sequence, not position — resolves every parallel representative at once and
-returns a complete, unbiased pileup.
+**81 against 345 — a 4.3x gap.** A het variant is stored either split across
+haplotype contigs or as per-read deviations on one contig; coordinates can only
+reach the second kind, about a fifth of them. Content addressing resolves every
+parallel representative and returns a complete, unbiased pileup.
+
+*(An earlier version of this table said 0/640. That was an artifact of our own
+query emitting the consensus rather than the reads, which made coordinate
+addressing look absolutely incapable. Corrected — see
+`docs/CLAIM3_MECHANISM.md`.)*
 
 **And it is fast**, though this is the least of the three points: 0.03 s per
 query with the optional index (0.46 s without), against SPRING's 4.93 s, which
@@ -160,6 +165,8 @@ archive, the measurement, and the resolution.
 - **T2.4 is now a COMPLETE CENSUS**: 21/26 (80.8%), where 26 is every SNV-only
   multi-allelic site on chr20. DiscoSNP++ emits ZERO multi-allelic records in
   3,989 output records -- a structural inability, not a miss.
-- **T3.4 is chr20 only, at 30x**, and its explained 12-15% residue
-  (mismatch-encoded variants, invisible to a consensus-emitting query) is
-  understood but not recovered.
+- **T3.4 is chr20 only, at 30x.** Its residue (13.8%) is no longer an
+  artifact: query returns true reads now. True-read retrieval requires the
+  optional sidecar, because the deviations are adaptively coded in read order
+  and cannot be reached from the archive on demand -- that is a real
+  architectural limit, stated rather than hidden.

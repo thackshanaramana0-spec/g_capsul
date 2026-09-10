@@ -41,8 +41,9 @@ The two >10 GB sets dominate: without them we are ~2.3x.
 **T2.3 het-indel F1** — 0.620 / 0.637 / 0.632 / 0.593 against DiscoSNP++
 0.576 / 0.587 / 0.595 / 0.605. 3 wins, 1 loss. Kmer2SNP has no indel model.
 
-**T2.4 — RECONCILED 2026-09-10.** Strict both-allele **5/7 vs DiscoSNP++ 0/7**
-on the SNV-only subset. The earlier 5/111 was scoring 104 indel-bearing sites
+**T2.4 — COMPLETE CENSUS.** **21/26 (80.8%)**, where 26 is every SNV-only
+multi-allelic site on chr20. DiscoSNP++ emits **zero** multi-allelic records
+across 3,989 records — structural, not a miss. The earlier 5/111 was scoring 104 indel-bearing sites
 that a single-base comparison cannot evaluate; the earlier "11/18" is withdrawn
 because 111 is the reproducible denominator (confirmed by
 docs/POLYPLOID_BENCHMARK.md's own setup: 971,250 reads, 111 multi-allelic
@@ -59,14 +60,15 @@ The ratio is time-to-a-reference-free-coordinate-system, not "same output".
 **T3.4 — the mechanism table.**
 
     individual   sites   coordinate both   content both   balance
-    HG002          100                 0             81      1.06
-    HG003          100                 0             88      2.43
-    HG004          100                 0             78      0.92
-    HG005          100                 0             92      0.84
-    ALL            400                 0            339      0.97
+    HG002          100                18             85      1.09
+    HG003          100                16             88      2.37
+    HG004          100                23             79      0.91
+    HG005          100                24             93      0.86
+    ALL            400          81 (20.2%)    345 (86.2%)     1.00
 
-Plus 4 further windows on HG002 (10/25/40/55 Mb): 210/240 by content, 0/240 by
-coordinate. **640 sites, 4 individuals, 5 windows: coordinate 0, content 549.**
+**4.3x gap.** Corrected 2026-09-10: an earlier version reported coordinate at
+0/400, which was an artifact of `query` emitting the consensus instead of the
+reads. See docs/CLAIM3_MECHANISM.md.
 
 ## Every number that is NOT clean
 
@@ -74,8 +76,9 @@ coordinate. **640 sites, 4 individuals, 5 windows: coordinate 0, content 549.**
   only variable-length set (250 bp, 216 distinct lengths vs 148 bp fixed).
   Truncated to fixed length the same reads give F1 0.897 (FP 3,426 -> 1,291),
   our best individual. The table keeps the untruncated 0.834 deliberately.
-- **T3.4's 12-15% residue** is explained (mismatch-encoded variants, invisible
-  to a consensus-emitting query) but not recovered.
+- **T3.4's residue is now 13.8%** and its cause is closed: `query` applies each
+  read's deviations and returns true reads, so mismatch-encoded variants are no
+  longer invisible. The remaining misses resolve several loci that agree.
 - **T3.4 is chr20 only, at 30x.** Not replicated on another chromosome.
 - **Genozip's archive drifts ~37 B run to run** (0.005%); it embeds run
   metadata. Never gate on its byte-identity.

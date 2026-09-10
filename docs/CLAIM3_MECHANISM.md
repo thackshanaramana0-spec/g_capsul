@@ -58,53 +58,37 @@ Asking by SEQUENCE resolves every parallel representative of a locus at once —
 both haplotypes, both strands — because they are parallel precisely in the
 sense of sharing content. The query then returns their union: a real pileup.
 
-**FULL VALIDATION — all four GIAB individuals, 100 het SNVs each, both query
-modes on the identical archive and identical sites (T3.4):**
+**CORRECTED 2026-09-10 — read this before quoting any earlier figure.**
+
+An earlier version of this table reported coordinate addressing at 0/400. That
+was an ARTIFACT OF OUR OWN QUERY, not a property of coordinate addressing.
+`query` emitted the CONSENSUS at each read's position rather than the read, so
+every returned read agreed with every other and no allele difference could ever
+appear — which made coordinate addressing look absolutely incapable and
+flattered the comparison.
+
+`query` now applies each read's own deviations and returns the true reads
+(measured on the same locus: 121 overlapping read pairs went from 0 disagreeing
+bases to 142). Re-measured on that basis:
 
     individual   sites   coordinate both   content both   allele balance
-    HG002          100                 0             81         1.06
-    HG003          100                 0             88         2.43
-    HG004          100                 0             78         0.92
-    HG005          100                 0             92         0.84
-    ALL            400                 0            339         0.97
+    HG002          100                18             85         1.09
+    HG003          100                16             88         2.37
+    HG004          100                23             79         0.91
+    HG005          100                24             93         0.86
+    ALL            400          81 (20.2%)    345 (86.2%)        1.00
 
-    coordinate addressing : 0/400   (0.0%)
-    content addressing    : 339/400 (84.8%)
-    overall allele balance: 25,161 REF / 24,489 ALT  (ratio 0.97)
+**81/400 against 345/400 — a 4.3x gap, not an infinite one.** The pooled allele
+balance is 1.00.
 
-**0 of 400 against 339 of 400**, replicated across four unrelated individuals
-(three Ashkenazi trio members and one Han Chinese), and the pooled allele
-balance is 0.97 -- the returned evidence is unbiased. The archives were rebuilt
-from scratch for this run and reproduce the sweep's sizes byte for byte
-(HG003 567,123,999; HG004 606,192,930; HG005 997,518,994), so the result does
-not depend on a particular build.
-
-Per-individual detail for HG002, from the earlier n=100 run:
-
-                              BOTH alleles   one allele   neither
-    COORDINATE query                     0          100         0
-    SEQUENCE  query (ours)              81           19         0
-
-    aggregate allele balance: 3,072 REF / 3,263 ALT  (ratio 1.06)
-
-**0/100 against 81/100.** The 1.06 ratio matters as much as the headline: the
-returned evidence is unbiased, which is what makes it a pileup rather than a
-read dump. An earlier n=20 run gave 16/18 by sequence and 0/12 by coordinate;
-the effect does not weaken with scale.
-
-Earlier 20-site detail, kept for the per-site view:
-
-    sites where reads were returned      : 18 / 20
-    sites returning BOTH alleles         : 16 / 18   (88.9%)
-
-    20:3001343  C>T   33 reads   14 REF   6 ALT
-    20:3008909  C>T   39 reads   14 REF   9 ALT
-    20:3013651  A>G   20 reads    2 REF  13 ALT
-    20:3034916  T>C   84 reads   13 REF  45 ALT
-    ...
-
-Against the coordinate control's 0/12, this is the result: **content addressing
-recovers the pileup that coordinate addressing structurally cannot.**
+**The mechanism is unchanged and is what the 20.2% measures.** A het variant is
+stored one of two ways: split across separate haplotype contigs, or kept as
+per-read deviations on a single contig. Coordinate addressing can only ever
+reach the second kind, and that is about a fifth of them. Content addressing
+reaches both, because it resolves every parallel representative of the locus.
+The claim is therefore that coordinates reach a MINORITY of het loci by
+construction — which is still decisive, and is now defensible against a
+reviewer who runs our own tool and gets 20% rather than 0%.
 
 ## PRIOR ART — the phenomenon is known, in a different field
 
