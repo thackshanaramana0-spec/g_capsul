@@ -151,8 +151,12 @@ archive, the measurement, and the resolution.
 
 ## What is still open
 
-- **HG005 loses both het-SNV and het-indel**, on an unexplained precision
-  collapse (FP 3,426 against ~1,700 elsewhere). It is the deepest sample.
+- **HG005's losses are EXPLAINED** (`docs/HG005_EXPLAINED.md`): it is the only
+  variable-length dataset -- 250 bp quality-trimmed with 216 distinct lengths,
+  against 148 bp fixed for HG002/3/4. Truncated to fixed 148 bp, the same reads
+  give F1 0.897 with FP falling 3,426 -> 1,291, making it our BEST individual.
+  The caller is tuned for fixed-length reads; that is a characterised property
+  with a named cause, not an anomaly. The table keeps the untruncated 0.834.
 - **T2.4 is a 7-site result** — a capability demonstration, not a rate.
 - **T3.4 is chr20 only, at 30x**, and its explained 12-15% residue
   (mismatch-encoded variants, invisible to a consensus-emitting query) is
