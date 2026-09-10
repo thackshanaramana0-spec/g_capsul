@@ -1,6 +1,6 @@
 # LIMITATIONS — what this work does not establish
 
-> **Status:** frozen 2026-09-10 at tag `v1.0.1-capsule` — code and results final.
+> **Status:** frozen 2026-09-10 at tag `v1.0.2-capsule` — code and results final.
 > Authoritative numbers live in `../benchmark/results/`; verification status in
 > [`../AUDIT.md`](../AUDIT.md). Where this file and a result file disagree, the result file wins.
 
@@ -249,3 +249,17 @@ benchmarked the regime. Every locked dataset is normal coverage, where we win
   re-derivations gave 17/26 and the number was corrected everywhere. Recorded
   because the base rate of such defects in this work is demonstrably not zero:
   one in ten tables, found only because someone went looking. See `AUDIT.md`.
+- **Genozip's default archive size is not a fixed target.** Re-running the
+  E. coli comparison on the same machine, same binary and same flags gave a
+  Genozip archive 4.4% larger than the published figure (119,674,636 B against
+  114,589,268 B), while ours reproduced byte-exact at 68,429,027 B. The cause
+  is that Genozip's default VBlock is selected from machine conditions rather
+  than from the input alone — setting it explicitly moves the same file across
+  a 120.0–86.2 MB range. **Neither the Genozip paper nor its documentation
+  states this**; the paper mentions `--vblock` only as a compression/speed
+  knob and makes no claim about reproducible output. Every Genozip figure here
+  is one draw from that default behaviour, taken with default flags exactly as
+  ours were. It does not move Claim 1 — the aggregate margin is −43.26% — and
+  on this dataset the published number is the one that *favours* Genozip, so
+  the table understates the margin rather than inflating it. Raw evidence:
+  `benchmark/documentation/T1.1_reverification_20260910/`.

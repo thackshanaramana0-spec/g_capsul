@@ -1,0 +1,63 @@
+
+════════════════════════════════════════════════════════════════════
+ SANITY — SRR2584863 — all three claims, end to end
+════════════════════════════════════════════════════════════════════
+started : 2026-09-10 02:28:35
+output  : /root/arcs-clean/c_star_pg_advance/results/sanity_SRR2584863_20260910_022835
+commit  : 3a462cc  branch gpt2026
+machine : 12 cores, 82 GB RAM, 71G free
+[02:28:35 +00:00] input   : /data/fastq/SRR2584863_1.fq
+[02:28:35 +00:00] size    : 0.65 GB   reads: 1553259
+
+════════════════════════════════════════════════════════════════════
+ CLAIM 1 — compression (T1 size, T2 time + RAM)
+════════════════════════════════════════════════════════════════════
+[02:28:35 +00:00]    -> CAPSULE compress (adaptive sweep, concurrent candidates)
+[02:28:47 +00:12]    OK  archive  65.26 MB   ratio 9.844%   wall 11.68s   RAM 1.92 GB
+[02:28:47 +00:12]    -> CAPSULE decompress + lossless verify (decodes the ARCHIVE, not dumps)
+[02:28:57 +00:22]    OK  decompress wall 5.82s  RAM 0.45 GB  -> LOSSLESS
+[02:28:57 +00:22]    -> SPRING (competitor arm, identical input)
+[02:29:07 +00:32]    OK  SPRING archive 70.64 MB  ratio 10.656%  wall 9.67s  RAM 2.08 GB
+[02:29:07 +00:32]    -> SPRING decompress + lossless verify
+[02:29:14 +00:39]    OK  SPRING decompress 5.14s -> LOSSLESS
+[02:29:14 +00:39]    -> Genozip (competitor arm, identical input)
+[02:29:16 +00:41]    OK  Genozip archive 114.13 MB  ratio 17.215%  wall 1.89s  RAM 1.01 GB
+[02:29:16 +00:41]    -> Genozip decompress + lossless verify
+[02:29:19 +00:44]    OK  Genozip decompress 0.83s -> LOSSLESS
+[02:29:19 +00:44] SKIP Claim 2: CLAIMS=1
+[02:29:20 +00:45] SKIP Claim 3: CLAIMS=1
+
+════════════════════════════════════════════════════════════════════
+ THE TABLES THIS RUN PRODUCED
+════════════════════════════════════════════════════════════════════
+
+  T1.1 + T1.2  (archive size, time, RAM -- ours vs SPRING vs Genozip)
+  claim1_T1.1_T1.2.csv
+    dataset     tool     raw_bytes  archive_bytes  ratio_pct  compress_s  decompress_s  peak_ram_kb  lossless
+    SRR2584863  CAPSULE  695163748  68429027       9.8436     11.68       5.82          2014084      LOSSLESS
+    SRR2584863  SPRING   695163748  74076160       10.6559    9.67        5.14          2184896      LOSSLESS
+    SRR2584863  Genozip  695163748  119674636      17.2153    1.89        0.83          1063900      LOSSLESS
+
+════════════════════════════════════════════════════════════════════
+ FILE MANIFEST — every artefact, where it is, how big, what it is for
+════════════════════════════════════════════════════════════════════
+
+CLAIM            SIZE  PATH                                           WHAT IT IS
+------------------------------------------------------------------------------------------------------------------------------------------------------
+input       662.96 MB  /data/fastq/SRR2584863_1.fq                    the FASTQ under test
+claim1       65.26 MB  SRR2584863.capsule                             the .capsule archive -- T1 size, and what Claim 3 reads
+claim1        0.01 MB  SRR2584863.capsule.log                         encoder log: per-stage timings, stream sizes, candidate sweep
+claim1      223.68 MB  decoded/reads.seq                              reads reconstructed FROM THE ARCHIVE (lossless check input)
+claim1       70.64 MB  SRR2584863.spring                              SPRING archive -- the competitor number in T1
+claim1      114.13 MB  SRR2584863.genozip                             Genozip archive -- the competitor number in T1
+claim1        0.00 MB  claim1_T1.1_T1.2.csv                           T1.1 + T1.2 table rows for this dataset
+
+[02:29:20 +00:45] output root : /root/arcs-clean/c_star_pg_advance/results/sanity_SRR2584863_20260910_022835
+[02:29:20 +00:45] total size  : 834M
+[02:29:20 +00:45] elapsed     : 00:45
+
+  ┌──────────────────────────────────────────────────────────────┐
+  │  SANITY PASSED — claims run: 1, all produced artefacts. │
+  │  The full run should behave the same on every dataset.        │
+  └──────────────────────────────────────────────────────────────┘
+  log: /root/arcs-clean/c_star_pg_advance/results/sanity_SRR2584863_20260910_022835/sanity.log
