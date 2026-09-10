@@ -49,6 +49,36 @@ consumes what the trunk already built; it never re-assembles.
 honest sentence is "compress once and get calls as a byproduct", not "open an
 old archive and call variants". Calling from a stored archive is not wired.
 
+## 1a. Every flag that changes a published number — the complete list
+
+Checked exhaustively against the source (150+ `getenv()` flags exist; most
+are internal `CAPS_DBG_*` research knobs, self-documented at their point of
+use in `scripts/*.sh` and irrelevant to reproducing a published table).
+These are the ones that are NOT internal plumbing — get one of these wrong
+or omit it, and the tool runs successfully but produces a **different,
+silently narrower or differently-configured result**, not an error:
+
+| flag | required for | what happens if you omit it |
+|---|---|---|
+| `CAPS_QUAL=1` | full lossless round trip (Claim 1) | archive still valid, but cannot reproduce the original quality scores |
+| `CAPS_NAMES=1` | full lossless round trip (Claim 1) | archive still valid, but cannot reproduce original read identifiers |
+| `CAPS_SPANS=1` | Claim 2/3 prerequisite | records contig-span metadata the caller and `export`/`coverage`/`query` need; cheap, always safe to set |
+| `CAPS_CALL=1` | Claim 2, calling inline during compression | without it, `capsule` compresses only — no `.vcf` emitted |
+| `CAPS_CALL_INDELS=1` | **T2.3 (het-indel), T2.4 (multi-allelic), T2.5 (tetraploid)** | `capsule_decode call` silently takes the graph-only SNV path instead of erroring — a different, narrower configuration, not a failure. Every published indel/multi-allelic/tetraploid number depends on this being set. |
+| `CAPS_PILEUP=1` | T3.4 (locus fidelity), the sidecar built by `capsule_decode index` | without it, `query`'s coordinate arm returns the pseudogenome **consensus** instead of each read's own deviations — every het site reads as 0/0 by construction, not by measurement |
+| `CAPS_PLOIDY=N` | Claim 2 on non-diploid input (T2.5 uses 4) | defaults to 2; wrong ploidy silently mis-scores heterozygous sites |
+| `GSEARCH=1` | optional, smaller archives | selects golden-section search over MAXMAP instead of the default 4-point grid (~7-10 probes vs 4, -154,223 B over 7 files measured) |
+| `MAXMAP=N` | optional, manual override | bypasses the automatic candidate sweep entirely; used only for targeted debugging, never for a published number |
+| `ARCS_AUTOCHUNK_MB=N` | large inputs (>2 GB) on a memory-constrained box | suppresses/adjusts the automatic chunking threshold; the 19-dataset sweep did not need this (12 vCPU / ~90 GB box), but a smaller box attempting C. elegans or T. cacao-scale input will |
+
+Every other environment variable referenced anywhere in `scripts/*.sh` is
+either (a) harness plumbing that a fresh run of the actual benchmark script
+inherits automatically — `DUMP_LIT`, `DUMP_PERM`, `DUMP_MM`, `GRID4`,
+`GRID8`, `CAPS_SKIP_SCOPE_CHECK`, `CAPS_ENCODER_PATH` — or (b) a
+`CAPS_DBG_*` research/ablation knob never used to produce a published
+number. If you are hand-typing a command instead of running the provided
+script, the table above is everything that can silently change your answer.
+
 ## 2. Running it
 
 ```bash

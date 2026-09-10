@@ -470,11 +470,12 @@ Run this to re-confirm before doing anything else in a new session:
    behind everything summarized in this file — including places where an
    earlier claim in the session was wrong and got corrected before it was
    committed — read the full exported transcript at
-   `2026-09-11-002044-this-session-is-being-continued-from-a-previous-c.txt`
-   in the repo root. This recap is the distilled conclusion; that file is
-   the working record of how each conclusion was actually reached and
-   checked. Prefer it over re-deriving something this file summarizes too
-   briefly to be certain of.
+   `docs/session_transcripts/2026-09-11-002044-freeze-and-structure-audit.txt`.
+   This recap is the distilled conclusion; that file is the working record
+   of how each conclusion was actually reached and checked. Prefer it over
+   re-deriving something this file summarizes too briefly to be certain of.
+8. For a complete, folder-by-folder, file-by-file map of this repository —
+   what lives where and why — read `REPO_MAP.md` at the repo root.
 
 ---
 
