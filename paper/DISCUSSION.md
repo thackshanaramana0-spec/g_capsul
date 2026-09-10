@@ -33,7 +33,8 @@ A novelty claim is only worth as much as the list of things it concedes.
 | piece | prior art | status |
 |---|---|---|
 | computing on compressed data | Loh, Baym & Berger, *Nat Biotech* 2012 (CaBLAST/CaBLAT) | **our paradigm.** Instantiated for genome/protein *databases* to accelerate *search* — not read archives, not variant evidence |
-| assembly-based read compression | Quip (Jones et al., *NAR* 2012) — the first; PgRC (Grabowski & Kowalski, *Bioinformatics* 2020); NanoSpring; Minicom | **established.** We are in this lineage |
+| **the pseudogenome itself** | **PgRC** (Grabowski & Kowalski, *Bioinformatics* 36(7):2082, 2020) and **PgRC2** (Kowalski & Grabowski, *Bioinformatics* 41(3), 2025) | **theirs, and the single most important thing this work does not claim.** Reads assembled by greedy suffix-prefix overlap into one pseudogenome, with the remainder mapped onto it, is their design. Ours is an independent reimplementation from the published algorithm (GPL-3 separation; see `METHODS.md` §1 for what is added on top and `docs/REIMPL_NOTES.md` for the full progression including where it was worse) |
+| assembly-based read compression | Quip (Jones et al., *NAR* 2012) — the first; PgRC; NanoSpring; Minicom | **established.** We are in this lineage |
 
 **Why the compression comparison is SPRING, Genozip and PgRC2 and not others**
 — verified from the tools themselves, not assumed:

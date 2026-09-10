@@ -1,16 +1,7 @@
 # MANIFEST.sha256 — checksums of every file a published number depends on
-#
-# Generated 2026-09-10 16:06:29 UTC at commit fc24eac90a188eb723b276bc0b1c183b4106bdff.
-# Verify with: sha256sum -c benchmark/documentation/MANIFEST.sha256
-# from the repository root -- including on a FRESH CLONE. Generate ONLY
-# from 'git ls-files'.
-#
-# Regenerate with:
-#   cd $(git rev-parse --show-toplevel)
-#   { git ls-files benchmark/results benchmark/documentation paper stages include \
-#       | grep -E '\.(csv|txt|md|cpp|h|log|vcf)$' | grep -v MANIFEST.sha256; \
-#     git ls-files AUDIT.md README.md CLAUDE.md; } | sort | xargs sha256sum
-#
+# Generated 2026-09-10 16:08:28 UTC at commit d8ba87ae2c03648c7d7ee11d223c9847302eac9a.
+# Verify: sha256sum -c benchmark/documentation/MANIFEST.sha256 (from repo root)
+# Regenerate from 'git ls-files' ONLY -- see AUDIT.md 2.4.
 307a15b9d321f6c7ebe4b2936121576f9a1e4ceb1983f28b78434964937d765f  AUDIT.md
 4b7c369c7f7a7dddfd48df3f42847309f01afe76fb2f387efed9676c8e5a25d6  benchmark/documentation/CLAIM2_RESULTS_V2.md
 f5bb72efa185f9d26aaa90cd4270a9d80936ed214d104ab02474be67b359064b  benchmark/documentation/CLAIM2_TABLES_AND_INDEL_SCAN.md
@@ -68,10 +59,10 @@ fe588a372e128ea6f0155a8e92f9afa691e05cf7de53221f4f7fc702264299ba  paper/ARCHITEC
 a4250439596d951e2d164923e0e43df29d7d2fbc08bc58b96a97fce5059379b8  paper/CLAIM3_MECHANISM.md
 0921329d0c550e33fab43b413622a48382ffa7d7440bfb2cf08fcdcb39a62bf4  paper/CLAIMS_FINAL.md
 d2c709f22f0d4503df33647b9d50419eff4863fdfca5889a2c510f066d711416  paper/COMPRESSION_DERIVED_CALLING.md
-a42f3ec5944a1ff26fe4e8f03ce3a346f7ce87330a62797950923551860e6987  paper/DISCUSSION.md
+f393af3dadd8f9578664ad986a01041243432e962741a36b74f33b4e81c082ab  paper/DISCUSSION.md
 376ca8b4fe9cdc7b7bc392f04fcd5a690434f0d6c6f6db2588f17b3d9d22a572  paper/FORMAT.md
 8deb17f2c85e31b5925912ad6c37db341ecf7b2478251c01cbef2d8030a9a685  paper/LIMITATIONS.md
-bd7c5d88e28f8107491c34ccabfe1387a7fb6c4e959d03788703d8ac61c41740  paper/METHODS.md
+76585cbb017b5a0eb809e1b1f2b88196bacb02acc4dc8b4f0334f879e1ee4786  paper/METHODS.md
 2228d33bd4075cebdc2ef1106263c51a8d55806dcc7aed42fc6872beb4722e6c  paper/NOVELTY_FINAL.md
 affbfc459a5f59ceb72014f40d4e690a1a995c580c3816aba76146e10da7a603  paper/PAPER.md
 f865fac110db59d5ad666f08c034c16cc0f880507642df61ca65ced1c5eaeb84  paper/PIPELINE.md
