@@ -76,7 +76,7 @@ truth, same scoring:
 
     het-SNV F1     ours 0.876 mean   DiscoSNP++ 0.853   Kmer2SNP 0.475
     het-indel F1   ours 0.620/0.637/0.632/0.593   DiscoSNP++ 0.576/0.587/0.595/0.605
-    multi-allelic  ours 21/26 (all chr20)   DiscoSNP++ 0 records of 3,989
+    multi-allelic  ours 17/26 (all chr20)   DiscoSNP++ 0 records of 3,989
     tetraploid     SNV 0.897/0.782, INDEL 0.597/0.553
     coverage       10x 0.487 -> 30x 0.888, monotone
 
@@ -162,9 +162,11 @@ archive, the measurement, and the resolution.
   give F1 0.897 with FP falling 3,426 -> 1,291, making it our BEST individual.
   The caller is tuned for fixed-length reads; that is a characterised property
   with a named cause, not an anomaly. The table keeps the untruncated 0.834.
-- **T2.4 is now a COMPLETE CENSUS**: 21/26 (80.8%), where 26 is every SNV-only
+- **T2.4 is now a COMPLETE CENSUS**: 17/26 (65.4%), where 26 is every SNV-only
   multi-allelic site on chr20. DiscoSNP++ emits ZERO multi-allelic records in
   3,989 output records -- a structural inability, not a miss.
+  **CORRECTED 2026-09-10** -- previously reported 21/26, withdrawn as
+  unreproduced; see `benchmark/documentation/T2.4_reproduction_20260910/`.
 - **T3.4 is chr20 only, at 30x.** Its residue (13.8%) is no longer an
   artifact: query returns true reads now. True-read retrieval requires the
   optional sidecar, because the deviations are adaptively coded in read order

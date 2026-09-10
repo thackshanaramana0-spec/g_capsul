@@ -137,9 +137,21 @@ of the tool.
 | **script** | `benchmark/scripts/run_multiallelic_bench_capsule.sh` |
 | **output** | `benchmark/results/claim2_T2.4_multiallelic.csv` |
 
-**Reported:** **21/26 (80.8%)** — and **26 is the complete census** for chr20,
+**Reported:** **17/26 (65.4%)** — and **26 is the complete census** for chr20,
 not a sample. DiscoSNP++ emits **0 multi-allelic records in 3,989 total
 records**: a structural inability, not a miss.
+
+> **CORRECTED 2026-09-10 — this table previously reported 21/26 (80.8%). That
+> figure was withdrawn during a reproducibility audit: no raw log anywhere on
+> this server supported a caller run against the full chromosome that
+> recovered 21 sites, and three independent re-derivations — two different
+> encoder builds (before and after commit `b28dd40`), one exact repeat on
+> identical input — all gave **17/26**, with identical intermediate SNV/indel/
+> contig counts every time. The denominator (26 SNV-only sites out of 952
+> total multi-allelic sites) is independently confirmed and unchanged; only
+> the recovery count was wrong. Full investigation, all three raw logs, and
+> what the original evidence actually contained:
+> `benchmark/documentation/T2.4_reproduction_20260910/README.md`.
 
 ### T2.5 tetraploid SNV + indel
 

@@ -25,14 +25,15 @@ reading all 114 files.
 > The final headline, so no one has to reconstruct it from the files below:
 > Claim 1 **19/19 vs SPRING (−6.03%), 19/19 vs Genozip (−43.26%), 57/57
 > LOSSLESS**; Claim 2 het-SNV **0.876** vs 0.853 vs 0.475, multi-allelic
-> **21/26** vs **0/26**, tetraploid SNV **0.897** vs 0.782, all called from the
+> **17/26** vs **0/26** (corrected 2026-09-10, was 21/26), tetraploid SNV **0.897** vs 0.782, all called from the
 > archive; Claim 3 export **129–784x**, coverage **16–54x**, locus retrieval
 > **345/400** by content vs **81/400** by coordinate.
 >
 > Documents whose numbers are stale now carry their own SUPERSEDED banner. Two
 > retractions in particular: **T3.4 coordinate is 81/400, not 0/400** (the 0 was
 > our query emitting the consensus rather than the reads), and **T2.4's "5/111"
-> and "11/18" are both withdrawn** in favour of 21/26.
+> and "21/26" are all withdrawn** in favour of the verified **17/26**
+  (see `benchmark/documentation/T2.4_reproduction_20260910/README.md`).
 
 ## Start here
 

@@ -169,6 +169,14 @@ recovered() {
 recovered_strict() {
     # SNV-ONLY by construction: the check compares single bases, so an
     # indel-bearing site cannot pass it and must not be counted against us.
+    #
+    # Prints THREE numbers, space-separated: both-allele hit count (the T5.2
+    # metric, unchanged), one-allele count, zero-allele count. Added
+    # 2026-09-10 after an audit found the CSV schema had capsule_one/
+    # capsule_none columns that nothing in this script ever filled -- the
+    # published values there were never actually measured. This closes that
+    # gap without changing the STRICT hit computation itself, which is the
+    # one figure every published T2.4 number is keyed on.
     local CALLS="$1"
     awk -F'\t' '
       NR==FNR{ if($1!~/^#/){ if(length($4)!=1) next;
@@ -177,13 +185,17 @@ recovered_strict() {
                  if(!snv) next
                  for(i=1;i<=n;i++) t[$2"\t"toupper(a[i])]=1; np[$2]=n } next }
       $1!~/^#/{ m=split($5,b,","); for(i=1;i<=m;i++) got[$2"\t"toupper(b[i])]=1 }
-      END{ hit=0
+      END{ both=0; one=0; none=0
            for(k in t){ split(k,p,"\t"); seen[p[1]]+=(k in got)?1:0 }
-           for(pos in np) if(seen[pos]>=np[pos] && np[pos]>=2) hit++
-           print hit+0 }' truth_multiallelic.vcf "$CALLS"
+           for(pos in np){
+             if(seen[pos]>=np[pos] && np[pos]>=2) both++
+             else if(seen[pos]>=1) one++
+             else none++
+           }
+           print both+0, one+0, none+0 }' truth_multiallelic.vcf "$CALLS"
 }
-CAPS_STRICT=$(recovered_strict lifted.vcf)
-DISCO_STRICT=$(recovered_strict d_raw.vcf)
+read -r CAPS_STRICT CAPS_STRICT_ONE CAPS_STRICT_NONE < <(recovered_strict lifted.vcf)
+read -r DISCO_STRICT DISCO_STRICT_ONE DISCO_STRICT_NONE < <(recovered_strict d_raw.vcf)
 CAPS_HIT=$(recovered lifted.vcf)
 DISCO_HIT=$(recovered d_raw.vcf)
 log "[5/5] done"
@@ -197,12 +209,18 @@ else
   echo "DiscoSNP++ sites with a call at that position: $DISCO_HIT / $N_TRUTH_MULTI"
 fi
 echo "-- STRICT (both ALT alleles recovered) -- this is the T5.2 claim's metric --"
-echo "CAPSULE    both-allele sites: $CAPS_STRICT / $N_MULTI_SNV  (SNV-only subset; $N_MULTI multi-allelic sites total, $((N_MULTI-N_MULTI_SNV)) indel-bearing and not scorable by a base comparison)"
+echo "CAPSULE    both-allele sites: $CAPS_STRICT / $N_MULTI_SNV  (one-allele: $CAPS_STRICT_ONE, none: $CAPS_STRICT_NONE)  (SNV-only subset; $N_MULTI multi-allelic sites total, $((N_MULTI-N_MULTI_SNV)) indel-bearing and not scorable by a base comparison)"
 if [ "${DISCO_SKIPPED:-0}" = 1 ]; then
   echo "DiscoSNP++ both-allele sites: SKIPPED (not on PATH -- NOT a measurement)"
 else
-  echo "DiscoSNP++ both-allele sites: $DISCO_STRICT / $N_MULTI_SNV"
+  echo "DiscoSNP++ both-allele sites: $DISCO_STRICT / $N_MULTI_SNV  (one-allele: $DISCO_STRICT_ONE, none: $DISCO_STRICT_NONE)"
 fi
+# NOTE: "DiscoSNP++ emits 0 multi-allelic records in 3,989 total records" (the
+# structural-capability figure used alongside this table) is NOT computed by
+# this script -- it counts records in its own OWN output differently. Do not
+# infer or fabricate it here; take it from wherever it was actually measured,
+# or measure it directly: `grep -vc '^#' discoRes_*_coherent.vcf` for the
+# total, and a comma-in-ALT count for the multi-allelic subset.
 echo "======================================================="
 log "Results in: $OUT"
 log "Total elapsed: $(( $(date +%s) - T_START ))s"

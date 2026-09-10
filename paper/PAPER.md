@@ -43,7 +43,7 @@ archive is smaller than SPRING on 19/19 and Genozip on 19/19 (−6.03% / −43.2
 aggregate), with 57/57 archives verified lossless by decode-and-diff. From that
 archive — no FASTQ, no reference, no second assembly pass — heterozygous SNV
 calling reaches mean F1 0.876 against DiscoSNP++ 0.853 and Kmer2SNP 0.475 across
-four GIAB individuals, and recovers 21 of the 26 multi-allelic sites on chr20
+four GIAB individuals, and recovers 17 of the 26 multi-allelic sites on chr20
 where DiscoSNP++ emits zero such records in 3,989. The same deformation appears
 one layer out: a heterozygous locus is not one place in a compression-optimal
 pseudogenome but N parallel places (median 4, up to 18.6 Mb apart), so the
@@ -69,7 +69,7 @@ mature field, not a new idea. Its job is to earn the right to make Claims 2 and
 ### Claim 2 — FAITHFUL
 
 Called **from the archive**. het-SNV mean F1 **0.876** / 0.853 / 0.475;
-het-indel **0.621** / 0.591; multi-allelic **21/26** vs **0/26**; tetraploid SNV
+het-indel **0.621** / 0.591; multi-allelic **17/26** vs **0/26**; tetraploid SNV
 **0.897** vs 0.782, from real HG003+HG004 reads. Coverage 10× → 30× monotone.
 
 The mechanism is the paper's centre, and the ablation shows it is a mechanism

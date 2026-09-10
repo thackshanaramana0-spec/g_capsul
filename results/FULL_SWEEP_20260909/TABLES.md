@@ -41,13 +41,20 @@ The two >10 GB sets dominate: without them we are ~2.3x.
 **T2.3 het-indel F1** — 0.620 / 0.637 / 0.632 / 0.593 against DiscoSNP++
 0.576 / 0.587 / 0.595 / 0.605. 3 wins, 1 loss. Kmer2SNP has no indel model.
 
-**T2.4 — COMPLETE CENSUS.** **21/26 (80.8%)**, where 26 is every SNV-only
+**T2.4 — COMPLETE CENSUS.** **17/26 (65.4%)**, where 26 is every SNV-only
 multi-allelic site on chr20. DiscoSNP++ emits **zero** multi-allelic records
 across 3,989 records — structural, not a miss. The earlier 5/111 was scoring 104 indel-bearing sites
 that a single-base comparison cannot evaluate; the earlier "11/18" is withdrawn
 because 111 is the reproducible denominator (confirmed by
 docs/POLYPLOID_BENCHMARK.md's own setup: 971,250 reads, 111 multi-allelic
-sites, both reproduced exactly). Quotable now, with its scope: 7 sites, a
+sites, both reproduced exactly).
+
+**CORRECTED 2026-09-10.** This entry previously read 21/26. No raw log on
+this server supported that figure; a reproducibility audit found three
+independent re-derivations (two encoder builds, one exact repeat on
+identical input) all give 17/26, with identical intermediate counts every
+time. See `benchmark/documentation/T2.4_reproduction_20260910/README.md`.
+Quotable now, with its scope: 7 sites, a
 capability demonstration rather than a rate.
 
 **T2.5 tetraploid** — SNV 0.897 vs 0.782, INDEL 0.597 vs 0.553.
