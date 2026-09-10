@@ -792,20 +792,37 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
             // human-scale pseudogenome (4^40 >> 3e9) and short enough to have
             // a good chance of being error-free.
             if(ranges.empty() && q.size() > 60){
-                const size_t W = 40;
-                for(size_t off=0; off+W<=q.size() && ranges.empty(); off+=W/2){
+                // UNION every window that hits, never the first one.
+                //
+                // Taking the first hit was wrong and measurably so. Windows of
+                // one 150 bp read all agree on the LOCUS (every hitting window
+                // resolved pg 5,628,008) but return different READ SETS --
+                // Jaccard 0.41 between offsets 0 and 60 -- because each window
+                // asks about a different 40 bp span. First-hit therefore
+                // answers "reads around bases 0-40 of your query", not "reads
+                // around your query", and which span you got depended on where
+                // the sequencing error happened to fall.
+                //
+                // Unioning the hitting windows spans the whole query, which is
+                // the question actually asked. Windows carrying an error simply
+                // contribute nothing.
+                const size_t W = 40; size_t hitw = 0, tried = 0;
+                for(size_t off=0; off+W<=q.size(); off+=W/2){
+                    ++tried;
                     std::string sub=q.substr(off,W), rsub(sub.rbegin(),sub.rend());
                     for(auto& c:rsub) c=(c=='A'?'T':c=='T'?'A':c=='C'?'G':c=='G'?'C':c);
+                    const size_t before = ranges.size();
                     for(const std::string* pat : { &sub, &rsub }){
                         if(pat==&rsub && rsub==sub) break;
                         for(size_t at=hay.find(*pat); at!=std::string::npos; at=hay.find(*pat,at+1))
                             ranges.push_back({(uint64_t)at,(uint64_t)(at+pat->size())});
                     }
-                    if(!ranges.empty())
-                        fprintf(stderr,"[query] %zu bp probe had no exact match; "
-                                       "matched a %zu bp window at offset %zu instead\n",
-                                q.size(), W, off);
+                    if(ranges.size()>before) ++hitw;
                 }
+                if(hitw)
+                    fprintf(stderr,"[query] %zu bp query had no exact match; %zu of %zu "
+                                   "%zu bp windows matched, union taken\n",
+                            q.size(), hitw, tried, W);
             }
             std::sort(ranges.begin(),ranges.end());
             fprintf(stderr,"[query] sequence of %zu bp -> %zu occurrence(s) in the pseudogenome\n",
