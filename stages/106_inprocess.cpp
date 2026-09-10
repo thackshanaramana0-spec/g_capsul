@@ -46,6 +46,17 @@ static const uint32_t NONE    = UINT32_MAX;
 static const uint32_t SEED    = 32;               // exactly one uint64 at 2 bits/base
 static const uint64_t SEEDMSK = ~0ULL;            // 32 bases * 2 bits = 64
 
+// Structural ceiling on read length, shared by every fixed-size stack buffer
+// that unpacks one read at a time (rappend's b_[1024], the dedup pre-pass's
+// ubuf[1024]). This is not a policy choice -- it is the actual size of those
+// buffers, minus one byte of margin, and is the single source of truth for
+// both the load-time guard and the input-scope check that runs before it.
+// The 19 locked benchmark datasets max out at 301 bases; every real Illumina
+// short-read run is far under this. It is a real ceiling on the archive
+// format as it exists today, not a placeholder -- lifting it means making
+// those buffers dynamic, not raising a number.
+static const uint32_t MAX_READ_LEN = 1023;
+
 static inline int b2(char c){
     switch(c){ case 'A':return 0; case 'C':return 1; case 'G':return 2; case 'T':return 3; }
     return -1; }
@@ -379,6 +390,123 @@ int main(int argc,char** argv){
         if(getcwd(cwdbuf,sizeof cwdbuf)) g_input_path = std::string(cwdbuf) + "/" + g_input_path;
     }
 
+    bool NODEDUP = getenv("NODEDUP") && atoi(getenv("NODEDUP"));
+    double DUPFRAC = -1.0;
+    // SCOPE CHECK -- runs unconditionally, on the SAME single streaming pass
+    // that already exists to measure the duplicate fraction (below), rather
+    // than as a separate throwaway scan. This is the one place upstream of
+    // every fixed-size per-read buffer where the true input shape is known
+    // before any of them are touched.
+    //
+    // Why this exists: `if(b.size()>MAX_READ_LEN) continue;` further down
+    // silently DROPS any oversize read with no message. On an input built
+    // entirely of such reads (any long-read technology -- Oxford Nanopore,
+    // PacBio -- since their reads run from ~1 kb into the hundreds of kb),
+    // every read is dropped, n_in reaches 0, and the pipeline nonetheless
+    // completes normally and writes a structurally valid, completely empty
+    // archive at exit code 0. A reviewer pointing this tool at unsupported
+    // input would see success. Refusing loudly, with the measured numbers
+    // that justify it, is the fix -- not a filename or header sniff for
+    // "nanopore", which is guessable and gameable, but the actual property
+    // every stage downstream assumes.
+    {
+        std::ifstream pf(argv[1]);
+        if(!pf){
+            fprintf(stderr,"FATAL: cannot open input file '%s'\n",argv[1]);
+            return 2;
+        }
+        std::unordered_set<uint64_t> seenh;
+        std::string a1,b1,c1,d1;
+        size_t tot=0, dup=0, toolong=0; uint32_t longest=0; std::string longest_hdr;
+        size_t malformed_lines=0;
+        // Names, independently of read length: `nmc`'s tokenizer indexes
+        // per-token-index model arrays by a running token count, guarded at
+        // `token_ctr>=MAXTOK-1` (include/names_coder.h) so it cannot overrun
+        // those arrays -- but that guard TRUNCATES the token stream rather
+        // than refusing, and a header producing more than MAXTOK-1 tokens
+        // decodes to something other than what was encoded: verified by
+        // round-tripping a real 2000-token header through this exact build,
+        // which came back byte-DIFFERENT on all 20 test records. A token is a
+        // maximal alphabetic run, an all-'0' run, a digit run, or one other
+        // character, so a header can never produce more tokens than it has
+        // characters -- bounding header LENGTH is therefore a proven, exact
+        // upper bound on token count with no risk of missing a real overrun,
+        // without re-implementing the tokenizer's own splitting rule a
+        // second time (a second implementation is itself a way to drift out
+        // of sync with the one that matters, per this project's own history).
+        uint32_t longest_hdr_len=0; std::string longest_hdr_line;
+        while(std::getline(pf,a1)){
+            if(!std::getline(pf,b1)||!std::getline(pf,c1)||!std::getline(pf,d1)){
+                ++malformed_lines; break;                 // truncated record at EOF
+            }
+            if(a1.empty()||a1[0]!='@'||c1.empty()||c1[0]!='+'){ ++malformed_lines; continue; }
+            ++tot;
+            if((uint32_t)b1.size()>longest){ longest=(uint32_t)b1.size(); longest_hdr=a1; }
+            if(CAPS_NAMES && (uint32_t)a1.size()>longest_hdr_len){
+                longest_hdr_len=(uint32_t)a1.size(); longest_hdr_line=a1;
+            }
+            if(b1.size()>MAX_READ_LEN){ ++toolong; continue; }
+            if(!getenv("NODEDUP")){
+                if(b1.find('N')!=std::string::npos) continue;
+                uint64_t h=1469598103934665603ULL;
+                for(char ch:b1){ h^=(uint8_t)ch; h*=1099511628211ULL; }
+                if(!seenh.insert(h).second) ++dup;
+            }
+        }
+        if(CAPS_NAMES && longest_hdr_len>=nmc::MAXTOK){
+            fprintf(stderr,
+                "FATAL: a read header is %u characters long, at or past this "
+                "format's %u-character names-tokenizer bound (nmc::MAXTOK, "
+                "include/names_coder.h). Longest: '%.80s%s'\n"
+                "  With CAPS_NAMES=1 a header this long can silently decode to "
+                "something other than what was encoded (verified: a 2000-token "
+                "synthetic header round-tripped byte-different on every "
+                "record). Refusing rather than risk a lossless-archive claim "
+                "that is not actually true for this file. Re-run with "
+                "CAPS_NAMES unset to compress sequence/quality only, or shorten "
+                "the offending header(s).\n",
+                longest_hdr_len, (unsigned)nmc::MAXTOK, longest_hdr_line.c_str(),
+                longest_hdr_line.size()>80?"...":"");
+            return 2;
+        }
+        if(tot==0){
+            fprintf(stderr,
+                "FATAL: no usable FASTQ records found in '%s' (%zu malformed/short "
+                "record(s) seen). Refusing to write an archive rather than emit an "
+                "empty one that reports success.\n", argv[1], malformed_lines);
+            return 2;
+        }
+        if(toolong>0){
+            fprintf(stderr,
+                "FATAL: %zu of %zu records (%.1f%%) exceed this format's %u-base "
+                "structural limit; longest observed is %u bases (record '%s').\n"
+                "  This is not a policy threshold -- every per-read decode buffer "
+                "in this encoder is a fixed %u-byte stack array (see stages/"
+                "106_inprocess.cpp, MAX_READ_LEN), and reads at this length come "
+                "from long-read sequencing (Oxford Nanopore, PacBio), a technology "
+                "this archive format does not currently support: its assembly, "
+                "mismatch and position coders are all built and validated against "
+                "short-read (Illumina-shaped, <=%u base) data, and none of that "
+                "has been measured against a length- and indel-dominated error "
+                "profile. Refusing rather than silently dropping every oversize "
+                "read and writing a truncated or empty archive that would report "
+                "success.\n"
+                "  Supported input: short-read FASTQ, any read length up to %u "
+                "bases, fixed or variable length, forward/reverse-complement "
+                "strands, ACGTN alphabet. See industry/check_input_scope.py for "
+                "a standalone pre-flight report on any input file.\n",
+                toolong, tot, 100.0*toolong/tot, (unsigned)MAX_READ_LEN,
+                (unsigned)longest, longest_hdr.c_str(),
+                (unsigned)MAX_READ_LEN, (unsigned)MAX_READ_LEN, (unsigned)MAX_READ_LEN);
+            return 2;
+        }
+        if(!getenv("NODEDUP")){
+            DUPFRAC=(double)dup/(double)tot; NODEDUP = (DUPFRAC < 0.15);
+            fprintf(stderr,"[dedup] measured duplicate fraction %.1f%% -> dedup %s\n",
+                    100.0*DUPFRAC, NODEDUP?"OFF":"ON");
+        }
+    }
+
     // ── QUALITY AND NAMES OVERLAP THE ASSEMBLY ──────────────────────────────
     // Measured on HG002 (2-point grid, 304.48 s total): the parent phase is
     // 89.4 s of which quality+names is 40.1 s, and that phase runs at only 59%
@@ -536,39 +664,9 @@ int main(int argc,char** argv){
     std::vector<uint32_t> orig2uid;       // original read (N-filtered out) -> unique id
     std::vector<uint16_t> origlen;        // TRUE length of each ORIGINAL read (see containment note)
     size_t n_in=0,n_filt=0;
-    // ADAPTIVE DEDUP, keyed on a MEASURED property of the input.
-    // Pre-assembly dedup collapses duplicate reads so position/length/strand/
-    // mismatch data is stored once, but forces an orig2uid correlation array
-    // over every ORIGINAL read -- our single biggest remaining loss to PgRC2,
-    // who pay nothing there (a duplicate is just a 100%-length overlap in
-    // their chain mechanism). Which side wins depends on how duplicated the
-    // input actually is. Measured on real full files:
-    //     E. coli        20.4% dup -> dedup WINS by 3.8%
-    //     L. major       10.0% dup -> dedup LOSES by 0.40%
-    //     P. aeruginosa   1.2% dup -> dedup LOSES by 0.49%
-    // So the break-even sits between 10% and 20.4%; the threshold is set at
-    // 15%. This is a formula over a measured input property, not a per-dataset
-    // switch, per the standing algorithmic-first rule. A cheap hash-only
-    // pre-pass measures the rate before the real load decides.
-    bool NODEDUP = getenv("NODEDUP") && atoi(getenv("NODEDUP"));
-    double DUPFRAC = -1.0;
-    if(!getenv("NODEDUP")){
-        std::ifstream pf(argv[1]);
-        if(pf){
-            std::unordered_set<uint64_t> seenh;
-            std::string a1,b1,c1,d1; size_t tot=0, dup=0;
-            while(std::getline(pf,a1)&&std::getline(pf,b1)&&std::getline(pf,c1)&&std::getline(pf,d1)){
-                if(b1.find('N')!=std::string::npos) continue;
-                uint64_t h=1469598103934665603ULL;
-                for(char ch:b1){ h^=(uint8_t)ch; h*=1099511628211ULL; }
-                ++tot;
-                if(!seenh.insert(h).second) ++dup;
-            }
-            if(tot){ DUPFRAC=(double)dup/(double)tot; NODEDUP = (DUPFRAC < 0.15); }
-            fprintf(stderr,"[dedup] measured duplicate fraction %.1f%% -> dedup %s\n",
-                    100.0*DUPFRAC, NODEDUP?"OFF":"ON");
-        }
-    }
+    // ADAPTIVE DEDUP: the measured-duplicate-fraction reasoning that decides
+    // NODEDUP is documented where NODEDUP is now computed, above, alongside
+    // the scope check that shares its streaming pass over the file.
     // STAGE 100 -- real, previously-undisclosed data-loss bug: N-containing
     // reads were `continue`'d here with NO storage anywhere, in every stage
     // from 87 through 98. Caught only because a direct question ("how can
