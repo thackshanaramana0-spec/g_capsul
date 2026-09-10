@@ -44,9 +44,56 @@ succeed.**
 the whole chromosome rather than windows, but one chromosome — because the
 archives are chr20. Nothing here is evidence about whole-genome behaviour.
 
+### Why chr20 is the scope, stated against what this field actually does
+
+This is a real limit and is not argued away. But it is worth recording what
+the comparable published work evaluates on, because the answer is not
+"whole genome":
+
+| work | evaluation data |
+|---|---|
+| **eBWT2SNP** (Prezza et al., *Algorithms Mol Biol* 2019) | **simulated** chr22 (29×) · **simulated** chr16 (22×) · real chr1 (43–47×) |
+| **DiscoSNP++** (its own published indel figures) | **simulated** human chr1 |
+| **SKA lo** (*MBE* 2025) | 55 *S. aureus* samples — bacteria, multi-sample |
+| **PgRC / PgRC2 / SPRING** | compression only; no variant-calling evaluation at all |
+
+Single-chromosome evaluation is the norm in reference-free variant calling,
+and two of eBWT2SNP's three experiments are on **simulated** reads. Against
+that baseline this work uses **real data throughout, four individuals rather
+than one, and the complete chromosome rather than a window** — plus 19 real
+datasets (55.0 GB) for Claim 1, which the calling papers do not attempt.
+
+The honest position: whole-genome would strengthen Claims 2 and 3, and it is
+the obvious next experiment. It is not a gap that puts this work below its
+field's standard.
+
+**What whole-genome would actually cost**, projected from measured HG002
+chr20 figures (chr20 is 1/49 of the genome; the projection is linear and the
+non-linearity caveat below is the important part):
+
+    input FASTQ    ~190 GB per individual   (~0.8 TB for four)
+    archive         ~26 GB per individual   (~105 GB for four)
+    compress         ~2.9 h per individual
+    call             ~1.3 h per individual  (~17 h compute for four)
+
+**Compute is not the blocker; k-mer spill disk is.** The caller spills ~25 GB
+at chr20 scale in the current format, which is ~1.2 TB at whole-genome scale
+and exceeds the 233 GB disk these results were produced on. A superkmer spill
+format that would cut this to roughly 64 GB was specified in detail
+(`docs/_removable/SUPERKMER_PLAN.md`) and **never built**. Anyone attempting
+whole-genome should expect to build that first; it is the single concrete
+engineering prerequisite, and it is named rather than left to be discovered.
+
 **No non-human diploid variant validation.** The other 15 datasets carry Claim 1
 only. There is no truth set of comparable quality for them, which is a property
 of the field rather than a shortcut taken here.
+
+**Sample sizes, stated plainly.** T2.1/T2.3 rest on **four** individuals.
+T2.4's census is **26** sites — the complete population for chr20, not a
+sample, but 26 is a small number and a reviewer is entitled to say so. T3.4 is
+**400** sites (4 × 100), of which only HG002's 100 were independently re-run
+during the 2026-09-10 audit. None of these are underpowered *for what they
+claim*, but none of them is large.
 
 ## 2. The published loss, and why it is published
 
@@ -181,3 +228,20 @@ benchmarked the regime. Every locked dataset is normal coverage, where we win
   structurally (every stream length must read completely), not cryptographically.
 - **No random access by read id.** `query` is by pseudogenome coordinate or by
   content.
+- **T2.4's `capsule_one` / `capsule_none` columns read `NOT_MEASURED`.** The
+  scoring script's CSV schema had those columns from the start but nothing ever
+  computed them — the values published there before 2026-09-10 (`4`, `1`) were
+  never measured. The script now computes them; the CSV records
+  `NOT_MEASURED` rather than back-filling a number no run produced. Only
+  `capsule_both` (17) is a measurement.
+- **T3.4 requires an optional sidecar built with `CAPS_PILEUP=1`.** Without it
+  the coordinate arm scores 0 instead of 18, because `query` emits the
+  consensus rather than the reads. The flag is now documented in
+  `benchmark/documentation/REPRODUCE_EVERYTHING.md` and `RESULT_CODE.md`; it
+  was documented nowhere before the 2026-09-10 audit, and cost three false
+  "unreproducible" verdicts during that audit before the cause was found.
+- **One published figure was withdrawn during the final audit.** T2.4 was
+  published as 21/26 with no supporting raw log; three independent
+  re-derivations gave 17/26 and the number was corrected everywhere. Recorded
+  because the base rate of such defects in this work is demonstrably not zero:
+  one in ten tables, found only because someone went looking. See `AUDIT.md`.
