@@ -23,19 +23,45 @@ overlap and maps the remainder onto it — the approach introduced by PgRC
 compression from Quip [Jones et al. 2012]. The greedy shortest-common-superstring
 and q-gram matching primitives are standard.
 
-The construction differs throughout. PgRC2 maintains **three** pseudogenomes —
-high-quality, low-quality, and one for N-containing reads; we use **two**
-regions and route N-containing reads through the same pipeline, substituting
-N→A and keeping the N positions in a side stream. Overlaps are found by a
-parallel hash sweep rather than their sort-merge: 11× more comparisons, 3.2×
-faster on 12 cores. Our round-1 division is the structural equivalent of their
-high/low-quality split — theirs is inactive by default in the released binary,
-so both are in practice topological — and leaves a main region 81,737 bases
-smaller on *S. acidocaldarius*. No source is shared; PgRC2 is GPL-3.
+What is built on that approach here is a substantially different system.
 
-The scope differs as well. This archive stores identifiers, line 3 and quality,
-none of which PgRC does, and Claims 2 and 3 retain and serve the pseudogenome
-rather than discarding it after encoding.
+**Scope.** PgRC emits DNA only and cannot reproduce a FASTQ. This is a complete
+lossless archive: identifiers, line 3 and quality as well as sequence, carried
+in **19 independently coded streams**, each assigned a coder by measurement
+rather than by rule — the selector evaluates LZMA, PPMd7, FSE, an adaptive
+range coder, byte-plane-split variants, a chunked mode and a constant-run
+encoding, and keeps whichever is smallest for that stream's actual statistics.
+
+**Read geometry.** PgRC2 requires constant-length reads at most 255 bp, and
+refuses or crashes otherwise — it cannot attempt 6 of the 14 datasets in an
+earlier iteration of this benchmark, three refused outright
+(`Unsupported variable length reads`) and two by memory corruption. Variable
+length is supported here as a first-class case: prefix-containment removal
+generalises exact deduplication (a trimmed read is a strict prefix of its
+untrimmed twin, which hash dedup cannot see), mismatch positions are varint-
+coded so reads beyond 256 bp are representable, and reads containing N are
+substituted N→A and routed through the same pipeline with their positions in a
+side stream rather than into a separate pseudogenome.
+
+**Construction.** PgRC2 maintains three pseudogenomes; we use two regions.
+Overlaps are found by a parallel hash sweep rather than their sort-merge — 11×
+more comparisons, 3.2× faster on 12 cores. Our round-1 division is the
+structural equivalent of their high/low-quality split (theirs is inactive by
+default in the released binary, so both are in practice topological) and leaves
+a main region 81,737 bases smaller on *S. acidocaldarius*. The mapping
+tolerance adapts to measured leftover fraction rather than a fixed ratio.
+
+**Coders.** Read order is coded as a Lehmer permutation over a Fenwick tree at
+18.49 bits/read against PgRC2's 22.82, within 0.022% of the information-
+theoretic floor. Mismatch symbols are conditioned on the reference base rather
+than coded independently, 40% below theirs. The DNA coder is multi-order
+context mixing with SSE. Identifiers extend SPRING's positional tokenizer with
+a self-gating wide delta and a token that resolves against the archive's own
+stored read length instead of re-coding it.
+
+No source is shared with PgRC2, which is GPL-3. And Claims 2 and 3 have no
+counterpart in that lineage at all: they depend on the pseudogenome being
+retained and served, which is precisely what it is built to discard.
 
 Implemented in `stages/106_inprocess.cpp` (the encoder) and
 `stages/capsule_decode.cpp` (the decoder), with stream coders in
