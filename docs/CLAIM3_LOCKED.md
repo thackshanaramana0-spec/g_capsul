@@ -1,6 +1,29 @@
-# Claim 3 — ADDRESSABLE — LOCKED
+# Claim 3 — ADDRESSABLE — LOCKED (2026-09-03) — **SUPERSEDED 2026-09-10**
 
-Locked 2026-09-03. This is the single citable source for Claim 3. Where this
+> **Read this before citing anything below.** This document was written against
+> the OUTER ARCS repo and its `results/claim3/t6_results.csv`, using MEGAHIT and
+> SPAdes on a handful of datasets. It is a different experiment from the one the
+> paper now reports. Claim 3's citable numbers are the executed 19-dataset
+> sweep:
+>
+>     benchmark/results/claim3_T3.1_T3.2_T3.3.csv    T3.1 export   129-784x
+>                                                    T3.2 coverage  16-54x
+>                                                    T3.3 query     all 19
+>     benchmark/results/claim3_T3.4_locus_fidelity.csv
+>                                                    coordinate  81/400
+>                                                    content    345/400
+>
+> Traceability for those: `benchmark/documentation/RESULT_CODE.md`. Where this
+> document and a result file disagree, **the result file wins.**
+>
+> What survives here unchanged, and is still worth reading: the reasoning about
+> why an export ratio must not be read as "the same output, faster" (§ below),
+> and the prior-art analysis. What does not: every number.
+>
+> Kept rather than deleted, per this repo's rule that retractions are marked in
+> place.
+
+Locked 2026-09-03. This was the single citable source for Claim 3 at that date. Where this
 document disagrees with an earlier draft (`PROJECT_AUDIT.md`,
 `CLAIM3_PRIOR_ART.md`), this one is authoritative — those are kept as the
 historical record of how the conclusion was reached, per this repo's standing

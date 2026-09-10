@@ -1,5 +1,24 @@
 # Claim 2 — table structure (T3/T4/T5/T5.2) and the het-indel deep scan
 
+> **PARTIALLY SUPERSEDED 2026-09-10 — the multi-allelic sections only.**
+> This document analyses T5.2 (now T2.4) over a 5 Mb window and calls it "a
+> 7-site result ... a capability demonstration, not a rate", after failing to
+> reconcile 5/111 with an earlier 11/18. That reconciliation has since been
+> done, and the window was replaced by a COMPLETE chr20 census:
+>
+>     T2.4  21/26 (80.8%)  every SNV-only multi-allelic site on chr20
+>           DiscoSNP++  0 multi-allelic records in 3,989 records
+>
+> The 5/111 was meaningless because 104 of those 111 sites are indel-bearing
+> and a single-base comparison cannot evaluate them — this document reaches
+> that conclusion itself in §1; the fix was to score only the sites the metric
+> can actually evaluate. The 11/18 denominator is unreproducible and is
+> withdrawn. Citable source: `benchmark/results/claim2_T2.4_multiallelic.csv`,
+> traced in `benchmark/documentation/RESULT_CODE.md`.
+>
+> **The het-indel scan below is NOT superseded** and remains the root-cause
+> record for T2.3.
+
 Written 2026-09-03 in response to two decisions: (1) add the multi-allelic
 result as its own table rather than swapping it in for het-indel, and (2) do
 one final, consolidated root-cause pass on het-indel, including checking

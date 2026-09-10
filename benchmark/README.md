@@ -19,6 +19,8 @@ script in `scripts/` and land in a file in `results/`.**
 | whether it reproduces on another machine | `documentation/REPRODUCIBILITY.md` |
 | what the claims actually are | `documentation/CLAIMS_FINAL.md` |
 | which table is which | `documentation/TABLE_MAP.md` |
+| which of the 55 scripts are live | `documentation/SCRIPT_INVENTORY.md` |
+| which of the 12 run dirs is real | `documentation/RESULTS_INVENTORY.md` |
 
 ## The eight tables
 
@@ -69,13 +71,16 @@ LOSSY archive.
 
 ## Superseded material — kept, not deleted
 
-Earlier benchmark scripts remain in `../scripts/` and are **not** symlinked
-here: `run_claim1_bench.sh`, `run_claim3.sh`, `benchmark_final.sh`,
-`benchmark_sanity_one.sh`, `run_window_bench_capsule.sh`,
-`run_polyploid_bench_capsule.sh`, `run_fullchr20_bench_capsule.sh` (the FASTQ
-path, superseded by the archive path), `sim_indel_bench.py`, and others. They
-are the evidence for decisions that were later reversed and are kept for that
-reason.
+`../scripts/` holds 55 scripts; the 17 symlinked here produced the published
+results. The other 38 are the evidence for decisions later reversed, and are
+kept for that reason. **The complete list, one line each, is
+`documentation/SCRIPT_INVENTORY.md`** — a partial list used to sit here, which
+is worse than none, because it implied the rest were live.
+
+Likewise `results/` at the repo root holds 12 run directories and only
+`FULL_SWEEP_20260909` is citable. `documentation/RESULTS_INVENTORY.md` says what
+each of the others is, and records that `benchmark/results/` is a **byte-identical
+copy** of the authoritative run (verified with `cmp`, 11/11 files).
 
 Two specific retractions worth knowing before reading any older document:
 
