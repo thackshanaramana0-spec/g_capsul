@@ -1,5 +1,26 @@
 # Multi-allelic calling (real data) and polyploid calling (synthetic only)
 
+> **SUPERSEDED 2026-09-10 — numbers only.** This document predates the final
+> 19-dataset sweep of 2026-09-09, and its multi-allelic rows say 11/18 vs 0/18. Every one of those figures has been
+> replaced:
+>
+> | | superseded | **final** |
+> |---|---|---|
+> | Claim 1 | 14 datasets, various margins | **19/19 vs SPRING (−6.03%), 19/19 vs Genozip (−43.26%), 57/57 LOSSLESS** |
+> | het-SNV F1 | 0.890 | **0.876** (mean of 4 individuals, full chr20, called from the archive) |
+> | het-indel F1 | 0.637 / 0.666 | **0.621** |
+> | multi-allelic | 11/18 | **21/26**, a complete chr20 census; DiscoSNP++ 0 of 3,989 records |
+> | tetraploid SNV | 0.836 | **0.897** |
+> | export vs SPAdes | 555–656x | **129–784x** |
+> | T3.4 coordinate | 0/400 | **81/400** (the 0 was our query emitting consensus, not reads) |
+>
+> Citable source: `benchmark/results/*.csv`, traced in
+> `benchmark/documentation/RESULT_CODE.md`. **Where this document and a result
+> file disagree, the result file wins.**
+>
+> Kept because its *reasoning* is still the record of how the conclusion was
+> reached — this repo does not delete superseded work, it marks it.
+
 Written 2026-09-02, corrected 2026-09-03.
 
 ## 0. THE TWO CLASSES ARE NOT THE SAME — an earlier version of this document
