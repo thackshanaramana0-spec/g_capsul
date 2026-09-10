@@ -778,11 +778,41 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
                 for(size_t at=hay.find(*pat); at!=std::string::npos; at=hay.find(*pat,at+1))
                     ranges.push_back({(uint64_t)at,(uint64_t)(at+pat->size())});
             }
+            // LONG PROBES FAIL EXACT MATCH, and silently returning nothing is
+            // the wrong answer. Reads carry sequencing errors and the
+            // pseudogenome is a CONSENSUS, so the chance a long query matches
+            // exactly falls off fast: measured on E. coli, a 150 bp read and a
+            // 100 bp chunk of it both give 0 occurrences, while 60/40/30 bp
+            // chunks of the SAME read all hit. A user querying with a whole
+            // read or a gene should get its locus, not an empty file.
+            //
+            // So on a miss, fall back to sliding a 40 bp window along the
+            // query and taking the first window that hits. 40 is not tuned --
+            // it is the size at which a probe is long enough to be unique in a
+            // human-scale pseudogenome (4^40 >> 3e9) and short enough to have
+            // a good chance of being error-free.
+            if(ranges.empty() && q.size() > 60){
+                const size_t W = 40;
+                for(size_t off=0; off+W<=q.size() && ranges.empty(); off+=W/2){
+                    std::string sub=q.substr(off,W), rsub(sub.rbegin(),sub.rend());
+                    for(auto& c:rsub) c=(c=='A'?'T':c=='T'?'A':c=='C'?'G':c=='G'?'C':c);
+                    for(const std::string* pat : { &sub, &rsub }){
+                        if(pat==&rsub && rsub==sub) break;
+                        for(size_t at=hay.find(*pat); at!=std::string::npos; at=hay.find(*pat,at+1))
+                            ranges.push_back({(uint64_t)at,(uint64_t)(at+pat->size())});
+                    }
+                    if(!ranges.empty())
+                        fprintf(stderr,"[query] %zu bp probe had no exact match; "
+                                       "matched a %zu bp window at offset %zu instead\n",
+                                q.size(), W, off);
+                }
+            }
             std::sort(ranges.begin(),ranges.end());
             fprintf(stderr,"[query] sequence of %zu bp -> %zu occurrence(s) in the pseudogenome\n",
                     q.size(), ranges.size());
             if(ranges.empty()){
-                fprintf(stderr,"[query] not found -- no reads emitted\n");
+                fprintf(stderr,"[query] not found -- no reads emitted. A long query may "
+                               "carry a sequencing error; try a 30-60 bp sub-sequence.\n");
                 FILE* fe=fopen(outdir.c_str(),"wb"); if(fe) fclose(fe);
                 return 0;
             }
