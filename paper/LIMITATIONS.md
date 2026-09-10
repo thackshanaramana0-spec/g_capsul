@@ -6,6 +6,38 @@ around a result that is actually fine; every entry is a real boundary.
 
 ---
 
+## 0. Sequencing technology: short-read only. Long-read is refused, not attempted.
+
+**This tool does not support long-read sequencing (Oxford Nanopore, PacBio) in
+any form.** It was designed and validated exclusively against short-read
+Illumina-shaped data (40–301 bases; see the 19 locked datasets). This is a
+scope decision, not a partial or degraded capability.
+
+**Why it cannot silently be tried anyway.** Every per-read decode path in the
+encoder unpacks one read into a fixed-size stack buffer (`stages/106_inprocess.cpp`,
+`MAX_READ_LEN = 1023`), a size chosen for short-read technology. A read past
+that length cannot be represented by the current format at all — this is a
+structural property of the archive, not a tunable parameter.
+
+**What used to happen, and what happens now.** Before 2026-09-10, an oversize
+read was silently dropped with no warning; a file made entirely of such reads
+(i.e., any real long-read run) still produced a structurally valid, empty
+archive at exit code 0 — a user would see "success" on data the tool did
+nothing with. This is fixed: the encoder now refuses unconditionally, before
+any read is touched, with the exact count and length of the offending reads
+and the structural reason. Verified: constructing a synthetic 2000-base-read
+file and running the real binary against it reproduces the refusal on demand,
+5/5 repeated trials, with no crash. See `industry/README.md` for the full
+account, including a second, independent defect (silent corruption of read
+*names*, unrelated to read length, on pathologically long header lines) found
+and fixed the same way.
+
+**The decision, stated plainly: long-read data is out of scope. The fix was
+not to add support — it was to make the tool say so instead of pretending to
+succeed.**
+
+---
+
 ## 1. Scope of the human evaluation
 
 **Claims 2 and 3 are chr20 only, at 30×.** Four GIAB individuals (HG002–HG005),

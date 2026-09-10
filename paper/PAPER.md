@@ -94,9 +94,14 @@ the mechanism: adding a coordinate API would not work, and 81/400 measures why.
 
 ## What a reviewer should check first
 
-1. **`../benchmark/documentation/RESULT_CODE.md`** — every number traced to the
+1. **`../scripts/test_0_scope_and_capability.sh`** — run this before anything
+   else. Self-contained (no locked dataset needed), it states this build's
+   exact scope — short-read only, up to 1023 bases, no long-read technology —
+   extracted live from the encoder's own source, then proves each boundary
+   by constructing the input and running the real binary.
+2. **`../benchmark/documentation/RESULT_CODE.md`** — every number traced to the
    script that made it and the file that holds it.
-2. **The one-command reproduction:**
+3. **The one-command reproduction:**
    `CLAIMS=1 bash benchmark/scripts/sanity_archive_one.sh SRR2584863`
    → archive **68,429,027 B exactly**, 3/3 LOSSLESS. Verified byte-identical
    across 2/3/7/12 cores. A different size on any machine is a real regression.
