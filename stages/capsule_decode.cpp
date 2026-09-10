@@ -392,6 +392,22 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
                         if(fread(P.data(),1,np*4,qf)!=np*4 || fread(L.data(),1,nl*2,qf)!=nl*2){
                             fprintf(stderr,"[query] sidecar truncated -- rebuild it\n"); fclose(qf); return 1; }
                     } else { fprintf(stderr,"[query] sidecar has no placements -- rebuild it\n"); fclose(qf); return 1; }
+                    // per-read deviations, if this sidecar carries them
+                    std::unordered_map<uint32_t,std::pair<uint32_t,uint32_t>> mmix; // u -> (start,count)
+                    std::vector<uint32_t> mmoffs; std::vector<uint8_t> mmsyms;
+                    { uint64_t nid=0,nmm=0;
+                      if(fread(&nid,8,1,qf)==1 && fread(&nmm,8,1,qf)==1 && nid && nmm){
+                          std::vector<uint32_t> ids(nid*2);
+                          mmoffs.resize(nmm); mmsyms.resize(nmm);
+                          if(fread(ids.data(),1,ids.size()*4,qf)==ids.size()*4 &&
+                             fread(mmoffs.data(),1,nmm*4,qf)==nmm*4 &&
+                             fread(mmsyms.data(),1,nmm,qf)==nmm){
+                              uint32_t at=0;
+                              for(uint64_t i=0;i<nid;++i){ mmix[ids[i*2]]={at,ids[i*2+1]}; at+=ids[i*2+1]; }
+                              fprintf(stderr,"[query] sidecar carries deviations for %llu reads\n",
+                                      (unsigned long long)nid);
+                          } else { mmix.clear(); mmoffs.clear(); mmsyms.clear(); }
+                      } }
                     fclose(qf);
                     QLAP("  placement streams decode");
                     std::vector<std::pair<uint64_t,uint64_t>> rr;
@@ -431,7 +447,17 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
                         int hl=snprintf(hdr,sizeof hdr,">r%zu pos=%llu len=%llu\n",u,
                                         (unsigned long long)aa,(unsigned long long)(e-aa));
                         obuf.resize(0); obuf.append(hdr,hl);
+                        const size_t base = obuf.size();
                         for(uint64_t i=aa;i<e;++i) obuf.push_back(base_at(i));
+                        // apply this read's own deviations, so what is emitted
+                        // is the READ and not the consensus under it
+                        auto it = mmix.find((uint32_t)u);
+                        if(it != mmix.end()){
+                            for(uint32_t k=0;k<it->second.second;++k){
+                                const uint32_t o = mmoffs[it->second.first+k];
+                                if(base+o < obuf.size()) obuf[base+o] = (char)mmsyms[it->second.first+k];
+                            }
+                        }
                         obuf.push_back('\n');
                         fwrite(obuf.data(),1,obuf.size(),of); ++n;
                     }
@@ -608,8 +634,12 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
     // ARCHIVE nothing, which is the point.
     // CAPS_PILEUP=1 makes `index` continue past the pg dump and also emit the
     // VARIANT-SITE TABLE (see below). Off by default so `index` stays fast.
+    // `index` returns early with pg+placements only. With CAPS_PILEUP=1 it
+    // continues past the mismatch decode so the sidecar can also carry each
+    // read's own deviations -- which is what makes `query` emit the READ
+    // rather than the consensus beneath it.
     const bool WANT_PILEUP = (mode=="index") && getenv("CAPS_PILEUP")!=nullptr;
-    if(mode=="index" && !WANT_PILEUP){
+    if(mode=="index"){
         FILE* f=fopen(outdir.c_str(),"wb");
         if(!f){ fprintf(stderr,"cannot write %s\n",outdir.c_str()); return 1; }
         const uint64_t magic=0x5158494451494451ULL, plen=pg.size(), mend=MAINEND;
@@ -634,8 +664,12 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
           fprintf(stderr,"[index] %llu bp + %llu placements -> %zu B sidecar -> %s\n",
                   (unsigned long long)plen,(unsigned long long)np,
                   packed.size()+40+np*4+nl*2, outdir.c_str()); }
+
         fclose(f);
-        return 0;
+        // Without CAPS_PILEUP the sidecar is complete here. With it, fall
+        // through so the deviations can be appended once the mismatch streams
+        // have been decoded further down.
+        if(!WANT_PILEUP) return 0;
     }
     if(mode=="export"){
         FILE* f=fopen(outdir.c_str(),"wb");
@@ -982,6 +1016,47 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
     // stream is sequencing noise; 1.4% is variant signal. Retaining just the
     // recurrent part, delta-coded, costs 0.0606% of the archive at >=3x.
     if(WANT_PILEUP){
+        // Append each read's deviations to the sidecar written above.
+        // ── PER-READ DEVIATIONS ────────────────────────────────────────────
+        // Without these, `query` emits the CONSENSUS at each read's position,
+        // so every returned read agrees with every other -- measured, 121
+        // overlapping pairs with zero mismatching bases. That is not a pileup,
+        // it is a consensus repeated N times, and it is why variants encoded as
+        // per-read mismatches (rather than as separate haplotype contigs) were
+        // invisible to a locus query.
+        //
+        // They cannot be reached from the archive on demand: mm_sym is coded
+        // with an ADAPTIVE model in READ order, so read k's deviations require
+        // decoding all k-1 before it. That is a property of the coding, not an
+        // oversight -- decompression only ever walks reads in order. The
+        // sidecar breaks the ordering dependency by decoding once.
+        //
+        // Stored CSR-style and ONLY for reads that have deviations, so the cost
+        // scales with error count and not with read count.
+        { FILE* f=fopen(outdir.c_str(),"ab");
+          if(!f){ fprintf(stderr,"cannot append to %s\\n",outdir.c_str()); return 1; }
+          std::vector<uint32_t> ids; std::vector<uint32_t> offs; std::vector<uint8_t> syms;
+          size_t run=0;
+          for(size_t u=0; u<NU; ++u){
+              const uint16_t c=(u<mmcount.size())?mmcount[u]:0;
+              if(!c){ continue; }
+              uint32_t prevj=0; size_t wrote=0;
+              for(uint16_t m=0;m<c;++m){
+                  if(run+m>=mmpos32.size()||run+m>=obs.size()) break;
+                  uint32_t j=prevj+mmpos32[run+m]; prevj=j;
+                  offs.push_back(j); syms.push_back(obs[run+m]); ++wrote;
+              }
+              if(wrote){ ids.push_back((uint32_t)u); ids.push_back((uint32_t)wrote); }
+              run += c;
+          }
+          const uint64_t nid=ids.size()/2, nmm=offs.size();
+          fwrite(&nid,8,1,f); fwrite(&nmm,8,1,f);
+          fwrite(ids.data(),1,ids.size()*4,f);
+          fwrite(offs.data(),1,offs.size()*4,f);
+          fwrite(syms.data(),1,syms.size(),f);
+          fprintf(stderr,"[index] + %llu reads carrying %llu deviations (%zu B)\n",
+                  (unsigned long long)nid,(unsigned long long)nmm,
+                  (size_t)(16+ids.size()*4+offs.size()*4+syms.size())); fclose(f); }
         std::vector<size_t> vmoff(NU+1,0);
         for(size_t u=0;u<NU;++u) vmoff[u+1]=vmoff[u]+(u<mmcount.size()?mmcount[u]:0);
         std::vector<uint32_t> vpos_(positions.size());
