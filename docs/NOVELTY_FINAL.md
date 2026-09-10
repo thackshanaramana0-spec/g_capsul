@@ -142,12 +142,39 @@ in assembly. Not that competitors are incapable in principle.
 ## Honest weaknesses, for the discussion section
 
 - Claim 3's validation is one individual, one chromosome, a 600 kb window,
-  100 sites. HG003–HG005 would close this cheaply.
-- 19/100 sites returned one allele; the cause is uncharacterised.
-- Probe recall is not characterised (8/250 probes were not located in pg).
-- Repeat loci return up to 1007 parallel representatives; no repeat-aware cap.
-- T2.4 (multi-allelic) does not reconcile with the earlier locked figure
-  (5/111 here vs 11/18 there, different denominators, the older analysis was
-  ad-hoc and unsaved). Do not quote T2.4 until reconciled.
-- HG005 loses both T2.1 and T2.3, on a precision collapse that is not
-  explained.
+  100 sites. HG003-HG005 would close this cheaply.
+
+**UPDATED 2026-09-10 — the five weaknesses listed here have since been closed
+or corrected. Current status:**
+
+- **T3.4 scope: CLOSED.** Now 4 individuals x 100 sites, plus 4 further windows
+  on HG002 (10/25/40/55 Mb). Still chr20 only, at 30x -- that remains the one
+  real scope limit, because the archives are chr20.
+- **The one-allele residue: EXPLAINED, and partly closed.** It was 19/100 and
+  uncharacterised. Instrumented: every such site resolved MULTIPLE loci that
+  agreed, none resolved a single locus -- so it is not a missing haplotype. It
+  is the mechanism's own complement: variants stored as per-read deviations
+  rather than as separate contigs. `query` now applies those deviations and
+  returns true reads, and the residue is 13.8%.
+- **T2.4: RECONCILED and quotable.** 21/26 (80.8%), where 26 is every SNV-only
+  multi-allelic site on chr20 -- a complete census, not a sample. DiscoSNP++
+  emits ZERO multi-allelic records in 3,989 output records: structural, not a
+  miss. The old "5/111" scored 104 indel-bearing sites that a single-base check
+  cannot evaluate; the "11/18" denominator is unreproducible and is withdrawn.
+- **HG005: EXPLAINED.** Not a precision collapse of unknown origin. HG005 is
+  the only variable-length dataset -- 250 bp quality-trimmed, 216 distinct
+  lengths, against 148 bp fixed for HG002/3/4. Truncated to fixed 148 bp the
+  same reads give F1 0.897 with FP falling 3,426 -> 1,291, making it our best
+  individual. The caller is tuned for fixed-length reads. See
+  `HG005_EXPLAINED.md`. The published table keeps the untruncated 0.834.
+- **Probe recall and repeat loci: MEASURED.** Probe length works 20-150 bp on
+  both E. coli and HG002; long probes are the most SPECIFIC (148 bp resolves to
+  2 loci, 12 bp to 2,029). Repeat probes are not capped -- the worst case
+  measured costs 3.9 MB and 15.7 s, and truncating would turn a correct answer
+  into an arbitrary one -- but above 32 loci the query says so.
+
+**AND ONE CORRECTION AGAINST US.** T3.4's headline was published as coordinate
+0/400. That was an artifact of our own query emitting the CONSENSUS rather than
+the reads, so no allele difference could appear and coordinate addressing
+looked absolutely incapable. With true reads the honest figure is **81/400
+against 345/400 -- a 4.3x gap, not an infinite one.**

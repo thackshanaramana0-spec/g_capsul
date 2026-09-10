@@ -44,8 +44,14 @@ T2.3 het-indel F1      ours / DiscoSNP++
     model, so the blank is a property of the tool, not a gap here.
 
 T2.4 multi-allelic (HG002 chr20:1-6Mb, 111 truth sites)
-    strict, both ALT alleles recovered:  ours 5/111   DiscoSNP++ 0/111
-    proxy, any call at the position:     ours 14/111  DiscoSNP++ 15/111
+    SUPERSEDED 2026-09-10, kept to show what changed:
+      strict, both alleles:  ours 5/111    proxy, any call: 14/111 vs 15/111
+
+    CURRENT -- complete chr20 census, strict metric scored only on the sites a
+    single-base comparison can actually evaluate:
+      both ALT alleles recovered:  ours 21/26 (80.8%)   DiscoSNP++ 0/26
+      DiscoSNP++ emits ZERO multi-allelic records in 3,989 total records.
+    The 5/111 counted 104 indel-bearing sites as misses BY CONSTRUCTION.
     Both recorded because they disagree in DIRECTION. The strict metric is
     what the claim asserts; DiscoSNP++'s 0 is the documented structural result.
 
@@ -126,7 +132,8 @@ the conventional route.
 - HG005 loses on BOTH T2.1 and T2.3, and it is the same cause on the SNV side:
   precision falls to 0.899 with FP 3,426 against ~1,700 elsewhere. HG005 is the
   6.34 GB Han Chinese son, deeper than the standardised 30x. Not investigated.
-- T2.4's 5/111 does not match the locked doc's 11/18. Different denominator,
+- T2.4 is RECONCILED (see above); this note is superseded. Original text:
+  T2.4's 5/111 does not match the locked doc's 11/18. Different denominator,
   and that original analysis was ad-hoc and never saved. Do not quote T2.4 in
   the paper until it is reconciled.
 - Phase 1 took 2h35m against a 1h21m projection (1.9x). The projection

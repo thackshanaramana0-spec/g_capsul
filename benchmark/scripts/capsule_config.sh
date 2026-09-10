@@ -1,0 +1,1 @@
+../../scripts/capsule_config.sh

@@ -1,0 +1,1 @@
+../../scripts/run_fullchr20_archive_capsule.sh

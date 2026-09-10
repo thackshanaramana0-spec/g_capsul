@@ -1,10 +1,10 @@
 ╔══════════════════════════════════════════════════════════════════════╗
 ║  BENCHMARK 0 — PRE-RUN STATUS                                        ║
 ╚══════════════════════════════════════════════════════════════════════╝
-generated : 2026-09-09 00:15:14 IST
+generated : 2026-09-09 02:44:49 IST
 host      : e2e-147-20  |  user: root
-repo      : /root/arcs-clean/c_star_pg_advance
-branch    : gpt2026  commit: 660706e
+repo      : /tmp/bench_head
+branch    : HEAD  commit: 21ee619
 tree      : DIRTY (uncommitted changes present)
 
 ════════════════════════════════════════════════════════════════════════
@@ -13,10 +13,10 @@ tree      : DIRTY (uncommitted changes present)
   cores                                12
   RAM total                            82 GB
   RAM available                        78 GB
-  disk free                            69 GB
+  disk free                            67 GB
   [ OK ]   cores >= 8                         12
   [ OK ]   RAM >= 32 GB                       82 GB
-  [ OK ]   disk >= 60 GB free                 69 GB
+  [ OK ]   disk >= 60 GB free                 67 GB
 
 ════════════════════════════════════════════════════════════════════════
  2. TOOLS — state of the art we benchmark against
@@ -26,18 +26,18 @@ tree      : DIRTY (uncommitted changes present)
   [ OK ]   Genozip                            /usr/local/bin/genozip
   [ OK ]   Genounzip                          /usr/local/bin/genounzip
   [ OK ]   /dev/stdout exists                 genozip needs it to spawn curl
-  [ OK ]   Genozip round-trip                 3756890 B -> 463186 B, byte-identical
+  [ OK ]   Genozip round-trip                 3756890 B -> 463182 B, byte-identical
   -- Claim 2 (variant calling) --
   [ OK ]   DiscoSNP++ (on PATH)               /root/DiscoSnp/run_discoSnp++.sh
   [ OK ]   rtg (vcfeval)                      /usr/local/bin/rtg
   [ OK ]   KMC (k-mer counter)                /usr/bin/kmc
   [ OK ]   Kmer2SNP python + networkx         /root/miniconda3/envs/kmer2snp_r/bin/python
   [ OK ]   Kmer2SNP tool                      /root/Kmer2SNP/kmer2snp.py
-  [ OK ]   Kmer2SNP runner                    /root/arcs-clean/c_star_pg_advance/scripts/run_kmer2snp.sh
-  [ OK ]   kmer2snp->VCF                      /root/arcs-clean/scripts/kmer2snp_sam_to_vcf.py
-  [ OK ]   T2.4 multi-allelic runner          /root/arcs-clean/c_star_pg_advance/scripts/run_multiallelic_bench_capsule.sh
-  [ OK ]   T2.5 tetraploid runner             /root/arcs-clean/c_star_pg_advance/scripts/run_tetraploid_bench_capsule.sh
-  [ OK ]   T2.5 truth builder                 /root/arcs-clean/c_star_pg_advance/scripts/build_tetraploid_truth.py
+  [ OK ]   Kmer2SNP runner                    /tmp/bench_head/scripts/run_kmer2snp.sh
+  [ OK ]   kmer2snp->VCF                      /tmp/bench_head/scripts/kmer2snp_sam_to_vcf.py
+  [ OK ]   T2.4 multi-allelic runner          /tmp/bench_head/scripts/run_multiallelic_bench_capsule.sh
+  [ OK ]   T2.5 tetraploid runner             /tmp/bench_head/scripts/run_tetraploid_bench_capsule.sh
+  [ OK ]   T2.5 truth builder                 /tmp/bench_head/scripts/build_tetraploid_truth.py
   [ OK ]   seqtk (T2.2 subsampling)           /usr/bin/seqtk
   [ OK ]   bcftools                           /usr/bin/bcftools
   [ OK ]   tabix                              /usr/bin/tabix
@@ -120,7 +120,7 @@ tree      : DIRTY (uncommitted changes present)
   silently altering kc (it has happened twice in this project).
 
   running sanity window (HG002 r2, ~1 min) ...
-  sanity wall time                     17 s
+  sanity wall time                     16 s
   [ OK ]   k-mer multiset identity            kc=1063607 (expected 1063607)
   [ OK ]   SNV F1 unchanged                   F1=0.886 P=0.944 R=0.836
 
@@ -244,7 +244,7 @@ tree      : DIRTY (uncommitted changes present)
 
   TOTAL projected                      ~5.5 h sequential
 
-  projection written                   /root/arcs-clean/c_star_pg_advance/results/BENCHMARK_0_PROJECTION.tsv
+  projection written                   /tmp/bench_head/results/BENCHMARK_0_PROJECTION.tsv
   benchmark_1 reads this file and prints actual-vs-projected as it runs.
 
 ════════════════════════════════════════════════════════════════════════
@@ -253,7 +253,7 @@ tree      : DIRTY (uncommitted changes present)
   checks passed                        45
   warnings                             0
   failures                             0
-  preflight took                       57 s
+  preflight took                       56 s
 
   ╔════════════════════════════════════════════════════════════════════╗
   ║   VERDICT: GO                                                      ║
@@ -264,5 +264,5 @@ tree      : DIRTY (uncommitted changes present)
   START WITH:  bash scripts/benchmark_1_run.sh
   (add SANITY_ONLY=1 to run just the first dataset and get a measured rate)
 
-  status file: /root/arcs-clean/c_star_pg_advance/results/BENCHMARK_0_STATUS.txt
-  finished   : 2026-09-09 00:16:11
+  status file: /tmp/bench_head/results/BENCHMARK_0_STATUS.txt
+  finished   : 2026-09-09 02:45:45
