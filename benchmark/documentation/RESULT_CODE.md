@@ -43,6 +43,31 @@ locked datasets meet (every read in every locked dataset is well under the
 structural bound; every header is far short of the tokenizer bound). The
 manifest below fixes the exact file states this applies to.
 
+**Independent cross-check of every table against the raw log (2026-09-10).**
+Each published CSV was re-derived from `benchmark/results/run.log.txt` by a
+parser written against the log format, then diffed against the CSV. Results:
+
+| table | rows re-derived | matched |
+|---|---|---|
+| T1.1 + T1.2 | 57 | **57** — including every LOSSLESS verdict |
+| T2.1 het-SNV | 12 | **12** |
+| T2.2 coverage | 3 | **3** (30× is carried from T2.1, not re-run) |
+| T2.3 het-indel | 8 | **8** |
+| T3.1 export | 6 | **6** — output bytes, contig count and speedup |
+| T3.2 coverage | 6 | **6** |
+| T3.3 query | 19 | **19** |
+| T2.4 multi-allelic | — | **no raw log existed; re-executed instead, see below** |
+| T2.5 tetraploid | — | **not independently verified — see the caveat below** |
+| T3.4 locus fidelity | — | **not in this log; re-executed instead, see below** |
+
+**T2.5 is the one table with no independent verification.** The sweep log's
+end-of-run section prints it via `column -s, -t "$CSV7"`, i.e. it pretty-prints
+the CSV it is supposed to corroborate — circular, not evidence. T2.5 has no
+per-row inline log the way T3.1/T3.2/T3.3 do, and it was not re-executed in
+this audit. Its numbers may well be correct; they are simply not confirmed by
+anything other than the file that states them. Stated rather than left for a
+reader to discover.
+
 **File integrity.** `benchmark/documentation/MANIFEST.sha256` lists a SHA-256
 for every file a published number depends on — every results CSV and log,
 every paper document, and the encoder/decoder source itself. Verify with
@@ -200,6 +225,7 @@ honest comparator and Claim 3 does not lead with speed.
 | **probe design** | 40 bp of REFERENCE ending 6 bp **before** the variant, so it never contains the variant — a probe taken from one haplotype's own sequence could only match that haplotype and would rig the result |
 | **metric** | does the returned read set contain BOTH truth alleles |
 | **script** | `benchmark/scripts/run_locus_fidelity.sh` |
+| **REQUIRED SETUP** | the sidecar must exist and must have been built **with `CAPS_PILEUP=1`**: `CAPS_PILEUP=1 capsule_decode index <archive> <archive>.qidx`. Without that flag the sidecar omits per-read deviations, `query` emits the consensus instead of the reads, and the coordinate arm scores **0**, not 18 — reproduced three times on 2026-09-10 before the cause was found. `query` finds `<archive>.qidx` automatically. |
 | **output** | `benchmark/results/claim3_T3.4_locus_fidelity.csv` |
 
 **Reported:** coordinate **81/400 (20.2%)**, content **345/400 (86.2%)**,
@@ -212,6 +238,14 @@ pooled allele balance **1.00**.
 > now applies each read's deviations (commit `d58fc23`), and the honest figure
 > is a **4.3× gap, not an infinite one**. Any document still saying 0/400 is
 > superseded.
+
+**INDEPENDENTLY REPRODUCED 2026-09-10.** The HG002 row was re-derived from a
+freshly built archive (573,767,964 B) with a freshly built decoder and matches
+the published row in **every field**: `100,18,82,0,85,15,0,2771,3023`. Full
+account, including the undocumented `CAPS_PILEUP=1` flag that must be set when
+building the sidecar or the coordinate arm silently scores 0 instead of 18:
+`benchmark/documentation/T3.4_reproduction_20260910/README.md`. HG003/HG004/
+HG005 were not re-run.
 
 **Window independence** (4 further windows on HG002 at 10/25/40/55 Mb, 60 sites
 each) was measured under the *earlier* consensus-emitting query and gave

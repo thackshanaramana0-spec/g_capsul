@@ -1,0 +1,13 @@
+=== T3.4 locus retrieval fidelity — HG002 chr20:3000000-3600000 ===
+  GIAB het SNVs in window: 479
+  probes usable: 100
+
+======== T3.4 LOCUS RETRIEVAL FIDELITY — HG002 ========
+addressing mode           both alleles  one allele  neither
+coordinate                           0         100        0
+content (sequence)                  81          19        0
+sites tested: 100   content recovers both at 81.0%, coordinate at 0.0%
+allele balance across all returned evidence: 3072 REF / 3263 ALT  (ratio 1.06)
+one-allele sites explained: 0 resolved a SINGLE locus (other haplotype absent from the assembly), 19 resolved SEVERAL loci that agree
+=======================================================
+T34,HG002,100,0,100,0,81,19,0,3072,3263,0,19

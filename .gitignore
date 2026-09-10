@@ -47,3 +47,10 @@ bin/
 # and it made the whole branch unpushable (GitHub caps files at 100 MB).
 out.vcf
 *.vcf
+
+# Preserved raw evidence for reproduction audits. The blanket *.log rule above
+# would silently exclude these, leaving a README that cites logs nobody else
+# can see -- caught 2026-09-10 when exactly that happened to the T2.4 and T3.4
+# audit directories. These are small, they ARE the evidence, and they are the
+# one class of .log this repository must keep.
+!benchmark/documentation/*_reproduction_*/*.log
