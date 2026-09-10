@@ -6,6 +6,57 @@ Read this file first. It records what is done, what is verified, what is NOT
 done, and which ideas have already been tested and refuted so they are not
 attempted again.
 
+---
+
+## THE RESULTS ARE FINAL AS OF 2026-09-10 — READ THIS BEFORE ANYTHING BELOW
+
+The full re-run that older sections of this file describe as "in progress" has
+**completed**. It is the source of every citable number in the project, and it
+supersedes every size, F1 and speedup figure elsewhere in this document.
+
+    benchmark/results/          8 CSVs, one run, 19 datasets, 0 failures
+    benchmark/documentation/RESULT_CODE.md      every number -> its script + output file
+    benchmark/documentation/REPRODUCE_EVERYTHING.md   how to re-run it from nothing
+    server/                     how to rebuild the machine (verify_environment.sh: 27 checks)
+    paper/METHODS.md            the architecture as implemented
+
+| | result |
+|---|---|
+| Claim 1 COMPACT | **19/19 vs SPRING (−6.03%), 19/19 vs Genozip (−43.26%), 57/57 LOSSLESS** |
+| Claim 2 FAITHFUL | het-SNV mean F1 **0.876** vs DiscoSNP++ 0.853, Kmer2SNP 0.475 — **called from the archive**, no FASTQ, no reference |
+| | het-indel 0.621 vs 0.591 · multi-allelic **21/26** vs **0/26** (complete chr20 census) · tetraploid SNV **0.897** vs 0.782 |
+| Claim 3 ADDRESSABLE | export **129–784×** vs SPAdes · coverage **16–54×** vs bwa+mosdepth · locus retrieval **345/400** by content vs **81/400** by coordinate |
+
+**Rule, and it decides every disagreement: where a document and a result file
+disagree, the RESULT FILE wins. Where a result file and the script that would
+regenerate it disagree, re-run the script.** Nothing was typed in from memory.
+
+**The two mechanism findings the project rests on**, both measured:
+1. *The representation that compresses a heterozygous site best is the one that
+   conceals it.* Optimal compression puts each allele on its own contig, so ref
+   and alt reads never share a coordinate. Ablation: F1 0.431 neither → 0.888
+   both, and without collapse precision HOLDS at 0.96 while recall falls to
+   0.27 — the caller is blind, not mistaken. The correction costs **nothing** in
+   ratio.
+2. *A het locus is not one place* — it is N parallel places (median 4, up to
+   18.6 Mb apart), so the archive's own coordinate system cannot name it, and
+   adding a coordinate API would not fix it. That is what 81/400 measures.
+
+**Two corrections that must not be re-lost:**
+- **T3.4 coordinate was published as 0/400. It is 81/400.** The 0 was an
+  artifact of our own query emitting the consensus rather than the reads.
+  A 4.3× gap, not an infinite one. Any doc saying 0/400 is superseded.
+- **T2.4's "5/111" and "11/18" are both withdrawn.** 5/111 scored 104
+  indel-bearing sites a single-base check cannot evaluate; 11/18 is
+  unreproducible. The answer is 21/26.
+
+Inventories, because the tree is bigger than the live surface:
+`benchmark/documentation/SCRIPT_INVENTORY.md` (55 scripts, 17 live) and
+`RESULTS_INVENTORY.md` (12 run dirs, 1 citable: `results/FULL_SWEEP_20260909/`,
+of which `benchmark/results/` is a cmp-verified byte-identical copy).
+
+---
+
 **For the 15-dataset SPRING/Genozip comparison (this repo, `c_star_pg_advance`,
 not the outer ARCS binary), the locked set is `NEW_DATASET_LOCKED.md`, not the
 17-accession list in `DATASET_LOCKED.md` below.** It records one swap made
@@ -19,13 +70,16 @@ before 4 silent data-loss bugs were found and fixed same-day (`23be207`,
 SRR32429602 did not actually decode to their input. All four are fixed and
 verified LOSSLESS now (see section 6.3). A full re-run with Phase 1 / Phase 2b
 / Phase 3 measured separately, each level round-trip verified before its number
-is recorded, is in progress — check for `docs/PHASE3_RESULT.md` or the latest
-ALLPHASES result before citing any size figure from this repo.
+is recorded, **has since completed** — it is the 19-dataset sweep in
+`benchmark/results/`, described at the top of this file. Cite that, not
+`docs/PHASE3_RESULT.md` and not any ALLPHASES file.
 
 **Quality is now wired** (`include/quality_coder.h`, vendored fqzcomp/htscodecs,
 BSD 3-clause, gated on `CAPS_QUAL=1`) — see commit `908b769` and section 6.3.
-The archive can now reproduce a complete 4-line FASTQ from the archive alone;
-verified byte-identical (same MD5) on at least one dataset, full sweep pending.
+The archive can now reproduce a complete 4-line FASTQ from the archive alone.
+**The full sweep is no longer pending: 57/57 archives across 19 datasets and 3
+tools verified LOSSLESS**, checked by decoding the ARCHIVE (not the encoder's
+intermediate dumps — see §6.1 for why that distinction is load-bearing).
 
 Repo: `github.com/thackshanaramana0-spec/g_capsul` (renamed from
 `c_star_pg_advance` on GitHub 2026-09-03; local checkout directory and git
@@ -72,6 +126,18 @@ corrected numbers, taken from the real file size on disk:
 | P. falciparum | Protista | 17,118,655 | 17,219,695 | +0.59% | +5.38% |
 | **S. acidocaldarius** | Archaea | 3,143,897 | 3,114,782 | **-0.93%** | +0.33% |
 | **aggregate** | | **81,579,530** | **83,160,210** | **+1.90%** | +4.65% |
+
+> **This table is a 2026-09-02 snapshot, kept for its history. The citable PgRC2
+> figure is +1.88%, not the +1.90% below.** Three slightly different 7-dataset
+> totals for this comparison exist in the docs — ours 81,579,530 / 81,581,661 /
+> 81,631,156 against PgRC2 83,160,210 / 83,192,412 — because both sides were
+> re-measured as later correctness fixes landed (the FSE-RLE fix alone cost
+> +33 B on E. coli, §6.3). They are NOT reconciled here, because reconciling
+> them by arithmetic would be inventing a number. The final value is the one in
+> `docs/CLAIM1_FINAL_VERDICT.md` §42 and `docs/FINAL_HEADROOM.md`: **+1.88%,
+> 6 wins, 1 loss.** And note what it is: **sequence only.** PgRC2 stores no
+> names, no quality and no line 3, so it is not comparable to the whole-file
+> 19-dataset sweep and is deliberately absent from those CSVs.
 
 **6 wins, 1 loss.** S. acidocaldarius is a loss again -- the duplicate-chaining
 fix (`3e06957`) was real and shrank that pseudogenome 32%, but the flip to a win

@@ -1,5 +1,12 @@
 # RUNBOOK — what to run, in order
 
+> **START HERE INSTEAD, unless you specifically want the short four-script run order.**
+> `README.md` for what the project is and what it measured; `CLAUDE.md` for the
+> rules and the refuted-ideas list; `benchmark/documentation/RESULT_CODE.md` for
+> where any number came from; `benchmark/documentation/REPRODUCE_EVERYTHING.md`
+> to re-run it. **This document predates the final 2026-09-09 sweep, so where it
+> disagrees with a file in `benchmark/results/`, the result file wins.**
+
 Four scripts, one order, no guessing. Each is idempotent and each refuses
 rather than guesses when a precondition is missing.
 

@@ -1,6 +1,14 @@
 # PIPELINE.md — G_CAPSUL is one pipeline
 
-**This file is the entry point.** Claims 1, 2 and 3 are not three tools that
+> **START HERE INSTEAD, unless you specifically want the command reference and the one-pipeline argument.**
+> `README.md` for what the project is and what it measured; `CLAUDE.md` for the
+> rules and the refuted-ideas list; `benchmark/documentation/RESULT_CODE.md` for
+> where any number came from; `benchmark/documentation/REPRODUCE_EVERYTHING.md`
+> to re-run it. **This document predates the final 2026-09-09 sweep, so where it
+> disagrees with a file in `benchmark/results/`, the result file wins.**
+
+**This file is the command reference.** (It used to call itself the entry
+point; `README.md` is.) Claims 1, 2 and 3 are not three tools that
 happen to live in one repository; they are three outputs of a single pass over
 the reads. Any document that presents them as independent predates this file
 and should be read against it.

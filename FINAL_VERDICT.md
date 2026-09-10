@@ -1,5 +1,15 @@
 # Final component-wise verdict — speed, RAM, size
 
+> **START HERE INSTEAD, unless you specifically want the component-wise speed/RAM/size optimisation record.**
+> `README.md` for what the project is and what it measured; `CLAUDE.md` for the
+> rules and the refuted-ideas list; `benchmark/documentation/RESULT_CODE.md` for
+> where any number came from; `benchmark/documentation/REPRODUCE_EVERYTHING.md`
+> to re-run it. **This document predates the final 2026-09-09 sweep, so where it
+> disagrees with a file in `benchmark/results/`, the result file wins.**
+>
+> Despite the name, this is **not** the verdict on the three claims — it is the
+> optimisation record. The claims are in `benchmark/documentation/CLAIMS_FINAL.md`.
+
 Every component of all three claims, what it costs, whether a lever remains,
 and the evidence. Written after the session's optimisation work so that
 "nothing left here" is a measurement rather than an assertion.

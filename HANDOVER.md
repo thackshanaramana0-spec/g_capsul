@@ -1,10 +1,21 @@
-# HANDOVER — read this first in any new session
+# HANDOVER — the 2026-09-02 project handover (historical)
 
-Written 2026-09-02. This is the complete project handover: what the server
-is, what this project is, what has been done, and exactly how to reproduce
-every piece of it. If you are Claude picking this up in a fresh chat with no
-memory of prior sessions, read this document top to bottom before touching
-any code.
+> **START HERE INSTEAD, unless you specifically want the 2026-09-02 project handover.**
+> `README.md` for what the project is and what it measured; `CLAUDE.md` for the
+> rules and the refuted-ideas list; `benchmark/documentation/RESULT_CODE.md` for
+> where any number came from; `benchmark/documentation/REPRODUCE_EVERYTHING.md`
+> to re-run it. **This document predates the final 2026-09-09 sweep, so where it
+> disagrees with a file in `benchmark/results/`, the result file wins.**
+>
+> Specifically stale here: the status lines saying Claim 1 is "stalled at 8/10
+> datasets" and that a full re-run is pending. That re-run completed —
+> **19 datasets, 19/19 wins vs SPRING and Genozip, 57/57 LOSSLESS.** The server
+> setup and download instructions below have been superseded by `server/`,
+> which was rebuilt from what actually worked.
+
+Written 2026-09-02. It was the complete handover at that date. It is kept
+because its account of how the project got here is still accurate and useful;
+its *status* and *setup* sections are not — see the banner above.
 
 **Companion documents, each cross-linked, read in this order after this
 one:**
