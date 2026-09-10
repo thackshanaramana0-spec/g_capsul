@@ -34,6 +34,32 @@ A novelty claim is only worth as much as the list of things it concedes.
 |---|---|---|
 | computing on compressed data | Loh, Baym & Berger, *Nat Biotech* 2012 (CaBLAST/CaBLAT) | **our paradigm.** Instantiated for genome/protein *databases* to accelerate *search* — not read archives, not variant evidence |
 | assembly-based read compression | Quip (Jones et al., *NAR* 2012) — the first; PgRC (Grabowski & Kowalski, *Bioinformatics* 2020); NanoSpring; Minicom | **established.** We are in this lineage |
+
+**Why the compression comparison is SPRING, Genozip and PgRC2 and not others**
+— verified from the tools themselves, not assumed:
+
+- **SPRING and Genozip** are the two competitors that, like this work, compress
+  a *complete* FASTQ (sequence + identifiers + quality) and reproduce the input
+  file. They are the only like-for-like comparison for the headline claim.
+- **PgRC2** is the strongest **DNA-stream** compressor, and is included on that
+  narrower basis, stated as such: it stores no names, no `+` line and no
+  quality, verified by running it (440,048 B FASTQ in → 151,000 B of bare DNA
+  out).
+- **Minicom is excluded because it is in PgRC2's category, not ours.** Its own
+  README states: *"Minicom only compresses DNA sequences in the FASTQ file. It
+  does not support to compress the whole FASTQ file."* It is therefore not
+  comparable to the full-FASTQ result, and on the DNA stream PgRC2's own
+  published benchmark already reports **18–21% over SPRING/Minicom** — so
+  beating PgRC2 covers Minicom transitively, using their number rather than
+  one we produced on our own hardware. Minicom is also unmaintained since
+  June 2020, and its README documents a decompression defect reported by
+  PgRC's authors.
+- **NanoSpring is excluded because it targets Oxford Nanopore long reads**,
+  which this archive format explicitly refuses (`paper/LIMITATIONS.md` §0).
+  Benchmarking a short-read compressor against a long-read one on short-read
+  data would not be a meaningful comparison. It is cited for its *architectural*
+  statement — that the assembly is discarded — which is the point this work
+  turns on.
 | de Bruijn bubble calling | Cortex, Bubbleparse, McCortex, DiscoSNP++ | **long established.** Our bubble channel is a deliberate port of DiscoSNP++'s `Bubble.cpp`; claiming the algorithm would be false |
 | searchable compressed read archives | BEETL-fastq (Cox et al., *Bioinformatics* 2014); the population BWT (*Genome Research* 2017); CIndex 2022; sFASTQ 2022 | **established 2014.** Do not write "the first compressed FASTQ archive supporting random access" |
 | coordinate access to reads | CRAM / BAM + samtools | **established** — but requires an external reference and a prior alignment |
