@@ -1,6 +1,5 @@
 # MANIFEST.sha256 — checksums of every file a published number depends on
-# Frozen release: tag v1.0.2-capsule, 2026-09-10. (A commit hash cannot appear
-#   here: this file is part of the commit it would name. The tag is the anchor.)
+# Frozen release: tag v1.0.2-capsule, 2026-09-10, plus CITATION.cff.
 # Verify: sha256sum -c benchmark/documentation/MANIFEST.sha256 (from repo root)
 # Regenerate from 'git ls-files' ONLY -- see AUDIT.md 2.4.
 d8793f2d4aa97d0b0a27621bdb847a584cf7426991433e5f37d1d170cc222e64  AUDIT.md

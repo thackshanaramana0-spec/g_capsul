@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "G_CAPSUL / CAPSULE: a retained assembly for unified lossless FASTQ compression, reference-free variant calling, and reference-free locus retrieval"
+authors:
+  - family-names: "Balashanmugam"
+    given-names: "Thackshanaramana"
+version: 1.0.2
+date-released: "2026-09-10"
+url: "https://github.com/thackshanaramana0-spec/g_capsul"
+repository-code: "https://github.com/thackshanaramana0-spec/g_capsul"
+license: MIT
+keywords:
+  - FASTQ compression
+  - reference-free variant calling
+  - genome assembly
+  - pseudogenome
+  - bioinformatics
+abstract: >-
+  A lossless FASTQ archive that also supports reference-free variant calling
+  and reference-free locus retrieval, all from a single retained
+  representation with no external reference genome or external tool at
+  runtime. 19/19 datasets smaller than SPRING, 19/19 smaller than Genozip,
+  57/57 archives verified lossless. Het-SNV calling from the archive alone
+  reaches mean F1 0.876 across four GIAB individuals. Content-based locus
+  retrieval recovers 345/400 sites against 81/400 by coordinate.
