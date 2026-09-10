@@ -129,9 +129,19 @@ the conventional route.
 
 ## Honest notes
 
-- HG005 loses on BOTH T2.1 and T2.3, and it is the same cause on the SNV side:
-  precision falls to 0.899 with FP 3,426 against ~1,700 elsewhere. HG005 is the
-  6.34 GB Han Chinese son, deeper than the standardised 30x. Not investigated.
+- HG005 loses on BOTH T2.1 and T2.3: precision falls to 0.899 with FP 3,426
+  against ~1,700 elsewhere.
+  **SUPERSEDED 2026-09-10 — the guess written here ("deeper than the
+  standardised 30x, not investigated") was WRONG, and is kept so the correction
+  is visible.** Depth is not the cause; it was investigated by controlled
+  experiment. HG005 is the only VARIABLE-LENGTH dataset: 250 bp
+  quality-trimmed, 216 distinct read lengths, against 148 bp fixed for
+  HG002/3/4. Truncated to a fixed 148 bp, the same reads give F1 0.897 with FP
+  falling 3,426 -> 1,291 — our best individual, not our worst. The caller is
+  tuned for fixed-length reads. See `docs/HG005_EXPLAINED.md`. The published
+  table keeps the untruncated 0.834: truncation discards 40% of every read and
+  scores a different dataset, so it is a diagnostic, never a reportable
+  HG005 result.
 - T2.4 is RECONCILED (see above); this note is superseded. Original text:
   T2.4's 5/111 does not match the locked doc's 11/18. Different denominator,
   and that original analysis was ad-hoc and never saved. Do not quote T2.4 in
