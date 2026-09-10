@@ -8,6 +8,11 @@ Results and their provenance live in `../benchmark/`, not here. This file
 describes *what the system does*; `../benchmark/documentation/RESULT_CODE.md`
 proves *what it produced*.
 
+**Siblings in this folder:** [PAPER.md](PAPER.md) (start here) ·
+[ARCHITECTURE.md](ARCHITECTURE.md) (the same system in diagrams) ·
+[RESULTS.md](RESULTS.md) · [DISCUSSION.md](DISCUSSION.md) ·
+[LIMITATIONS.md](LIMITATIONS.md).
+
 ---
 
 ## 1. Compression — the pipeline

@@ -1,5 +1,51 @@
 # Claim 2 — final verdict
 
+> ## OVERTAKEN 2026-09-09 — het-indel is now a WIN, and this file is the reason why
+>
+> This document concluded that het-indel was a closed loss and should be
+> withdrawn from the claim. **That conclusion is no longer true**, and the
+> executed sweep is the authority:
+>
+> | | this file (earlier caller) | **final sweep, T2.3** |
+> |---|---|---|
+> | HG002 TP | 3,290 | **3,871** (+581) |
+> | HG002 FP | 1,711 | **824** (-887) |
+> | HG002 F1 | 0.516 | **0.620** |
+> | vs DiscoSNP++ | 0.576 — a loss | 0.576 — **a win** |
+> | across 4 individuals | — | **3 wins, 1 loss** (0.620/0.637/0.632/0.593 vs 0.576/0.587/0.595/0.605) |
+>
+> `benchmark/results/claim2_T2.3_indel.csv`, traced in
+> `benchmark/documentation/RESULT_CODE.md`.
+>
+> **The analysis below was not wrong — it was RIGHT, and it named the way out.**
+> Its bound `F1 = 2TP/(TP+FP+truth)` still holds exactly: at today's numbers it
+> gives 0.620, which is what the CSV records. What it proved was that no FILTER
+> could flip the result at TP = 3,290, and it said so explicitly: *"closing the
+> gap requires a different candidate generator, not another filter on top of the
+> current one."* A different generator is what changed. Both halves of the
+> arithmetic moved — more true indels found AND fewer false ones — which is
+> exactly what a filter cannot do and a generator can.
+>
+> What still stands, unchanged: the representational limit (a length change
+> inside a homopolymer creates no second k-mer path, so no bubble exists for us
+> or for any de Bruijn caller), the finding that true positives are MORE
+> homopolymeric than false ones (so context filters remove TPs first), and the
+> list of nine attempts that failed. Do not retry those.
+>
+> **Two more things this file decides are also overtaken.** It says
+> *"Multi-allelic (T5.2) is **dropped**: on diploid data no third haplotype
+> exists for a third branch to converge on, so there is nothing to measure."*
+> There is: **26 SNV-only multi-allelic sites on chr20 — a complete census — of
+> which we recover 21, while DiscoSNP++ emits ZERO multi-allelic records in
+> 3,989.** The reasoning confused a third HAPLOTYPE with a third ALLELE; a
+> diploid carries two haplotypes and can still carry two different non-reference
+> alleles at one site. And its het-SNV row (0.879 / 0.877) is superseded by the
+> four-individual table: **0.888 / 0.891 / 0.891 / 0.834, mean 0.876.**
+>
+> What survives intact, and is the most useful part of this file: the four
+> validation AXES (held-out individual, coverage sweep, ploidy 4, chr1) and the
+> reasoning for why those four are the right ones to answer "does it transfer".
+
 Decided 2026-09-05. This file is what Claim 2 claims. Anything not listed here
 is not claimed, regardless of what earlier documents say.
 

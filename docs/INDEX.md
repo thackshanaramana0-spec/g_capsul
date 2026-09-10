@@ -67,12 +67,24 @@ reading all 114 files.
 | [`INDUSTRIAL_CHECKLIST_CLAIM2.md`](INDUSTRIAL_CHECKLIST_CLAIM2.md) / [`RESEARCH_CHECKLIST_CLAIM2.md`](RESEARCH_CHECKLIST_CLAIM2.md) |
 | [`INDUSTRIAL_CHECKLIST_CLAIM3.md`](INDUSTRIAL_CHECKLIST_CLAIM3.md) / [`RESEARCH_CHECKLIST_CLAIM3.md`](RESEARCH_CHECKLIST_CLAIM3.md) |
 
+## Proposals that were never executed — `_removable/`
+
+17 documents that are PLANS, DESIGNS or PROJECTIONS whose content was never
+built, or was built and refuted by the document that superseded it, have been
+moved to [`_removable/`](_removable/README.md). Nothing was deleted. Nothing in
+there is citable — the numbers in those files were predicted, not measured.
+The folder's own README says which is which and why.
+
+**`FAILURES_AND_REFUTED_IDEAS.md` deliberately stays here**, because every
+entry in it was implemented and MEASURED before being rejected. A refutation
+backed by a measurement is a result; a plan is not.
+
 ## Architecture and format detail
 
 | doc |
 |---|
 | [`CAPSULE_FORMAT.md`](CAPSULE_FORMAT.md) — the archive container format |
-| [`CALLER_ARCHITECTURE_PLAN.md`](CALLER_ARCHITECTURE_PLAN.md) — the Claim 2 caller's layer design |
+| [`TECHNICAL_ARCHITECTURE.md`](TECHNICAL_ARCHITECTURE.md) — every mechanism in the archive, layer by layer |
 | [`SOTA_COMPARISON.md`](SOTA_COMPARISON.md) — every competitor table, all three claims |
 | [`CLAIM3_PRIOR_ART.md`](CLAIM3_PRIOR_ART.md) — literature survey for addressability novelty |
 | [`HET_INDEL_SOTA.md`](HET_INDEL_SOTA.md) — literature survey for reference-free indel calling |
