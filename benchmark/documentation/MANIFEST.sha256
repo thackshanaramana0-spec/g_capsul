@@ -1,6 +1,6 @@
 # MANIFEST.sha256 — checksums of every file a published number depends on
 #
-# Generated 2026-09-10 14:58:39 UTC at commit 0f7a145ea50d93e0df05c86f81baf7863c4d5fab.
+# Generated 2026-09-10 15:23:39 UTC at commit 9e6722d50b66ea1386949595e161d87977ccbe23.
 # Verify with: sha256sum -c benchmark/documentation/MANIFEST.sha256
 # from the repository root -- including on a FRESH CLONE. Generate ONLY
 # from 'git ls-files' (a 2026-09-10 bug pulled in a concurrent agent's
@@ -12,6 +12,7 @@
 #       | grep -E '\.(csv|txt|md|cpp|h|log|vcf)$' | grep -v MANIFEST.sha256; \
 #     git ls-files AUDIT.md README.md CLAUDE.md; } | sort | xargs sha256sum
 #
+9b8f73bb8d1b68580720a9d93ed10a140facd44aa687003ed8922764413661a4  AUDIT.md
 4b7c369c7f7a7dddfd48df3f42847309f01afe76fb2f387efed9676c8e5a25d6  benchmark/documentation/CLAIM2_RESULTS_V2.md
 f5bb72efa185f9d26aaa90cd4270a9d80936ed214d104ab02474be67b359064b  benchmark/documentation/CLAIM2_TABLES_AND_INDEL_SCAN.md
 4bc3f27a87642336b3e7b53854e6d405558c61a9f8c32de4ce7021e31a0e9220  benchmark/documentation/CLAIM3_APPLICATIONS.md
@@ -68,7 +69,7 @@ a4250439596d951e2d164923e0e43df29d7d2fbc08bc58b96a97fce5059379b8  paper/CLAIM3_M
 d2c709f22f0d4503df33647b9d50419eff4863fdfca5889a2c510f066d711416  paper/COMPRESSION_DERIVED_CALLING.md
 3c98adcf01aafad4860273f85930c9ccadef374f9d19ca0a5b1c2fac818c9ba6  paper/DISCUSSION.md
 376ca8b4fe9cdc7b7bc392f04fcd5a690434f0d6c6f6db2588f17b3d9d22a572  paper/FORMAT.md
-605d4ec48c25fd599a7c917b950657ed66c0838c3612f2f00fe0af648fcca684  paper/LIMITATIONS.md
+8deb17f2c85e31b5925912ad6c37db341ecf7b2478251c01cbef2d8030a9a685  paper/LIMITATIONS.md
 bd7c5d88e28f8107491c34ccabfe1387a7fb6c4e959d03788703d8ac61c41740  paper/METHODS.md
 2228d33bd4075cebdc2ef1106263c51a8d55806dcc7aed42fc6872beb4722e6c  paper/NOVELTY_FINAL.md
 affbfc459a5f59ceb72014f40d4e690a1a995c580c3816aba76146e10da7a603  paper/PAPER.md
