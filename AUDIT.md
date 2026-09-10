@@ -1,6 +1,6 @@
 # AUDIT — the technical freeze and reproducibility audit, 2026-09-10
 
-> **Status:** frozen 2026-09-10 at tag `v1.0-capsule` — code and results final.
+> **Status:** frozen 2026-09-10 at tag `v1.0.1-capsule` — code and results final.
 > Authoritative numbers live in `benchmark/results/`; this file is that verification
 > record. Where it and a result file disagree, the result file wins.
 
@@ -275,7 +275,7 @@ it is re-executing the tier-2 tables, and a second person looking.
 
 ### The canonical tag, and why there are five that say "final"
 
-**The canonical tag is `v1.0-capsule`. Use that one.** Everything else below is
+**The canonical tag is `v1.0.1-capsule`. Use that one.** Everything else below is
 history, kept because git tags are immutable and this project does not rewrite
 its record.
 
@@ -290,12 +290,23 @@ results, and differ only in documentation:
 | `results-final-20260910-audited` | `0f7a145` | 0 |
 | `results-final-20260910-audited-v2` | `9e6722d` | 0 |
 | `results-final-20260910-locked` | `d85dd67` | 0 |
-| **`v1.0-capsule`** | HEAD | 0 |
+| `v1.0-capsule` | `2ad4e14` | 0 |
+| **`v1.0.1-capsule`** | HEAD | 0 — documentation only |
+
+`v1.0.1-capsule` fixes four documentation defects found by auditing the repo
+*structure* after the freeze: the locked-dataset file did not reconcile its 15
+against the published tables' 19 (the difference is the four GIAB human sets,
+now written out); it still listed two datasets as never benchmarked when both
+are in the final sweep at 3/3 LOSSLESS; `RESULTS_INVENTORY.md` said twelve run
+directories where there are fourteen, leaving `results/claim2/` and
+`results/phase_a/` unlisted — both containing files named to look citable; and
+the outer ARCS `DATASET_LOCKED.md` sat at the repo root with the more
+authoritative-sounding name and no warning that it does not govern this repo.
 
 Measured with `git diff --name-only <a> <b> -- benchmark/results stages include
 scripts`, in commit-date order. **The last substantive change to code or
 results was `-corrected`**; everything after it is prose. A reader six months
-from now should check out `v1.0-capsule` and ignore the rest — the naming was
+from now should check out `v1.0.1-capsule` and ignore the rest — the naming was
 mine and it was bad, so it is documented rather than quietly re-tagged.
 
 ### The deleted backup tag

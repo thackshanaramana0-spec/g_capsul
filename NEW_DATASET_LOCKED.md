@@ -1,9 +1,24 @@
-# G_CAPSUL — 15-dataset locked set for the SPRING/Genozip comparison
+# G_CAPSUL — the locked dataset set: 15 non-human + 4 human = 19
 
-**Supersedes `DATASET_LOCKED.md`'s 17-accession list for this specific
-comparison.** `DATASET_LOCKED.md` is unchanged and remains the source of truth
-for the original 10 + extended 7. This file records one deliberate swap made
-2026-09-02, why, and the resulting exact 15.
+**This file, not `DATASET_LOCKED.md`, is the source of truth for this repo.**
+`DATASET_LOCKED.md` is the outer ARCS project's 17-accession list; it is
+unchanged and does not govern G_CAPSUL/CAPSULE. This file records one
+deliberate swap made 2026-09-02, why, and the resulting exact set.
+
+**The published Claim 1 table has 19 rows, not 15.** The reconciliation, so
+nobody has to derive it:
+
+    15  non-human accessions      the SPRING/Genozip comparison set below
+  +  4  GIAB human chr20 @ 30x    HG002, HG003, HG004, HG005
+  ----
+    19  datasets x 3 tools = 57 archives, 57/57 verified LOSSLESS
+
+The four human sets are the **Claim 2** individuals (het-SNV, het-indel,
+multi-allelic, and the coverage sweep). They also carry Claim 1 compression
+numbers, because the same archive serves both claims — that is the whole point
+of the architecture — so they appear in `claim1_T1.1_T1.2.csv` as well. They
+are **not** part of the 15-dataset SPRING/Genozip *organism* comparison and
+should not be counted into it.
 
 Scope: `c_star_pg_advance` only (the G_CAPSUL sequence+order encoder). Not the
 outer `/root/arcs-clean` ARCS binary, not names/quality.
@@ -107,6 +122,35 @@ gap (Animalia) closed 2026-09-03 by the C. jejuni -> C. elegans swap above.
 
 ---
 
+## The 4 (GIAB human, Claim 2 — and Claim 1 rows 16-19)
+
+Standardised to **30x chr20** so the T2.1/T2.3 comparison is not confounded by
+GIAB's per-individual source coverage (60-300x). Streamed from the GIAB S3 WGS
+BAMs via samtools, then downsampled.
+
+| # | file | individual | population | depth | role |
+|---|---|---|---|---|---|
+| 16 | `HG002_pooled.fq` | NA24385 | Ashkenazi son | 30x chr20 | **also** the sole subject of the T2.2 coverage sweep (10/15/20/30x) |
+| 17 | `HG003_pooled.fq` | NA24149 | Ashkenazi father | 30x chr20 | **also** half of the T2.5 synthetic tetraploid |
+| 18 | `HG004_pooled.fq` | NA24143 | Ashkenazi mother | 30x chr20 | **also** the other half of the T2.5 tetraploid |
+| 19 | `HG005_pooled.fq` | NA24631 | Han Chinese son | 30x chr20 | **the published loss** — see `paper/LIMITATIONS.md` §2 |
+
+All four appear in T2.1 (het-SNV), T2.3 (het-indel) and T3.4 (locus fidelity,
+100 sites each = the 400). The "also" column is what is *additional* to that.
+T2.4 (multi-allelic) is HG002 only.
+
+HG005 is the only variable-length set in the benchmark (250 bp trimmed, 216
+distinct lengths against 148 bp fixed for the other three). That is the
+identified cause of its T2.1/T2.3 loss, and it is reported as a loss rather
+than truncated to match.
+
+Truth sets: GIAB v4.2.1 VCF + high-confidence BED per individual, chr20 only.
+Reference for liftover/probe construction: GRCh37 chr20 (`~/refs/chr20.fa`,
+chromosome named "20"). Neither is used by the caller — CAPSULE calls from the
+archive with no reference; both are evaluation-side only.
+
+---
+
 ## Downloads needed
 
 **None. All 15 confirmed on disk at `/data/fastq/<accession>_1.fq`,
@@ -118,9 +162,19 @@ from `$CAPSULE_DATA_DIR`, i.e. `/data/fastq/`) can find them — and
 SRR065390 (C. elegans, added in the second swap above) was already present
 from earlier work.
 
-**Outstanding, separate from "downloaded":** SRR10676752 (Utricularia
-gibba) has had three real G_CAPSUL-side encode attempts (sequence-only,
-+names, +names+quality — the last completing at 1,655,447,728 B) but no
-saved archive, no lossless verification, and no SPRING/Genozip comparison
-yet. It is on disk and ready to run, not yet benchmarked. SRR065390 (C.
-elegans) has never been run through this repo's own comparison at all.
+**Both "outstanding" items below are CLOSED as of the 2026-09-09 sweep.**
+This paragraph is kept because this project marks retractions in place:
+
+> ~~SRR10676752 (Utricularia gibba) has had three real G_CAPSUL-side encode
+> attempts but no saved archive, no lossless verification, and no
+> SPRING/Genozip comparison yet. SRR065390 (C. elegans) has never been run
+> through this repo's own comparison at all.~~
+
+Both were run in full. From `benchmark/results/claim1_T1.1_T1.2.csv`:
+
+| accession | CAPSULE | SPRING | Genozip | lossless |
+|---|---|---|---|---|
+| SRR10676752 (U. gibba) | 1,650,034,057 | 1,718,548,480 | 2,954,900,932 | 3/3 LOSSLESS |
+| SRR065390 (C. elegans) | 887,410,845 | 942,643,200 | 1,597,083,547 | 3/3 LOSSLESS |
+
+Nothing in the locked set is unbenchmarked.

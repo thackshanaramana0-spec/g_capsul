@@ -1,6 +1,6 @@
 # G_CAPSUL: Genomic, Compact, Addressable, Pseudogenome-Structured, Unified Lossless
 
-> **Status:** frozen 2026-09-10 at tag `v1.0-capsule` — code and results final.
+> **Status:** frozen 2026-09-10 at tag `v1.0.1-capsule` — code and results final.
 > Authoritative numbers live in `benchmark/results/`; verification status in
 > [`AUDIT.md`](AUDIT.md). Where this file and a result file disagree, the result file wins.
 
@@ -360,8 +360,11 @@ scripts/run_claim3.sh        one-command real export/coverage/query benchmark
 thirdparty/                  PPMd7 (public domain), FSE/Huf0 (BSD), htscodecs/fqzcomp (BSD)
 docs/                        architecture, per-claim results, checklists, refuted ideas
                               — start at docs/INDEX.md, 68 files, navigable by topic
-results/                     raw measurement CSVs, including reverted work
-DATASET_LOCKED.md            the locked accessions — do not substitute without documenting why
+benchmark/results/           ** THE CITABLE NUMBERS ** — 8 CSVs, one run, 19 datasets
+results/                     working output of 12 runs, incl. reverted work — NOT citable
+                              (see benchmark/documentation/RESULTS_INVENTORY.md)
+NEW_DATASET_LOCKED.md        ** THIS repo's locked set ** — 15 non-human + 4 GIAB human = 19
+DATASET_LOCKED.md            the OUTER ARCS project's 17-accession list — does NOT govern this repo
 ```
 
 ---
