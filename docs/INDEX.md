@@ -1,10 +1,38 @@
 # Documentation index
 
-68 documents. Per this project's own standing rule, nothing here is deleted
+114 documents. Per this project's own standing rule, nothing here is deleted
 when superseded — retractions and refuted ideas stay on record, marked in
 place. This index exists so a new reader can navigate that history without
-reading all 68 files. If you only read five documents, read the five in
-**Start here**.
+reading all 114 files.
+
+> ## READ THIS BEFORE ANY DOCUMENT IN THIS FOLDER
+>
+> **`docs/` is the project's HISTORY, not its results.** Almost everything here
+> was written before the final 19-dataset sweep of 2026-09-09, and the numbers
+> in it have been superseded. The current results live outside this folder:
+>
+> | you want | go to |
+> |---|---|
+> | the results | `../benchmark/results/` — 8 CSVs, one run |
+> | where a number came from | `../benchmark/documentation/RESULT_CODE.md` |
+> | to re-run it | `../benchmark/documentation/REPRODUCE_EVERYTHING.md` |
+> | what the project is | `../README.md` |
+> | the rules + refuted ideas | `../CLAUDE.md` |
+> | the methods, for the paper | `../paper/METHODS.md` |
+>
+> **Where a document here and a result file disagree, the result file wins.**
+>
+> The final headline, so no one has to reconstruct it from the files below:
+> Claim 1 **19/19 vs SPRING (−6.03%), 19/19 vs Genozip (−43.26%), 57/57
+> LOSSLESS**; Claim 2 het-SNV **0.876** vs 0.853 vs 0.475, multi-allelic
+> **21/26** vs **0/26**, tetraploid SNV **0.897** vs 0.782, all called from the
+> archive; Claim 3 export **129–784x**, coverage **16–54x**, locus retrieval
+> **345/400** by content vs **81/400** by coordinate.
+>
+> Documents whose numbers are stale now carry their own SUPERSEDED banner. Two
+> retractions in particular: **T3.4 coordinate is 81/400, not 0/400** (the 0 was
+> our query emitting the consensus rather than the reads), and **T2.4's "5/111"
+> and "11/18" are both withdrawn** in favour of 21/26.
 
 ## Start here
 
@@ -16,13 +44,17 @@ reading all 68 files. If you only read five documents, read the five in
 | [`SERVER_SETUP_AND_DOWNLOADS.md`](SERVER_SETUP_AND_DOWNLOADS.md) | bootstrap a fresh server: every dataset and tool, exact verified commands |
 | [`FINAL_ALGORITHMIC_SCAN.md`](FINAL_ALGORITHMIC_SCAN.md) | the cross-claim audit that found the one bug no per-claim test could see |
 
-## Current status, per claim (authoritative)
+## Per-claim verdicts — read the status column, several are superseded
 
 | doc | claim | verdict |
 |---|---|---|
-| [`CLAIM1_FINAL_VERDICT.md`](CLAIM1_FINAL_VERDICT.md) | COMPACT | 14/14 wins vs SPRING/Genozip; one dataset (Utricularia gibba) not yet run |
-| [`CLAIM2_FINAL_VERDICT.md`](CLAIM2_FINAL_VERDICT.md) | FAITHFUL | 5/5 comparisons win; validated on chr20 windows, not the full-scale individual |
-| [`CLAIM3_LOCKED.md`](CLAIM3_LOCKED.md) | ADDRESSABLE | locked — export/coverage/query, all beat their spec targets |
+| [`CLAIM1_FINAL_VERDICT.md`](CLAIM1_FINAL_VERDICT.md) | COMPACT | **SUPERSEDED** — 14 datasets and an unrun 15th. Now 19/19, and SRR10676752 is in the sweep |
+| [`CLAIM2_FINAL_VERDICT.md`](CLAIM2_FINAL_VERDICT.md) | FAITHFUL | **SUPERSEDED** — chr20 windows. Now full chr20, 4 individuals, called from the archive |
+| [`CLAIM3_LOCKED.md`](CLAIM3_LOCKED.md) | ADDRESSABLE | **SUPERSEDED** — a different experiment (outer ARCS repo, MEGAHIT/SPAdes) |
+| [`CLAIM3_MECHANISM.md`](CLAIM3_MECHANISM.md) | ADDRESSABLE | **CURRENT** — the mechanism: a het locus is N parallel places, so no coordinate can name it |
+| [`NOVELTY_FINAL.md`](NOVELTY_FINAL.md) | all three | **CURRENT** — what is novel, with the prior art actually read |
+| [`CLAIMS_FINAL.md`](CLAIMS_FINAL.md) | all three | **CURRENT** — the three claims as they stand |
+| [`HG005_EXPLAINED.md`](HG005_EXPLAINED.md) | FAITHFUL | **CURRENT** — why the one published loss happens (variable read length) |
 | [`CLAIM2_TABLES_AND_INDEL_SCAN.md`](CLAIM2_TABLES_AND_INDEL_SCAN.md) | FAITHFUL | the T3/T4/T5/T5.2/T5.3 table structure and the full het-indel root-cause history |
 | [`HET_INDEL_FRESH_SCAN.md`](HET_INDEL_FRESH_SCAN.md) | FAITHFUL | the 5 findings (2 confirmations, 1 refuted generalization, 2 fixes) that flipped het-indel and tetraploid-indel to wins |
 

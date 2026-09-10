@@ -1,5 +1,6 @@
 # Claim 3's mechanism: a heterozygous locus is not one place
 
+
 **Discovered and verified 2026-09-09 on HG002 chr20 against GIAB v4.2.1 truth.**
 This supersedes the earlier framing of Claim 3 as speed or as "nobody else
 offers the interface".
@@ -158,9 +159,18 @@ each, HG002:
     55.0 - 55.6 Mb        49 / 60             0 / 60
     ALL                  210 / 240 (87.5%)    0 / 240 (0.0%)
 
-Consistent with the original 3.0-3.6 Mb window (81/100). Combined with the
-four-individual run this is **640 het sites across 4 individuals and 5
-windows: coordinate 0, content 549 (85.8%)**.
+Consistent with the original 3.0-3.6 Mb window. Combined with the
+four-individual run this is **640 het sites across 4 individuals and 5 windows,
+content 549 (85.8%)**.
+
+> **The coordinate column of the window sweep (0/240) is NOT the final figure.**
+> Those four windows were measured under the earlier consensus-emitting query,
+> where no allele difference could appear by construction, so coordinate
+> addressing was guaranteed a 0 and the number measures our bug rather than the
+> mechanism. They were not re-run. **The citable coordinate figure is the
+> four-individual table: 81/400 against content 345/400** — a 4.3x gap, not an
+> infinite one. The window sweep is retained only as evidence that the CONTENT
+> result does not depend on one window, which is what it was run to show.
 
 **2. Why did some sites return one allele?** Not because a haplotype is
 missing. Instrumented: of all 30 one-allele sites across the window sweep,
@@ -169,9 +179,22 @@ parallel contigs exist; they simply carry the same base at that position.
 
 That is the expected complement of the mechanism. A het variant is stored one
 of two ways: split into separate contigs (recovered by content addressing) or
-kept as a per-read MISMATCH on a single contig. Query emits consensus, so
-mismatch-encoded variants are invisible to it — and they cannot be made visible
-cheaply, because `mm_sym` is coded with an adaptive model in READ order, so
+kept as a per-read MISMATCH on a single contig.
+
+> **UPDATE 2026-09-10 — the paragraph that follows has been partly overtaken by
+> a fix.** It argued that mismatch-encoded variants "cannot be made visible
+> cheaply". That was true of the query as it then stood, and it is why the
+> coordinate arm read 0/400. `query` now applies each read's deviations at emit
+> and returns TRUE READS rather than the consensus (commit `d58fc23`), so those
+> variants ARE visible, the coordinate arm is 81/400, and the content residue
+> fell to 13.8%. The cost argument below still explains why the residue is
+> bounded rather than zero — the ordering constraint on `mm_sym` is real — but
+> "invisible" is now too strong.
+
+Query emitted consensus, so
+mismatch-encoded variants were invisible to it — and they cannot be recovered
+at arbitrary offsets cheaply, because `mm_sym` is coded with an adaptive model
+in READ order, so
 read k's deviations require decoding all k-1 before it. **The 12-15% residue is
 therefore explained and bounded, not unknown**: it is exactly the variants the
 compressor chose to encode as deviations rather than as structure.
