@@ -57,16 +57,46 @@ The verification therefore has two tiers, and they are not equivalent:
 
 | tier | what it proves | tables |
 |---|---|---|
-| **Re-executed** — independent measurement | catches wrong *values* | T2.4 (3×), T2.5, T3.4 (HG002 row only), T1.1's E. coli row via `sanity_archive_one.sh` |
-| **Transcription-checked** — log vs CSV | catches copying/typing errors only | the remaining 56 T1.1/T1.2 rows, all of T2.1/T2.2/T2.3/T3.1/T3.2/T3.3, and T3.4's HG003/HG004/HG005 rows |
+| **Re-executed** — independent measurement | catches wrong *values* | T2.4 (3×), T2.5, T3.4 (HG002 row), **T2.1 + T2.3 (HG002 rows, 12/12 fields)**, T1.1's E. coli and HG002 `archive_bytes` |
+| **Transcription-checked** — log vs CSV | catches copying/typing errors only | T2.1/T2.3's **HG003, HG004, HG005** rows; all of T2.2, T3.1, T3.2, T3.3; T3.4's HG003/HG004/HG005 rows; and T1.1/T1.2's timing and RAM columns (size and lossless columns are independently checked — see below) |
 
 **The single real defect this audit found (T2.4) was found by tier 1, and could
 not have been found by tier 2.** That is the honest measure of what the two
 tiers are worth. Tier 2 is not worthless — it would catch a mis-transcribed
 table — but it cannot detect the failure mode that actually occurred here.
 
-Closing this properly means re-executing the tier-2 tables. That is
-~19 h of compute for the Claim 1 sweep alone and was not done.
+**But re-executing everything is the wrong way to close this**, and saying so
+was lazy. Most of the gap closes with checks costing seconds, because the
+tier-2 columns are not all equally weak:
+
+| T1.1/T1.2 column | what it actually rests on |
+|---|---|
+| `raw_bytes` | **INDEPENDENT.** Re-checked 2026-09-10 against the real FASTQ files still on disk: **19/19 exact**. Nothing to do with the run's variables. |
+| `ratio_pct` | **DERIVED**, and the arithmetic was verified: `100 × archive/raw` reproduces the stored value on **57/57** rows. |
+| `lossless` | **INDEPENDENT.** It is a decode-and-compare, not a copied variable. |
+| `archive_bytes` | The genuinely weak one — but the file that was `stat`-ed is the same file that then decoded LOSSLESS, so a wrong `stat` needs a *second, coordinated* error to survive. E. coli independently reproduces at 68,429,027 B, and the encoder is proven byte-identical across cores and settings. |
+
+So T1.1/T1.2 is in far better shape than "transcription-checked" implies.
+
+The F1 columns of T2.1/T2.3 had no equivalent cross-check — so they were
+**re-executed too, and it took 90 seconds, not 19 hours**: an HG002 archive
+from an earlier job had survived on disk, and the caller can be pointed
+straight at it. One run verifies both tables, because the caller emits SNV and
+INDEL in the same pass.
+
+    T2.1 HG002  TP=37011 FP=1721 FN=7564 P=0.956 R=0.830 F1=0.888   EXACT
+    T2.3 HG002  TP=3871  FP=824  FN=3913 P=0.825 R=0.497 F1=0.620   EXACT
+
+**12/12 fields reproduce exactly**, using a different archive file, a freshly
+built decoder, and a direct runner invocation — sharing no variable, process or
+intermediate with the original. Evidence:
+`benchmark/documentation/T2.1_T2.3_reproduction_20260910/`.
+
+**The lesson, since the original claim here was wrong:** "re-execute
+everything" was the expensive answer to the wrong question. Most of the gap
+closed with checks costing seconds — stat the inputs, verify the arithmetic,
+point the caller at a surviving archive. What remains genuinely unverified is
+now small and specific, not "seven tables".
 
 ---
 
