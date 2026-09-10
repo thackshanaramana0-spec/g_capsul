@@ -70,8 +70,10 @@ coordinate. **640 sites, 4 individuals, 5 windows: coordinate 0, content 549.**
 
 ## Every number that is NOT clean
 
-- **HG005 loses both T2.1 and T2.3**, on an unexplained precision collapse
-  (FP 3,426 against ~1,700 elsewhere). It is the deepest sample.
+- **HG005's losses are explained**, see `docs/HG005_EXPLAINED.md`: it is the
+  only variable-length set (250 bp, 216 distinct lengths vs 148 bp fixed).
+  Truncated to fixed length the same reads give F1 0.897 (FP 3,426 -> 1,291),
+  our best individual. The table keeps the untruncated 0.834 deliberately.
 - **T3.4's 12-15% residue** is explained (mismatch-encoded variants, invisible
   to a consensus-emitting query) but not recovered.
 - **T3.4 is chr20 only, at 30x.** Not replicated on another chromosome.
