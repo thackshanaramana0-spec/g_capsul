@@ -1,7 +1,7 @@
 # G_CAPSUL: Genomic, Compact, Addressable, Pseudogenome-Structured, Unified Lossless
 
 [![CI](https://github.com/thackshanaramana0-spec/g_capsul/actions/workflows/ci.yml/badge.svg)](https://github.com/thackshanaramana0-spec/g_capsul/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/license-undecided-lightgrey.svg)](docs/INDUSTRIAL_CHECKLIST_OVERALL.md)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux-lightgrey.svg)](#build)
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://en.cppreference.com/w/cpp/17)
 [![Lossless](https://img.shields.io/badge/lossless-byte--exact-brightgreen.svg)](#results)
@@ -422,8 +422,21 @@ SRM Institute of Science and Technology
 
 ## License
 
-Not yet decided for this repository's own code — see
-[`docs/INDUSTRIAL_CHECKLIST_OVERALL.md`](docs/INDUSTRIAL_CHECKLIST_OVERALL.md).
-Vendored third-party code keeps its own license: PPMd7 (public domain,
-`thirdparty/ppmd/`), FSE/Huf0 (BSD, [`thirdparty/fse/LICENSE`](thirdparty/fse/LICENSE)),
-htscodecs/fqzcomp (BSD 3-clause, [`thirdparty/htscodecs/LICENSE.md`](thirdparty/htscodecs/LICENSE.md)).
+**MIT** — see [`LICENSE`](LICENSE) for the full text, which also documents every
+vendored dependency's own terms.
+
+Vendored third-party code keeps its own license, all of them MIT-compatible:
+
+| component | license | where |
+|---|---|---|
+| PPMd7 (LZMA SDK) | public domain | [`thirdparty/ppmd/LICENSE`](thirdparty/ppmd/LICENSE) |
+| FSE / Huff0 | BSD | [`thirdparty/fse/LICENSE`](thirdparty/fse/LICENSE) |
+| htscodecs / fqzcomp | BSD 3-clause | [`thirdparty/htscodecs/LICENSE.md`](thirdparty/htscodecs/LICENSE.md) |
+| liblzma | public domain | runtime dependency, linked with `-llzma` |
+
+**PgRC2 (GPL-3) is deliberately NOT vendored.** It is used only as an external
+comparison binary, cloned separately; no PgRC2 source is included in or linked
+into this repository, so its GPL-3 terms do not attach here. That separation
+was a design decision, not an accident — see `docs/REIMPL_NOTES.md`, which
+records that PgRC2's assembler was reimplemented from the algorithm rather than
+copied, precisely so this stays true.
