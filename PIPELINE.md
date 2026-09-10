@@ -1,5 +1,9 @@
 # PIPELINE.md — G_CAPSUL is one pipeline
 
+> **Status:** frozen 2026-09-10 at tag `v1.0-capsule` — code and results final.
+> Authoritative numbers live in `../benchmark/results/`; verification status in
+> [`../AUDIT.md`](../AUDIT.md). Where this file and a result file disagree, the result file wins.
+
 > **START HERE INSTEAD, unless you specifically want the command reference and the one-pipeline argument.**
 > `README.md` for what the project is and what it measured; `CLAUDE.md` for the
 > rules and the refuted-ideas list; `benchmark/documentation/RESULT_CODE.md` for
@@ -212,5 +216,5 @@ Full detail in `docs/` — each has its own file with the numbers.
 | `results/claim2/t3_t5_full_chr20_headtohead.csv` | head-to-head vs DiscoSNP++ |
 | `docs/METHOD_B.md` | the graph caller's scope and standing |
 | `docs/GATB_DISK_ARCHITECTURE.md` | how DiscoSNP++/GATB counts k-mers, from source |
-| `docs/SUPERKMER_PLAN.md` | superkmer spill: plan, execution, verification |
+| `docs/_removable/SUPERKMER_PLAN.md` | superkmer spill: plan, execution, verification |
 | `docs/PREFLIGHT_CHECKLIST.md` | pre-run audit and the defect it caught |

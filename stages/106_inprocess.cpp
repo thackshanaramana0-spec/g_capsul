@@ -1186,7 +1186,7 @@ int main(int argc,char** argv){
     // So this harvests ~12 non-duplicate ties per 519 truth variants. It
     // cannot serve as a calling channel (accuracy), and it cannot replace
     // rc_reads/pkidx as a candidate source (RAM/time) because it finds ~0.15%
-    // as many loci. Both halves of docs/GRAPH_HARVEST_EXACT_PLAN.md are dead.
+    // as many loci. Both halves of docs/_removable/GRAPH_HARVEST_EXACT_PLAN.md are dead.
     //
     // KEPT (not deleted) because it is CAPS_CALL-gated, verified bit-identical
     // on the Claim 1 path (ERR5181310 ARCHIVE_TOTAL=352997 and every stream

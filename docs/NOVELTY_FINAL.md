@@ -1,5 +1,9 @@
 # What is novel, finalised — with the prior art actually read
 
+> **Status:** frozen 2026-09-10 at tag `v1.0-capsule` — code and results final.
+> Authoritative numbers live in `../benchmark/results/`; verification status in
+> [`../AUDIT.md`](../AUDIT.md). Where this file and a result file disagree, the result file wins.
+
 Written 2026-09-09 after a literature pass, not from intuition. Each claim
 below states what is ours, what is not, and the measurement that supports it.
 Where prior art overlaps, it is named.

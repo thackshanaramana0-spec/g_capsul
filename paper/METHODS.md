@@ -1,5 +1,9 @@
 # METHODS — the validated architecture, as implemented
 
+> **Status:** frozen 2026-09-10 at tag `v1.0-capsule` — code and results final.
+> Authoritative numbers live in `../benchmark/results/`; verification status in
+> [`../AUDIT.md`](../AUDIT.md). Where this file and a result file disagree, the result file wins.
+
 **Consolidated 2026-09-10** from the final code, the final benchmark harness and
 the executed results. Where an older document disagreed with the code, the code
 won; where the code disagreed with an executed result, the result won.

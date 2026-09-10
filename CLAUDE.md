@@ -1,5 +1,9 @@
 # G_CAPSUL — project reference
 
+> **Status:** frozen 2026-09-10 at tag `v1.0-capsule` — code and results final.
+> Authoritative numbers live in `benchmark/results/`; verification status in
+> [`AUDIT.md`](AUDIT.md). Where this file and a result file disagree, the result file wins.
+
 **C**ompact, **A**ddressable, **P**seudogenome-**S**tructured, **U**nified **L**ossless **E**ncoder.
 
 Read this file first. It records what is done, what is verified, what is NOT

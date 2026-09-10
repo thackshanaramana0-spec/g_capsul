@@ -1,5 +1,9 @@
 # RESULTS — every table, as executed
 
+> **Status:** frozen 2026-09-10 at tag `v1.0-capsule` — code and results final.
+> Authoritative numbers live in `../benchmark/results/`; verification status in
+> [`../AUDIT.md`](../AUDIT.md). Where this file and a result file disagree, the result file wins.
+
 All numbers come from one run: `benchmark_1_run.sh` at commit `21ee619`,
 2026-09-09 02:46:07 → 07:53:21 (5 h 07 m), 19 datasets, 0 failures, one timed
 job at a time on an idle machine. Raw CSVs: `../benchmark/results/`.

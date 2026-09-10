@@ -218,7 +218,7 @@ is structurally close to a no-op, which is exactly what was measured.
 **Consequence:** this is not a tunable-threshold problem. Closing the gap
 requires changing what the candidate *generator* proposes — a bubble
 anchored at both ends by shared k-mers (the eBWT/dBG route already scoped
-in `docs/CALLER_ARCHITECTURE_PLAN.md`), not another post-hoc filter on the
+in `docs/_removable/CALLER_ARCHITECTURE_PLAN.md`), not another post-hoc filter on the
 current contig-pair candidates.
 
 ### 3.3 The failure class is the field's known hardest stratum, not our defect

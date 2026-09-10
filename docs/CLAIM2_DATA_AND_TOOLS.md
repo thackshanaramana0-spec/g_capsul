@@ -47,7 +47,7 @@ G_CAPSUL's own caller instead of ARCS's:
 | file | role | source |
 |---|---|---|
 | `include/caps_caller.h` | the caller itself (pileup/SNV/indel/polyploid, frozen params) | ported from `/root/arcs-clean/src/caller.cpp` |
-| `stages/106_inprocess.cpp` (`CAPS_CALL=1` gate) | contig-span capture + `CallData` population + caller invocation | new, written for G_CAPSUL's own assembly (see `docs/CLAIM2_BUILDER.md` for why this differs structurally from ARCS's `vodbg_pg`) |
+| `stages/106_inprocess.cpp` (`CAPS_CALL=1` gate) | contig-span capture + `CallData` population + caller invocation | new, written for G_CAPSUL's own assembly (see `docs/_removable/CLAIM2_BUILDER.md` for why this differs structurally from ARCS's `vodbg_pg`) |
 | `scripts/lift_vcf.py` | contig→genome coordinate lift (`hapflank_lift`), tool-agnostic | copied unchanged from outer project (no ARCS-specific coupling) |
 | `scripts/eval_caller.py` | quick window-based P/R/F1 scorer (secondary to rtg) | copied unchanged |
 | `scripts/extract_vcfeval_metrics.py` | parses `rtg vcfeval`'s `summary.txt` | copied unchanged |

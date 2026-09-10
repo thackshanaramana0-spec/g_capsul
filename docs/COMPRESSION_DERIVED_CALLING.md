@@ -1,5 +1,9 @@
 # Calling from what compression already stored
 
+> **Status:** frozen 2026-09-10 at tag `v1.0-capsule` — code and results final.
+> Authoritative numbers live in `../benchmark/results/`; verification status in
+> [`../AUDIT.md`](../AUDIT.md). Where this file and a result file disagree, the result file wins.
+
 ## The question
 
 Claim 2's published path (`CAPS_DBG=1 CAPS_DBG_ONLY=1`) builds a 140.7 M-node

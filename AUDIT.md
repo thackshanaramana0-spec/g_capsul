@@ -1,5 +1,9 @@
 # AUDIT — the technical freeze and reproducibility audit, 2026-09-10
 
+> **Status:** frozen 2026-09-10 at tag `v1.0-capsule` — code and results final.
+> Authoritative numbers live in `benchmark/results/`; this file is that verification
+> record. Where it and a result file disagree, the result file wins.
+
 The final pass before this project's machine is terminated. Its standard was:
 *six months later, with no memory of the project and only this repository plus
 the documented datasets, could someone reconstruct exactly what was built, why,
@@ -269,9 +273,46 @@ it is re-executing the tier-2 tables, and a second person looking.
 | `e1850b6` | Claim 3 audited; T2.5 disclosed as unverified |
 | `0f7a145` | **T2.5 re-executed and confirmed; every table now has evidence** |
 
-Tags, in order: `results-final-20260910` → `-corrected` → **`-audited`**
-(the last supersedes both; git tags are immutable, so earlier ones are left
-in place rather than rewritten).
+### The canonical tag, and why there are five that say "final"
+
+**The canonical tag is `v1.0-capsule`. Use that one.** Everything else below is
+history, kept because git tags are immutable and this project does not rewrite
+its record.
+
+Five tags were cut on 2026-09-10, each named as if it were the last. They are
+not five candidate results — four of them are byte-identical in code and in
+results, and differ only in documentation:
+
+| tag | commit | code/results changed vs previous |
+|---|---|---|
+| `results-final-20260910` | `b4c71e6` | — (first) |
+| `results-final-20260910-corrected` | `7056c4f` | **2 files** — the T2.4 21/26 → 17/26 correction |
+| `results-final-20260910-audited` | `0f7a145` | 0 |
+| `results-final-20260910-audited-v2` | `9e6722d` | 0 |
+| `results-final-20260910-locked` | `d85dd67` | 0 |
+| **`v1.0-capsule`** | HEAD | 0 |
+
+Measured with `git diff --name-only <a> <b> -- benchmark/results stages include
+scripts`, in commit-date order. **The last substantive change to code or
+results was `-corrected`**; everything after it is prose. A reader six months
+from now should check out `v1.0-capsule` and ignore the rest — the naming was
+mine and it was bad, so it is documented rather than quietly re-tagged.
+
+### The deleted backup tag
+
+`backup-pre-purge-20260908` (commit `36aa7c9`) was deleted at the freeze. It
+held 1.77 GiB and contained exactly two things not present at HEAD:
+
+- `out.vcf`, 160,737,970 B — a caller output. Every reference to that filename
+  in the repo is a **command-line argument in an example**
+  (`capsule_decode call <archive> out.vcf`), never a citation of that file's
+  contents. Regenerable from the archive.
+- a 2.4 MB session transcript, referenced only from `docs/_removable/`.
+
+The 14 planning documents that tag also held were **not** lost: they were
+*moved* to `docs/_removable/` and every one was verified byte-identical by blob
+hash before the tag was removed. The stale `docs/<PLAN>.md` paths that the move
+left behind in ten files were repaired at the same time.
 
 ## 6. How to check this yourself
 
