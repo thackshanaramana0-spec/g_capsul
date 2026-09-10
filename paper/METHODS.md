@@ -17,20 +17,25 @@ proves *what it produced*.
 
 ## 1. Compression — the pipeline
 
-The compressor builds a **pseudogenome** — one sequence assembled from the
-reads by greedy suffix-prefix overlap, onto which reads that fail to chain are
-mapped — following the architecture of PgRC [Grabowski & Kowalski 2020] and
-PgRC2 [Kowalski & Grabowski 2025]. Assembly-based read compression dates to
-Quip [Jones et al. 2012]; greedy shortest-common-superstring and q-gram
-matching are standard.
+The compressor assembles reads into a **pseudogenome** by greedy suffix-prefix
+overlap and maps the remainder onto it — the approach introduced by PgRC
+[Grabowski & Kowalski 2020; PgRC2 2025], itself building on assembly-based read
+compression from Quip [Jones et al. 2012]. The greedy shortest-common-superstring
+and q-gram matching primitives are standard.
 
-Our implementation is independent — PgRC2 is GPL-3 and no source is shared —
-and differs in construction: overlaps are found by a parallel hash sweep rather
-than their sort-merge, which needs 11× more comparisons but runs 3.2× faster on
-12 cores (`docs/REIMPL_NOTES.md` §39). We extend the architecture to a complete
-FASTQ archive — identifiers, line 3 and quality, none of which PgRC stores —
-and, for Claims 2 and 3, retain and serve the pseudogenome rather than
-discarding it.
+The construction differs throughout. PgRC2 maintains **three** pseudogenomes —
+high-quality, low-quality, and one for N-containing reads; we use **two**
+regions and route N-containing reads through the same pipeline, substituting
+N→A and keeping the N positions in a side stream. Overlaps are found by a
+parallel hash sweep rather than their sort-merge: 11× more comparisons, 3.2×
+faster on 12 cores. Our round-1 division is the structural equivalent of their
+high/low-quality split — theirs is inactive by default in the released binary,
+so both are in practice topological — and leaves a main region 81,737 bases
+smaller on *S. acidocaldarius*. No source is shared; PgRC2 is GPL-3.
+
+The scope differs as well. This archive stores identifiers, line 3 and quality,
+none of which PgRC does, and Claims 2 and 3 retain and serve the pseudogenome
+rather than discarding it after encoding.
 
 Implemented in `stages/106_inprocess.cpp` (the encoder) and
 `stages/capsule_decode.cpp` (the decoder), with stream coders in
