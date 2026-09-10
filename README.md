@@ -39,10 +39,10 @@ purposes instead of discarding it after compression:
 
 ## Key Features
 
-- **Smallest lossless archive** on 14 real datasets: beats SPRING by 11.68% and Genozip by 48.93% aggregate, 14/14 wins against both
-- **Reference-free variant calling** as a side effect of compression: het-SNV F1 0.890, het-indel F1 0.666, both beating the strongest applicable competitor
-- **Multi-allelic and tetraploid calling**: native multi-allelic VCF output (a capability DiscoSNP++ structurally lacks), and real-data tetraploid SNV/indel wins built from real GIAB samples, not synthetic data
-- **Archive-native addressability**: pseudogenome export 254–656× faster than SPAdes, per-base coverage 23–33× faster than bwa+mosdepth, coordinate-range query at 132× output selectivity
+- **Smallest lossless archive** on 19 real datasets, 55.0 GB of FASTQ: **19/19 wins against SPRING (−6.03% aggregate) and 19/19 against Genozip (−43.26%)**, with **57/57 archives decoded back to byte-identical input**
+- **Reference-free variant calling from the archive itself** — no FASTQ, no reference, no second assembly pass: het-SNV mean F1 **0.876** vs DiscoSNP++ 0.853 and Kmer2SNP 0.475, across four GIAB individuals
+- **Multi-allelic and tetraploid calling**: **21/26** multi-allelic sites recovered — a *complete* chr20 census — where DiscoSNP++ emits **zero** multi-allelic records in 3,989; and tetraploid SNV F1 **0.897** vs 0.782 from real HG003+HG004 reads, nothing simulated
+- **Archive-native addressability**: pseudogenome export **129–784×** faster than SPAdes and per-base coverage **16–54×** faster than bwa+mosdepth — plus `query`, which resolves a heterozygous locus that **no coordinate can name** (see below)
 - **Byte-exact lossless**: sequence, read order, names, quality and line-3 mode all verified to reconstruct the original file, same MD5
 
 ---
@@ -63,75 +63,154 @@ purposes instead of discarding it after compression:
 
 ---
 
+## Where everything is
+
+| you want | go to |
+|---|---|
+| the results, as executed | [`benchmark/results/`](benchmark/results/) — 8 CSVs, one run |
+| **where any number came from** | [`benchmark/documentation/RESULT_CODE.md`](benchmark/documentation/RESULT_CODE.md) |
+| to re-run it all yourself | [`benchmark/documentation/REPRODUCE_EVERYTHING.md`](benchmark/documentation/REPRODUCE_EVERYTHING.md) |
+| to rebuild the machine | [`server/`](server/) — setup, tool versions, `verify_environment.sh` |
+| the methods, for the paper | [`paper/METHODS.md`](paper/METHODS.md) |
+| which scripts / run dirs are live | [`benchmark/documentation/SCRIPT_INVENTORY.md`](benchmark/documentation/SCRIPT_INVENTORY.md), [`RESULTS_INVENTORY.md`](benchmark/documentation/RESULTS_INVENTORY.md) |
+
+Documents outside those folders are the historical record, and several are marked
+superseded in place. **Where a document and a result file disagree, the result file wins.**
+
+---
+
 ## Results
 
 ### Compression (COMPACT)
 
-**Table 1.** Whole-file lossless archive (sequence + names + quality + line 3) on 14 real
-public datasets spanning bacteria, viruses, fungi, protists, and one human virus, every
-archive decoded back to byte-identical input before being counted.
+**Table 1.** Whole-file lossless archive (sequence + names + quality + line 3) on the 19
+locked datasets — 55.0 GB of FASTQ spanning bacteria, archaea, viruses, fungi, protists,
+plants, animals and human — every archive decoded back to byte-identical input **before**
+being counted.
 
-| dataset | organism | G_CAPSUL | SPRING | Genozip |
-|---|---|---:|---:|---:|
-| SRR2584863 | E. coli B REL606 | 68,677,977 | 74,045,440 | 119,618,198 |
-| ERR552797 | M. tuberculosis H37Rv | 46,964,185 | 52,101,120 | 82,799,524 |
-| SRR554369 | P. aeruginosa PAO1 | 57,320,645 | 59,166,720 | 88,813,037 |
-| ERR5181310 | SARS-CoV-2 | 8,686,774 | 9,390,080 | 9,218,949 |
-| ERR17740259 | S. aureus | 83,421,422 | 92,303,360 | 164,126,889 |
-| DRR976266 | S. cerevisiae | 56,684,465 | 61,716,480 | 201,140,420 |
-| SRR36741279 | L. major | 106,342,010 | 117,565,440 | 194,786,333 |
-| SRR37283774 | P. falciparum | 67,382,606 | 71,168,000 | 94,989,854 |
-| SRR32429602 | HCMV | 55,694,667 | 57,344,000 | 106,983,461 |
-| SRR39257532 | A. fumigatus | 108,558,425 | 153,589,760 | 227,157,899 |
-| SRR29296997 | H. salinarum | 15,654,489 | 17,500,160 | 27,233,618 |
-| ERR12954017 | S. acidocaldarius | 15,159,145 | 16,967,680 | 39,545,150 |
-| SRR40271341 | H. pylori | 40,620,675 | 45,742,080 | 62,259,448 |
-| SRR40402583 | C. jejuni | 9,040,464 | 9,543,680 | 30,863,017 |
+| dataset | G_CAPSUL | SPRING | Genozip | lossless |
+|---|---:|---:|---:|:---:|
+| ERR5181310 | **8,679,796** | 9,984,000 | 9,222,378 | 3/3 |
+| SRR554369 | **57,286,360** | 59,197,440 | 88,813,291 | 3/3 |
+| ERR552797 | **46,970,874** | 52,131,840 | 82,799,532 | 3/3 |
+| SRR2584863 | **68,429,027** | 74,086,400 | 114,589,268 | 3/3 |
+| SRR29296997 | **15,663,251** | 17,541,120 | 27,233,698 | 3/3 |
+| ERR12954017 | **15,164,609** | 16,998,400 | 39,429,441 | 3/3 |
+| SRR065390 | **887,410,845** | 942,643,200 | 1,597,083,547 | 3/3 |
+| SRR40271341 | **40,551,005** | 45,783,040 | 62,260,895 | 3/3 |
+| ERR17740259 | **83,196,587** | 92,395,520 | 161,813,831 | 3/3 |
+| SRR37283774 | **67,201,215** | 71,342,080 | 94,989,797 | 3/3 |
+| DRR976266 | **56,541,178** | 61,757,440 | 201,135,432 | 3/3 |
+| SRR36741279 | **106,248,319** | 117,616,640 | 194,658,228 | 3/3 |
+| SRR32429602 | **55,118,753** | 57,548,800 | 107,183,883 | 3/3 |
+| SRR39257532 | **108,270,384** | 153,856,000 | 227,016,274 | 3/3 |
+| SRR10676752 | **1,650,034,057** | 1,718,548,480 | 2,954,900,932 | 3/3 |
+| HG002 | **573,767,964** | 598,190,080 | 950,997,605 | 3/3 |
+| HG003 | **567,123,999** | 591,144,960 | 944,223,940 | 3/3 |
+| HG004 | **606,192,930** | 634,746,880 | 1,041,658,192 | 3/3 |
+| HG005 | **997,518,994** | 1,081,384,960 | 1,694,512,440 | 3/3 |
+| **aggregate** | **6,011,370,147** | 6,396,897,280 | 10,594,522,604 | **57/57** |
 
-**14/14 wins vs SPRING (+11.68% aggregate). 14/14 wins vs Genozip (+48.93% aggregate).**
-Raw CSV: [`results/phase_a/allphases_14dataset.csv`](results/phase_a/allphases_14dataset.csv).
-One locked dataset (Utricularia gibba, `SRR10676752`) is not yet run — see
-[What's open, honestly](#whats-open-honestly).
+**19/19 wins vs SPRING (−6.03% aggregate). 19/19 vs Genozip (−43.26%). 57/57 LOSSLESS.**
+
+One run, start to finish: `benchmark_1_run.sh` at commit `21ee619`, 5 h 07 m, 0 failures.
+Raw CSV: [`benchmark/results/claim1_T1.1_T1.2.csv`](benchmark/results/claim1_T1.1_T1.2.csv).
+Traced to the code that produced it in
+[`benchmark/documentation/RESULT_CODE.md`](benchmark/documentation/RESULT_CODE.md).
+
+> **Superseded.** This table previously reported *14 datasets, +11.68% vs SPRING and
+> +48.93% vs Genozip*. Those numbers are withdrawn: they came from a run that
+> `CLAUDE.md` §6.3 records as **VOID for 4 of the 14 datasets**, whose archives could not
+> reproduce their input because of four silent data-loss bugs. All four are fixed, and the
+> table above is the post-fix sweep with losslessness verified per archive. The margin is
+> smaller and it is real.
 
 Separately, sequence-only content against PgRC2's own binary (the closest architectural
-relative, GPL-3, run from its own source): **+1.88% aggregate, 6 wins, 1 loss** (S.
-acidocaldarius, −0.83%) across 7 datasets. Full breakdown:
+relative, GPL-3, run from its own source): **+1.88% aggregate**. That is a different
+measurement — PgRC2 stores no names, no quality and no line 3 — and is deliberately not
+in the CSV above. Breakdown:
 [`docs/CLAIM1_FINAL_VERDICT.md`](docs/CLAIM1_FINAL_VERDICT.md).
 
 ### Reference-free variant calling (FAITHFUL)
 
-**Table 2.** Real GIAB HG002–HG005 chr20 data, 8 independent chr20-window evaluations plus
-a real tetraploid construction, scored by third-party `rtg vcfeval`.
+**Table 2.** Real GIAB HG002–HG005 chr20 at 30×, scored by third-party `rtg vcfeval`
+against GIAB v4.2.1 inside the confident regions. **Every G_CAPSUL number here is called
+from the compressed archive** — `capsule_decode call archive out.vcf`, with no FASTQ, no
+reference and no separate assembly graph. Competitors get the identical reads, truth,
+regions, normalisation and scorer; only the caller differs.
 
 | comparison | G_CAPSUL | DiscoSNP++ | Kmer2SNP |
 |---|---:|---:|---:|
-| het-SNV F1 | **0.890** | 0.874 | 0.464 |
-| het-indel F1 | **0.666** | 0.639 | not applicable (SNP-only by construction) |
-| multi-allelic sites recovered | **11/18** | 0/18 | not applicable |
-| tetraploid SNV F1 | **0.836** | 0.782 | not applicable |
-| tetraploid indel F1 | **0.567** | 0.553 | not applicable |
+| het-SNV F1 (mean of 4 individuals) | **0.876** | 0.853 | 0.475 |
+| het-indel F1 (mean of 4) | **0.621** | 0.591 | not applicable (SNP-only by construction) |
+| multi-allelic sites recovered | **21 / 26** | **0 / 26** | not applicable |
+| tetraploid SNV F1 | **0.897** | 0.782 | not applicable |
+| tetraploid indel F1 | **0.597** | 0.553 | not applicable |
 
-DiscoSNP++ and Kmer2SNP are the only two general-purpose reference-free callers found
-applicable to this exact task (single sample, no reference; literature survey in
-[`docs/HET_INDEL_SOTA.md`](docs/HET_INDEL_SOTA.md)). The tetraploid rows are built from
-real HG003+HG004 reads mixed following Cooke, Wedge & Lunter, *Genome Research* 2022 —
-nothing simulated. Full tables and the two measurement bugs whose fixes flipped het-indel
-and tetraploid-indel from documented losses to wins:
-[`docs/CLAIM2_TABLES_AND_INDEL_SCAN.md`](docs/CLAIM2_TABLES_AND_INDEL_SCAN.md).
+Per individual, het-SNV: 0.888 / 0.891 / 0.891 / 0.834 — **3 wins and 1 loss**, and the
+loss is stated rather than averaged away. HG005 is the only variable-length dataset in the
+set (250 bp quality-trimmed, 216 distinct read lengths, against 148 bp fixed elsewhere) and
+the caller is tuned for fixed-length reads; at fixed length the same reads give 0.897, our
+best. The published number is the untruncated 0.834.
+[`docs/HG005_EXPLAINED.md`](docs/HG005_EXPLAINED.md).
+
+The multi-allelic row is a **complete census of chr20**, not a sample: 26 is every
+SNV-only multi-allelic site there is. DiscoSNP++'s 0 is structural — across its entire
+3,989-record output it emits no record with more than one ALT allele.
+
+**Why this works at all** — the finding the project is built on: *the representation that
+compresses a heterozygous site best is the one that conceals it.* Optimal compression puts
+each allele on its own internally-consistent contig, so ref and alt reads never share a
+coordinate and the variant is **not in the data structure**. Ablation, full chr20:
+
+    neither             F1 0.431   P 0.967   R 0.278
+    re-placement only      0.426     0.962     0.274   <- worse than neither
+    collapse only          0.648     0.963     0.488
+    both                   0.888     0.956     0.830
+
+Synergy, not additivity, and the error *shape* confirms it: without collapse, precision
+holds at 0.96 while recall collapses to 0.27. The caller is not mistaken, it is **blind** —
+exactly what "the alt reads are on another contig" predicts. **And the correction costs
+nothing in compression ratio.**
+
+Raw CSVs: [`benchmark/results/`](benchmark/results/). Survey of why these two competitors
+are the applicable ones: [`docs/HET_INDEL_SOTA.md`](docs/HET_INDEL_SOTA.md).
 
 ### Archive-native addressability (ADDRESSABLE)
 
-**Table 3.** `export`/`coverage`/`query` served directly from the archive vs the
-conventional pipeline that would otherwise compute the same thing, on real data.
+**Table 3.** `export`/`coverage`/`query` served directly from the archive, against the
+conventional pipeline that would otherwise compute the same thing.
 
 | operation | vs | speedup |
 |---|---|---:|
-| export (pseudogenome as FASTA) | SPAdes v4.0.0 | **555–656×** |
-| coverage (per-base depth) | bwa + samtools + mosdepth | **23–33×** |
-| query (coordinate-range reads) | full decompression | 1.62× time, **132× fewer reads / 112× fewer bytes** returned |
+| export (pseudogenome as FASTA) | SPAdes v4.0.0 | **129–784×** |
+| coverage (per-base depth) | bwa + samtools + mosdepth, timed as one pipeline | **16–54×** |
+| query (reads at a locus) | — | see below; **not a speed claim** |
 
-Full numbers, exact commands, and the two real bugs found and fixed while verifying them:
-[`docs/CLAIM3_LOCKED.md`](docs/CLAIM3_LOCKED.md).
+**Read the export ratio with its caveat**, which is why the CSV carries output bytes and
+row counts for both sides: our export emits 2 records (the pseudogenome), SPAdes emits tens
+of thousands of biological contigs. It measures time-to-a-reference-free-coordinate-system
+from an archive that had to exist anyway — **not "the same output, faster."** T3.2 and T3.3
+carry no such caveat.
+
+**`query` is not a speed claim, and we say so.** `genocat --head=100` extracts in 0.19 s
+against our 0.46 s. What `query` does that nothing else can is resolve a **locus**:
+
+| addressing mode, same archive, same 400 GIAB het sites | both alleles returned |
+|---|---:|
+| by coordinate | 81 / 400 |
+| by content (ours) | **345 / 400** |
+
+A heterozygous locus is **not one place** in a compression-optimal pseudogenome — it is N
+parallel places (median 4: two haplotypes × two strands), measured up to 18.6 Mb apart. So
+the archive's own coordinate system cannot name it, and **adding a coordinate API would not
+fix that** — the 81/400 measures precisely that failure. Content addressing resolves every
+parallel representative at once. Same mechanism as Claim 2, one layer out.
+
+Cost of all this: the `contig_spans` stream, 232,509 B — **0.041%** of a 573 MB archive.
+
+Full traceability: [`benchmark/documentation/RESULT_CODE.md`](benchmark/documentation/RESULT_CODE.md).
+Mechanism: [`docs/CLAIM3_MECHANISM.md`](docs/CLAIM3_MECHANISM.md).
 
 ---
 
@@ -283,13 +362,24 @@ bash scripts/run_capsule.sh 3 full                 # real export/coverage/query 
 
 ## What's open, honestly
 
-- **Utricularia gibba (`SRR10676752`)**, the 15th locked dataset, has not been run — Claim 1
-  is 14/14, not yet 15/15.
-- **Claim 2 is validated on chr20 windows and a tetraploid construction, not the full 30×
-  individual** the project's own spec commits to.
-- **`export`/`coverage`/`query` exist only in this repository**, not in the outer ARCS
-  binary.
-- **No CI, no top-level license file yet** — both named, neither silently assumed.
+The four items that used to sit here — the unrun 15th dataset, Claim 2 on windows rather
+than a full individual, no CI, no license — are all closed. `SRR10676752` is in the sweep,
+Claim 2 runs on full chr20 at 30× for four individuals, and both `LICENSE` and
+`.github/workflows/ci.yml` exist. These are what is genuinely open:
+
+- **Human validation is chr20 only, at 30×.** Claims 2 and 3 are measured on four GIAB
+  individuals across the whole chromosome, not on windows — but it is one chromosome,
+  because the archives are chr20. Nothing here is evidence about whole-genome behaviour.
+- **No non-human diploid variant validation.** The 15 non-human datasets carry Claim 1
+  only; there is no comparable truth set for them.
+- **HG005 loses, and we publish the loss.** The caller is tuned for fixed-length reads;
+  HG005 is the only variable-length dataset. Cause identified by controlled experiment
+  ([`docs/HG005_EXPLAINED.md`](docs/HG005_EXPLAINED.md)), not fixed.
+- **Compression is slower than SPRING** — 2.99× on compress, 1.79× on decompress. We are
+  faster on 3 of 19 and lighter on 9 of 19. Assembly costs time; that is the trade.
+- **`query` is not a speed win** against `genocat --head` (0.46 s vs 0.19 s), and Table 3
+  says so rather than leading with the indexed 0.03 s.
+- **The export ratio is not "the same output, faster."** See the caveat under Table 3.
 
 Full, current status for each claim: [`docs/CLAIM1_FINAL_VERDICT.md`](docs/CLAIM1_FINAL_VERDICT.md),
 [`docs/CLAIM2_FINAL_VERDICT.md`](docs/CLAIM2_FINAL_VERDICT.md),
