@@ -17,6 +17,43 @@ proves *what it produced*.
 
 ## 1. Compression — the pipeline
 
+### Attribution: the pseudogenome is PgRC's idea, and it is cited as such
+
+**The central data structure of this compressor — a *pseudogenome* assembled
+from the reads by greedy suffix-prefix overlap, onto which the remaining reads
+are mapped — is not ours. It is PgRC's** (Grabowski & Kowalski, *Bioinformatics*
+36(7):2082, 2020; PgRC2, Kowalski & Grabowski, *Bioinformatics* 41(3), 2025).
+This work is in that lineage and says so plainly; any claim here that reads as
+"we invented compressing reads onto an assembled pseudogenome" would be false.
+
+**What was done independently, and why.** PgRC2 is GPL-3. To keep this
+repository MIT-licensable, no PgRC2 source is included or linked — its
+assembler was reimplemented from the published algorithm, stage by stage, with
+the full progression and every refuted step recorded in `docs/REIMPL_NOTES.md`.
+That document is also the honest record of where the reimplementation was
+*worse* than theirs before it was better.
+
+**What is genuinely added on top**, each measured rather than asserted:
+
+| addition | measured |
+|---|---|
+| Sweep starts at `Lmax`, not `Lmax−1`, so exact duplicates chain for free instead of needing a separate dedup pass | one pseudogenome 9,134,100 → 6,157,270 B |
+| Best-match rather than first-acceptable placement | 10.74 → **4.94** mismatches/read |
+| Permutation coder (Lehmer code + Fenwick tree + range coder) for read order | 18.49 bits/read vs PgRC2's 22.82 — **−19%**, and 0.022% off the information-theoretic floor |
+| Mismatch symbols coded against the reference base rather than independently | 124,280 B vs their 208,234 — **−40%** |
+| Multi-order context-mixing DNA coder | 1.9174 bpb vs their 1.9261 |
+| **Names, line 3 and quality columns** | PgRC2 has none of these — it emits bare DNA and cannot reproduce a FASTQ |
+
+The last row is the substantive scope difference: **PgRC2 is a DNA-stream
+compressor; this is a complete lossless FASTQ archive.** That is why the +1.88%
+against PgRC2 is reported separately from the SPRING/Genozip comparison, and
+why it is stated as a DNA-stream-only number.
+
+**And Claims 2 and 3 — calling variants from the archive, and locus retrieval —
+have no counterpart in PgRC at all.** `PgRC -h` offers compress and decompress
+and nothing else. Those claims rest on the pseudogenome being *retained and
+served*, which is precisely what this lineage discards.
+
 Implemented in `stages/106_inprocess.cpp` (the encoder) and
 `stages/capsule_decode.cpp` (the decoder), with stream coders in
 `include/coders_inproc.h` and the shared DNA coder in `include/seqpar_core.h`.
