@@ -1,6 +1,6 @@
 # DISCUSSION — what this work claims, against the field that already exists
 
-> **Status:** frozen 2026-09-10 at tag `v1.0.1-capsule` — code and results final.
+> **Status:** frozen 2026-09-10 at tag `v1.0.2-capsule` — code and results final.
 > Authoritative numbers live in `../benchmark/results/`; verification status in
 > [`../AUDIT.md`](../AUDIT.md). Where this file and a result file disagree, the result file wins.
 

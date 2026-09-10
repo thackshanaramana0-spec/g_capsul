@@ -1,0 +1,7 @@
+input	/data/fastq/SRR2584863_1.fq	695163748	the FASTQ under test
+claim1	/root/arcs-clean/c_star_pg_advance/results/sanity_SRR2584863_20260910_022835/SRR2584863.capsule	68429027	the .capsule archive -- T1 size, and what Claim 3 reads
+claim1	/root/arcs-clean/c_star_pg_advance/results/sanity_SRR2584863_20260910_022835/SRR2584863.capsule.log	12997	encoder log: per-stage timings, stream sizes, candidate sweep
+claim1	/root/arcs-clean/c_star_pg_advance/results/sanity_SRR2584863_20260910_022835/decoded/reads.seq	234542109	reads reconstructed FROM THE ARCHIVE (lossless check input)
+claim1	/root/arcs-clean/c_star_pg_advance/results/sanity_SRR2584863_20260910_022835/SRR2584863.spring	74076160	SPRING archive -- the competitor number in T1
+claim1	/root/arcs-clean/c_star_pg_advance/results/sanity_SRR2584863_20260910_022835/SRR2584863.genozip	119674636	Genozip archive -- the competitor number in T1
+claim1	/root/arcs-clean/c_star_pg_advance/results/sanity_SRR2584863_20260910_022835/claim1_T1.1_T1.2.csv	311	T1.1 + T1.2 table rows for this dataset
