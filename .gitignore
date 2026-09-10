@@ -54,3 +54,7 @@ out.vcf
 # audit directories. These are small, they ARE the evidence, and they are the
 # one class of .log this repository must keep.
 !benchmark/documentation/*_reproduction_*/*.log
+# Same reasoning for the small truth/evidence VCFs preserved alongside them:
+# the blanket *.vcf rule would exclude the very file a correction cites as
+# proof of what the original experiment actually measured.
+!benchmark/documentation/*_reproduction_*/*.vcf

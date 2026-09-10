@@ -1,6 +1,6 @@
 # MANIFEST.sha256 — checksums of every file a published number depends on
 #
-# Generated 2026-09-10 14:41:20 UTC at commit 7056c4fb9b2ebf50d96b9d31b3edd407225df389.
+# Generated 2026-09-10 14:43:35 UTC at commit e1850b66defba1005cc1a1d27d6de1f9feb3e61b.
 # Verify with: sha256sum -c benchmark/documentation/MANIFEST.sha256
 # from the repository root -- including on a FRESH CLONE. Generate ONLY
 # from 'git ls-files' (a 2026-09-10 bug pulled in a concurrent agent's
@@ -9,7 +9,7 @@
 # Regenerate with:
 #   cd $(git rev-parse --show-toplevel)
 #   git ls-files benchmark/results benchmark/documentation paper stages include \
-#     | grep -E '\.(csv|txt|md|cpp|h|log)$' | grep -v MANIFEST.sha256 | sort | xargs sha256sum
+#     | grep -E '\.(csv|txt|md|cpp|h|log|vcf)$' | grep -v MANIFEST.sha256 | sort | xargs sha256sum
 #
 4b7c369c7f7a7dddfd48df3f42847309f01afe76fb2f387efed9676c8e5a25d6  benchmark/documentation/CLAIM2_RESULTS_V2.md
 f5bb72efa185f9d26aaa90cd4270a9d80936ed214d104ab02474be67b359064b  benchmark/documentation/CLAIM2_TABLES_AND_INDEL_SCAN.md
@@ -25,14 +25,17 @@ a4250439596d951e2d164923e0e43df29d7d2fbc08bc58b96a97fce5059379b8  benchmark/docu
 2228d33bd4075cebdc2ef1106263c51a8d55806dcc7aed42fc6872beb4722e6c  benchmark/documentation/NOVELTY_FINAL.md
 c7c1e6035907d857637fe8a60a8b4c109e290d9cb18c6e8578eedc80925ce00f  benchmark/documentation/REPRODUCE_EVERYTHING.md
 2882dc1ec4773e9e0f9383607abccd75cd0a50686cc167b267f88c65fcc57215  benchmark/documentation/REPRODUCIBILITY.md
-9fc453a8034424889898f89ff3f52c3b9cbedf0dd935acaa60a8f036815ebc65  benchmark/documentation/RESULT_CODE.md
+e4c8305ab3285cc4b1a2fee2ad7c741ebf6bf47c2db9f7b174c1d247636cb2c0  benchmark/documentation/RESULT_CODE.md
 a849330936662c5a7ca5fa30adef97a73af57c370198268eb436835dc7af9638  benchmark/documentation/RESULTS_INVENTORY.md
 86eed934765569a286e12fd0267bcd36f20a27dd5edacb676e7a53dd207b92ba  benchmark/documentation/SCRIPT_INVENTORY.md
 b764b6b580298bbfc3c81c80b287e271612a105b5fa95979044d15937aa445bd  benchmark/documentation/T2.4_reproduction_20260910/original_window_run_capsule_call.log
+ee132de56a8035835f36e7dd5f812dbdef0c2ffa3bd45a7dd407003b2ca048c7  benchmark/documentation/T2.4_reproduction_20260910/original_window_truth_multiallelic.vcf
 78a2feba65609cded6882ead50be3c006312ca8a123b681bb82d96c855400d5b  benchmark/documentation/T2.4_reproduction_20260910/README.md
 d7e517ea5f361583c7269acfda36334fcd389dff11ae2b207592cde1cdeefde4  benchmark/documentation/T2.4_reproduction_20260910/run_A_full_chr20.log
 5da91a1511b9b42d744244e31645dfadeecfcb795dc4d899d57cd77ffc2643cf  benchmark/documentation/T2.4_reproduction_20260910/run_B_same_reads_repeat.log
 4b42105ee48f13fdce41b5e58dddf4d7ffb69edc92a73405bd3b47ef8c5b5ff8  benchmark/documentation/T2.4_reproduction_20260910/run_C_prefix_binary_same_reads.log
+bba648150ef9634e96bbcfdd32d0bdbfdf2c958418b9515f7a9e55bf5fd87d23  benchmark/documentation/T2.5_reproduction_20260910/README.md
+8dbc3226f26b4a4433367414a0f2b21940c85ff9fbaf117ca8b3dfc0e1ec20af  benchmark/documentation/T2.5_reproduction_20260910/rerun_20260910.log
 5efec794d93c04aea665c79571efd275f5faf5a13fc8bcadad34d8717fe7bb42  benchmark/documentation/T3.4_reproduction_20260910/README.md
 104a1471791b9e091c94a8e7293d19f127fdbeadea55f3a90484124beb30a0ce  benchmark/documentation/T3.4_reproduction_20260910/run_with_CAPS_PILEUP_matches_published.log
 9883dd4b121e30a5aca4e1b5f9e060f0f087fcd2ff5c582f8329e18da53dccc4  benchmark/documentation/T3.4_reproduction_20260910/run_without_CAPS_PILEUP_gives_0.log

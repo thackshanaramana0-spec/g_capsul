@@ -1,0 +1,31 @@
+[tetraploid] 20:11:59 mixing HG003 + HG004 reads at 30x each -> 4-copy sample, region 20:3000000-3400000
+[tetraploid] 20:11:59 [1/7] streaming HG003 + HG004 windows from GIAB S3/HTTP...
+[tetraploid] 20:12:17   HG003 window reads: 70246
+[tetraploid] 20:12:36   HG004 window reads: 84334
+[tetraploid] 20:12:36 [1/7] done -- mixed reads: 154580
+[tetraploid] 20:12:36 [2/7] fetching + normalising real GIAB truth for HG003 and HG004...
+[tetraploid] 20:12:37 [2/7] done
+[tetraploid] 20:12:37 [3/7] intersecting confident BEDs...
+[tetraploid] 20:12:38 [3/7] done -- 373982 confident bp in window
+[tetraploid] 20:12:38 [4/7] building unbiased tetraploid union truth (v2, drops nothing)...
+v2 truth alleles: 117851  (HG003 84890, HG004 86562, shared 53601, dropped 0)
+[tetraploid] 20:12:38 [4/7] done -- 759 truth sites in window
+[tetraploid] 20:12:38 [5/7] running CAPSULE caller at ploidy=4 on the mixed sample...
+[tetraploid] 20:12:38 [call] compressing to an archive, then calling FROM it (no FASTQ read)
+[tetraploid] 20:12:41 [call] archive 8467001 B -- calling from it
+[tetraploid] 20:12:42 [5/7]   mode: original caller, ploidy=4
+[tetraploid] 20:12:43 [5/7]   caller done -- 13173 contigs, aligning + lifting...
+lifted 609 calls (682 SNV, 93 indel; both strands) -> lifted.vcf
+[tetraploid] 20:12:43 [5/7] done
+[tetraploid] 20:12:43 [6/7] running DiscoSNP++ on the identical mixed reads...
+[tetraploid] 20:12:45 [6/7] done
+[tetraploid] 20:12:45 [7/7] normalising, classifying, and scoring both tools with rtg vcfeval...
+[tetraploid] 20:12:46 [7/7] done -- scoring
+===== T5.3 TETRAPLOID (HG003+HG004, ploidy=4) =====
+CAPSULE_SNV    TP=472   FP=7     FN=101   P=0.985 R=0.824 F1=0.897
+DiscoSNP++_SNV TP=373   FP=8     FN=200   P=0.979 R=0.651 F1=0.782
+CAPSULE_INDEL  TP=51    FP=8     FN=61    P=0.864 R=0.455 F1=0.597
+DiscoSNP++_INDEL TP=44    FP=3     FN=68    P=0.936 R=0.393 F1=0.553
+==========================================================
+[tetraploid] 20:12:50 Results in: /root/.claude/jobs/66d96ba8/tmp/t25_verify/out
+[tetraploid] 20:12:50 Total elapsed: 51s
