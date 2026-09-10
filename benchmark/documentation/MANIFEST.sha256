@@ -1,5 +1,5 @@
 # MANIFEST.sha256 — checksums of every file a published number depends on
-# Generated 2026-09-10 16:14:45 UTC at commit 8b955bf7a0ae49bf064478d965ab015926e86788.
+# Generated 2026-09-10 16:17:53 UTC at commit ad8d47a641c7895dc30fcfc20843e7e578f54310.
 # Verify: sha256sum -c benchmark/documentation/MANIFEST.sha256 (from repo root)
 # Regenerate from 'git ls-files' ONLY -- see AUDIT.md 2.4.
 307a15b9d321f6c7ebe4b2936121576f9a1e4ceb1983f28b78434964937d765f  AUDIT.md
@@ -62,7 +62,7 @@ d2c709f22f0d4503df33647b9d50419eff4863fdfca5889a2c510f066d711416  paper/COMPRESS
 a045dea57f0fe18e39256cb504229c062d4452e62f2546b07213f9654a97a0e1  paper/DISCUSSION.md
 376ca8b4fe9cdc7b7bc392f04fcd5a690434f0d6c6f6db2588f17b3d9d22a572  paper/FORMAT.md
 8deb17f2c85e31b5925912ad6c37db341ecf7b2478251c01cbef2d8030a9a685  paper/LIMITATIONS.md
-9ef037102eee64d7e063620ea7ce6a44003c6984e312a32333eb67de7344d0ca  paper/METHODS.md
+9d4065b22f8fef96603476240eaea1e315e3bf456da7da33642315dd458a1ec5  paper/METHODS.md
 2228d33bd4075cebdc2ef1106263c51a8d55806dcc7aed42fc6872beb4722e6c  paper/NOVELTY_FINAL.md
 affbfc459a5f59ceb72014f40d4e690a1a995c580c3816aba76146e10da7a603  paper/PAPER.md
 f865fac110db59d5ad666f08c034c16cc0f880507642df61ca65ced1c5eaeb84  paper/PIPELINE.md
