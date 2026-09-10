@@ -15,8 +15,11 @@ last part.
 
 ## 1. The headline
 
-Every published table now has independent evidence behind it. **One number
-changed as a result — downward.** Everything else was confirmed.
+Every published table was checked, and **one number changed as a result —
+downward**. But "checked" means two different things depending on the table,
+and the difference matters: see the tier note directly below the table. Only
+four tables were re-executed against an independent measurement; the rest were
+checked for transcription fidelity only.
 
 | table | how it was verified | outcome |
 |---|---|---|
@@ -34,6 +37,36 @@ changed as a result — downward.** Everything else was confirmed.
 Raw evidence for every re-execution is committed:
 `benchmark/documentation/T2.4_reproduction_20260910/`,
 `T2.5_reproduction_20260910/`, `T3.4_reproduction_20260910/`.
+
+### The limit of the "re-derived from the raw log" checks — read this before trusting the table above
+
+The rows marked *re-derived* were checked by parsing `run.log.txt` and diffing
+against the CSV. **That is weaker than it sounds, and the weakness is
+structural.** In `benchmark_1_run.sh` the log line and the CSV row are written
+from the *same shell variables in the same execution*:
+
+    ok     "compress  archive=$(mbs $ARCH) ..."      # -> the log
+    printf "%s,CAPSULE,%s,%s,..." ... "$ARCH" ...    # -> the CSV
+
+So a log/CSV match proves **transcription fidelity**, not measurement
+correctness. If `stat -c%s` had been pointed at the wrong file, or
+`parse_time_v` had misparsed, both artefacts would carry the identical wrong
+number and the check would still report a clean match.
+
+The verification therefore has two tiers, and they are not equivalent:
+
+| tier | what it proves | tables |
+|---|---|---|
+| **Re-executed** — independent measurement | catches wrong *values* | T2.4 (3×), T2.5, T3.4 (HG002 row only), T1.1's E. coli row via `sanity_archive_one.sh` |
+| **Transcription-checked** — log vs CSV | catches copying/typing errors only | the remaining 56 T1.1/T1.2 rows, all of T2.1/T2.2/T2.3/T3.1/T3.2/T3.3, and T3.4's HG003/HG004/HG005 rows |
+
+**The single real defect this audit found (T2.4) was found by tier 1, and could
+not have been found by tier 2.** That is the honest measure of what the two
+tiers are worth. Tier 2 is not worthless — it would catch a mis-transcribed
+table — but it cannot detect the failure mode that actually occurred here.
+
+Closing this properly means re-executing the tier-2 tables. That is
+~19 h of compute for the Claim 1 sweep alone and was not done.
 
 ---
 
@@ -163,6 +196,33 @@ Stated plainly, because an audit that only lists successes is not an audit.
   execution.
 - **The six-month reconstruction test has not been performed by an actual
   outsider** — only simulated by the same party that built the repository.
+- **Most tables were transcription-checked, not re-executed** (see §1's tier
+  note). The one defect this audit found was in the re-executed group and was
+  undetectable by transcription checking. That is not proof the
+  transcription-only tables are wrong — it is proof the method used on them
+  could not have told us either way.
+
+## 4a. Why "all known gaps are closed" is not "there are no gaps"
+
+Every gap listed in this document has been documented or fixed. That is a
+statement about the **known** set, and it should not be read as a statement
+about the total.
+
+The evidence that the two differ is in this audit itself:
+
+- T2.4's missing evidence existed for a full day before anyone looked for it,
+  and was found only because someone deliberately walked the claim → log chain.
+- The `.gitignore` evidence-exclusion bug was found **twice** — the second
+  instance (`*.vcf`) was missed on the first pass that fixed `*.log`.
+- The manifest bug was found by accident, while doing something else.
+- T3.4's missing flag took three failed attempts to identify, and the first two
+  produced confident wrong diagnoses.
+
+**Detection rate here is demonstrably below 100%.** One bad number in ten
+tables was found; the honest inference is not "there was exactly one" but
+"the process that produced one can produce another, and the audit that caught
+it is not exhaustive." The highest-value next step is not more documentation —
+it is re-executing the tier-2 tables, and a second person looking.
 
 ---
 

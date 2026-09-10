@@ -1,6 +1,6 @@
 # MANIFEST.sha256 — checksums of every file a published number depends on
 #
-# Generated 2026-09-10 15:23:39 UTC at commit 9e6722d50b66ea1386949595e161d87977ccbe23.
+# Generated 2026-09-10 15:34:52 UTC at commit d85dd67eae85b3a14769fd8b4013714ad0f5ec76.
 # Verify with: sha256sum -c benchmark/documentation/MANIFEST.sha256
 # from the repository root -- including on a FRESH CLONE. Generate ONLY
 # from 'git ls-files' (a 2026-09-10 bug pulled in a concurrent agent's
@@ -12,7 +12,7 @@
 #       | grep -E '\.(csv|txt|md|cpp|h|log|vcf)$' | grep -v MANIFEST.sha256; \
 #     git ls-files AUDIT.md README.md CLAUDE.md; } | sort | xargs sha256sum
 #
-9b8f73bb8d1b68580720a9d93ed10a140facd44aa687003ed8922764413661a4  AUDIT.md
+13c270db695b9aa1e0ca6b2805f82e2589b7e3c692a44cbc13b950b4bd89af6b  AUDIT.md
 4b7c369c7f7a7dddfd48df3f42847309f01afe76fb2f387efed9676c8e5a25d6  benchmark/documentation/CLAIM2_RESULTS_V2.md
 f5bb72efa185f9d26aaa90cd4270a9d80936ed214d104ab02474be67b359064b  benchmark/documentation/CLAIM2_TABLES_AND_INDEL_SCAN.md
 4bc3f27a87642336b3e7b53854e6d405558c61a9f8c32de4ce7021e31a0e9220  benchmark/documentation/CLAIM3_APPLICATIONS.md
