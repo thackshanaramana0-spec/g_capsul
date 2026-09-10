@@ -1,5 +1,5 @@
 # MANIFEST.sha256 — checksums of every file a published number depends on
-# Frozen release: tag v1.0.2-capsule, 2026-09-10, plus CITATION.cff.
+# Frozen release: tag v1.0.2-capsule, 2026-09-10, plus CITATION.cff and RECAP.md.
 # Verify: sha256sum -c benchmark/documentation/MANIFEST.sha256 (from repo root)
 # Regenerate from 'git ls-files' ONLY -- see AUDIT.md 2.4.
 d8793f2d4aa97d0b0a27621bdb847a584cf7426991433e5f37d1d170cc222e64  AUDIT.md
@@ -50,6 +50,7 @@ d5a9203c579b0ac7dccb8abb558715e075baad959f954e936add169003b93725  benchmark/resu
 f29911567cd390fb25eb217f911bb6dda471115109ef3fefc9ac9be4e5577d38  benchmark/results/claim3_T3.4_locus_fidelity.csv
 45e10abcc87203d8e7860e965e4677b1840d90a0cc4d0037a208082a8dfb68a8  benchmark/results/PROGRESS.txt
 c7c993c851e0d394f842fbd8194b7e8bdc39145e7150b727092478cef54af4ce  benchmark/results/run.log.txt
+da3681f573eb05ed261ad372209d84d3fa8f86a350e1e52dd7d63a53fb637234  CITATION.cff
 d6910f7f69fbd18f383a95fd96dacf3f84782290da90548288f075cd3160ecdf  CLAUDE.md
 b4aec5225175be24cb2ed0236dc99c693af039fbd4a595061cb4b824cbc94be1  DATASET_LOCKED.md
 88627799147b78b4c5685deadbcf0fc08e5308352e81a574513ae145cd02771d  docs/ARCHITECTURE_VS_DISCOSNP.md
