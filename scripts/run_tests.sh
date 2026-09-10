@@ -51,9 +51,67 @@ for spec in "200 100" "1000 150" "5000 75"; do
   else no "roundtrip ${N}x${L}bp" "encode failed"; fi
 done
 
-echo "[edge] degenerate inputs must not crash or silently corrupt"
-: > "$W/empty.fq";                                     enc "$W/empty.fq" "$W/e0.arc" && ok "empty input handled" || no "empty input handled"
+echo "[edge] degenerate and out-of-scope inputs must be REFUSED, never crash or silently corrupt"
+# Empty input used to succeed silently, producing a structurally valid archive
+# containing nothing. That is now a defect, not a feature: the encoder must
+# REFUSE (nonzero exit, no archive written, no crash) rather than report
+# success on data it did nothing with.
+: > "$W/empty.fq"
+if enc "$W/empty.fq" "$W/e0.arc"; then
+  no "empty input refused" "encoder reported success on an empty file"
+elif [ -s "$W/e0.arc" ]; then
+  no "empty input refused" "exited nonzero but still wrote an archive"
+else
+  ok "empty input refused (no archive, no crash)"
+fi
+# Any read past the fixed per-read stack buffer size (MAX_READ_LEN in
+# stages/106_inprocess.cpp) must be refused loudly and specifically -- this is
+# the boundary between short-read (supported) and long-read (Nanopore/PacBio,
+# unsupported) input. Repeated several times: the failure mode this guards
+# against was a std::thread destructor race that only reproduced outside a
+# debugger, so a single pass proves nothing.
+python3 -c "
+import random; random.seed(11)
+g=''.join(random.choice('ACGT') for _ in range(5000))
+with open('$W/long.fq','w') as f:
+    for i in range(20):
+        f.write(f'@long{i}\n{g}\n+\n{\"I\"*len(g)}\n')"
+LONG_OK=1
+for rep in 1 2 3 4 5; do
+  rm -f "$W/elong.arc"
+  env CAPS_NAMES=1 CAPS_QUAL=1 CAPS_CALL=1 DUMP_LIT=1 DUMP_PERM=1 DUMP_MM=1 \
+      ARCHIVE="$W/elong.arc" "$W/enc" "$W/long.fq" 3 16 16 22 16 16 1 24 64 1 \
+      >"$W/elong.log" 2>&1
+  RC=$?
+  if [ "$RC" -eq 0 ] || [ -s "$W/elong.arc" ]; then LONG_OK=0; break; fi
+  if [ "$RC" -gt 128 ]; then LONG_OK=0; break; fi        # crashed (signal), not refused
+  grep -q "structural limit" "$W/elong.log" || { LONG_OK=0; break; }
+done
+[ "$LONG_OK" -eq 1 ] && ok "oversize (long-read-shaped) input refused, 5/5 reps, no crash" \
+                     || no "oversize input refused" "see $W/elong.log"
 printf "@r\nACGT\n+\nIIII\n" > "$W/t.fq";              enc "$W/t.fq" "$W/e1.arc"    && ok "4bp single read"     || no "4bp single read"
+# A header long enough to overrun nmc's per-token model arrays (MAXTOK=1024)
+# used to silently truncate its token stream and decode to something other
+# than what was encoded -- names, not sequence, and only under CAPS_NAMES=1.
+# Same contract as the oversize-read check: refuse loudly, never crash, never
+# silently corrupt.
+python3 -c "
+hdr='@'+'.'.join(str(i) for i in range(2000))
+with open('$W/bighdr.fq','w') as f:
+    for i in range(5): f.write(f'{hdr}_{i}\nACGTACGTAC\n+\nIIIIIIIIII\n')"
+rm -f "$W/bh.arc"
+env CAPS_NAMES=1 DUMP_LIT=1 DUMP_PERM=1 DUMP_MM=1 ARCHIVE="$W/bh.arc" \
+    "$W/enc" "$W/bighdr.fq" 3 16 16 22 16 16 1 24 64 1 >"$W/bh.log" 2>&1
+BHRC=$?
+if [ "$BHRC" -eq 0 ] || [ -s "$W/bh.arc" ]; then
+  no "oversize header (CAPS_NAMES) refused" "encoder reported success"
+elif [ "$BHRC" -gt 128 ]; then
+  no "oversize header (CAPS_NAMES) refused" "crashed (signal), not refused"
+elif grep -q "tokenizer bound" "$W/bh.log"; then
+  ok "oversize header (CAPS_NAMES) refused, no crash"
+else
+  no "oversize header (CAPS_NAMES) refused" "wrong reason: see $W/bh.log"
+fi
 python3 -c "
 open('$W/n.fq','w').write(''.join(f'@r{i}\n{\"N\"*100}\n+\n{\"I\"*100}\n' for i in range(50)))"
 if enc "$W/n.fq" "$W/e2.arc"; then
