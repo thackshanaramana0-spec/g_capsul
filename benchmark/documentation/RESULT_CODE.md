@@ -57,16 +57,16 @@ parser written against the log format, then diffed against the CSV. Results:
 | T3.2 coverage | 6 | **6** |
 | T3.3 query | 19 | **19** |
 | T2.4 multi-allelic | — | **no raw log existed; re-executed instead, see below** |
-| T2.5 tetraploid | — | **not independently verified — see the caveat below** |
+| T2.5 tetraploid | — | **re-executed instead: all 16 values confirmed exactly** |
 | T3.4 locus fidelity | — | **not in this log; re-executed instead, see below** |
 
-**T2.5 is the one table with no independent verification.** The sweep log's
-end-of-run section prints it via `column -s, -t "$CSV7"`, i.e. it pretty-prints
-the CSV it is supposed to corroborate — circular, not evidence. T2.5 has no
-per-row inline log the way T3.1/T3.2/T3.3 do, and it was not re-executed in
-this audit. Its numbers may well be correct; they are simply not confirmed by
-anything other than the file that states them. Stated rather than left for a
-reader to discover.
+**T2.5 had no independent evidence in the log** — the sweep's end-of-run
+section prints it via `column -s, -t "$CSV7"`, i.e. it pretty-prints the CSV it
+is supposed to corroborate, which is circular. It was therefore **re-executed
+from scratch on 2026-09-10, and all 16 published values reproduce exactly**
+(every TP, FP, FN, precision, recall and F1 for both tools and both variant
+classes), along with the intermediate counts. Raw log and full comparison:
+`benchmark/documentation/T2.5_reproduction_20260910/`.
 
 **File integrity.** `benchmark/documentation/MANIFEST.sha256` lists a SHA-256
 for every file a published number depends on — every results CSV and log,
