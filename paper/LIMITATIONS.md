@@ -185,6 +185,16 @@ adaptive model in **read order**, so read *k*'s deviations require decoding all
 
 ## 7. What the export ratio does and does not measure
 
+**T3.1/T3.2 measure 6 of the 19 locked datasets, not all 19; T3.3 (query)
+measures all 19.** The 6 are one representative per kingdom this project
+covers (Virus, Bacteria, Archaea, Protista, Fungi, Human), not the 6 with the
+best numbers, and the reason is compute cost rather than selection: SPAdes
+alone takes 44.6 minutes on HG002 and scales with genome size, so running it
+against the multi-GB C. elegans/T. cacao-scale sets would cost several more
+hours to confirm a ratio the other six already establish. `RESULT_CODE.md`
+records the exact 6 and the reasoning.
+
+
 `export` is 129–784× faster than SPAdes — and **our export emits 2 records (the
 pseudogenome) where SPAdes emits tens of thousands of biological contigs.** The
 ratio measures time-to-a-reference-free-coordinate-system from an archive that

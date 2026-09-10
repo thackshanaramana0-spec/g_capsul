@@ -1,5 +1,5 @@
 # MANIFEST.sha256 — checksums of every file a published number depends on
-# Frozen release: tag v1.0.2-capsule, 2026-09-10, plus CITATION.cff, RECAP.md, REPO_MAP.md, and a root structure cleanup.
+# Frozen release: tag v1.0.2-capsule, 2026-09-10, plus CITATION.cff, RECAP.md, REPO_MAP.md, structure cleanup, and the T3.1/T3.2 scope disclosure.
 # Verify: sha256sum -c benchmark/documentation/MANIFEST.sha256 (from repo root)
 # Regenerate from 'git ls-files' ONLY -- see AUDIT.md 2.4.
 d8793f2d4aa97d0b0a27621bdb847a584cf7426991433e5f37d1d170cc222e64  AUDIT.md
@@ -75,15 +75,16 @@ dbf2b0dbe9305e09dc979cb61f039d42317fe37fc261d4e9d2fa2e65fa7377ac  paper/CLAIMS_F
 986cbc3c72f4ae5c699167d3f22d0fe9190cbeb3a70919c53fe8c8c3d901be91  paper/COMPRESSION_DERIVED_CALLING.md
 9e99db065a6a60f6b71e0f9fc4ecd9ead368379c45f6d6e75488d7eccd55e245  paper/DISCUSSION.md
 850f2629bbc132b5f02e3936a5e033ea1a1025ec41f9552d8e11400f6a67b768  paper/FORMAT.md
-aadc220929b0b53ed7857baefcce55455364c4b5886428bbd5218a12f7e898b5  paper/LIMITATIONS.md
+12eea0202f06405df3cf0fcfda615596deacc6943d554fa704df218581b3dc0c  paper/LIMITATIONS.md
 3086cbf759fbbeef0978e4e2455cc0a0fc83d63732e1238eafc1f42d6256a63a  paper/METHODS.md
 ef928d849035f642815358484af803e7e326193144dd2ce3e532f5528e3e462a  paper/NOVELTY_FINAL.md
 c61306c95fc45ed91703f42d10b2789d198109253fbd871f281579d18a480498  paper/PAPER.md
 7abae6f029f2c6042d41f1b486ba9e242f3a79475477b87a804786f30f0dfb7b  paper/PIPELINE.md
-5e2dffc7039b3c8f2ccd52ed161adb33c57b9fbd7c0a140f340b62d897d073c0  paper/RESULTS.md
+9dc3a73e54a041e3d7a339fbd6148cc7e40df6f109a70a04fbfa03fb29094f55  paper/RESULTS.md
 7abae6f029f2c6042d41f1b486ba9e242f3a79475477b87a804786f30f0dfb7b  PIPELINE.md
 8e6651d2b0b8c6ec2a47d28e1ef58332ff938ecece1a7f1ff45d64ce04ea7340  README.md
 14e576efd93fb21a2a76c04f541eb8aaf02a5508fedbae18860042ab413e026a  RECAP.md
+a8862996edc05453dff52c0edc8f091deb736fe4b355bb39cd60aa47ce173002  REPO_MAP.md
 90555958dbaed67b5c7ac7194aada9adf2dabfbf19cc1060284977385c80302e  results/README.md
 d4f8031a479e99b09205649dc3492a0e03f9d40d813398c264bf641002883d00  stages/01_greedy_exact.cpp
 3a51af6b6c61e5c7b2e29e9b0a2497a8d1a06a89b2123e355fd0ee958d234173  stages/02_minimizer_tolerant.cpp

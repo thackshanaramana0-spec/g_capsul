@@ -142,6 +142,15 @@ HG003+HG004 concatenated, ploidy 4, truth = the union of their GIAB calls.
 | `coverage` | bwa + samtools sort + index + mosdepth, timed as one pipeline | **16–54×** |
 | `query` | — | **not a speed claim** (see below) |
 
+**T3.1/T3.2 run on 6 of the 19 datasets, not all 19 — T3.3 (query) covers all
+19.** This is a compute-cost decision, not a selection for favourable numbers:
+SPAdes alone costs 2,679 s (44.6 min) on HG002 and scales with genome size, so
+running it on the multi-GB C. elegans- and T. cacao-scale sets would cost
+several additional hours for no further insight into the ratio. The 6 chosen
+are one representative per kingdom this project covers — Virus (SARS-CoV-2),
+Bacteria (E. coli), Archaea (H. salinarum), Protista (P. falciparum), Fungi
+(S. cerevisiae), plus Human (HG002) — not the 6 that happen to report best.
+
 **The export ratio carries a caveat, which is why the CSV records output bytes
 and row counts for both sides.** Our export emits 2 records (the pseudogenome);
 SPAdes emits tens of thousands of biological contigs. The ratio measures
