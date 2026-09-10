@@ -63,6 +63,21 @@ purposes instead of discarding it after compression:
 
 ---
 
+## Start here if you are a new reviewer — run this first
+
+    bash scripts/test_0_scope_and_capability.sh
+
+Self-contained: needs nothing but this checkout and a C++ compiler, runs on
+any machine, touches no locked dataset. It probes YOUR machine (no value in
+its output is typed in advance), states this build's exact scope — what read
+lengths, technologies and alphabets it supports and why, extracted live from
+the encoder's own source constants — and then PROVES every boundary claim by
+constructing the input and running the real binary: a short-read file
+compresses and decompresses losslessly, and long-read-shaped input, an
+oversize header, and empty input are each refused cleanly (no crash, no
+silent data loss, no false success). If it exits 0, that scope is proven on
+your machine right now. Full detail: `industry/README.md`.
+
 ## Where everything is
 
 | you want | go to |
