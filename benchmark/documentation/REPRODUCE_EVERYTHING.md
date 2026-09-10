@@ -98,7 +98,15 @@ tolerance). Produces all eight tables into
     bash benchmark/scripts/run_fullchr20_archive_capsule.sh \
          /tmp/capsule_bin/capsule_decode scripts ~/refs/chr20.fa <archive> HG002 /tmp/out
 
-    # T3.4 (the Claim 3 mechanism), 100 sites:
+    # T3.4 (the Claim 3 mechanism), 100 sites.
+    # THE SIDECAR MUST BE BUILT FIRST, AND WITH CAPS_PILEUP=1 -- without that
+    # flag the sidecar carries pg + placements but NOT each read's own
+    # deviations, `query` then emits the CONSENSUS rather than the reads, no
+    # allele difference can appear, and the coordinate arm scores 0/100
+    # instead of 18/100. Verified 2026-09-10: this is exactly what happens,
+    # three times, if the flag is omitted. `query` picks the sidecar up
+    # automatically from <archive>.qidx.
+    CAPS_PILEUP=1 /tmp/capsule_bin/capsule_decode index <archive> <archive>.qidx
     bash benchmark/scripts/run_locus_fidelity.sh \
          /tmp/capsule_bin/capsule_decode <archive> ~/refs/chr20.fa HG002 /tmp/t34 100
 
