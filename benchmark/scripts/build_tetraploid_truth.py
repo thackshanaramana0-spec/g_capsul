@@ -1,0 +1,1 @@
+../../scripts/build_tetraploid_truth.py

@@ -1,0 +1,1 @@
+../../scripts/sanity_archive_one.sh

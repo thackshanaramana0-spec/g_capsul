@@ -1,0 +1,1 @@
+../../scripts/run_tetraploid_bench_capsule.sh

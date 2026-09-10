@@ -1,0 +1,1 @@
+../../docs/QUERY_WINDOWED_PLAN.md

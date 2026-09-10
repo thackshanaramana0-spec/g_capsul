@@ -1,0 +1,1 @@
+../../scripts/build106.sh
