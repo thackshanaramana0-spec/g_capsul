@@ -1,0 +1,51 @@
+# QUERY ALONE REACHES BOTH AT FULL. 2026-09-17.
+#
+# No .xmi index, no CAPS_QUERY_CONTAIN mode. Plain `capsule_decode query`.
+#
+# WHY IT WORKS, AND WHY THE EARLIER SWEEP SAID OTHERWISE. If a read contains the
+# probe then read = pg[q..] + deviations, so the PSEUDOGENOME at that spot
+# differs from the probe only at deviation positions inside the window. A search
+# tolerating k >= (deviations in window) finds that pg location, and the read --
+# placed there -- comes back through the ordinary position path. No separate
+# index is needed.
+#
+# An earlier sweep of CAPS_QUERY_MINSEED reported no change at any setting and
+# the tolerance hypothesis was recorded as refuted. That sweep ran on the binary
+# BEFORE the strand fix, so it was measuring against emitted sequences that were
+# not the reads. Re-run on the fixed binary it moves immediately. The earlier
+# "refuted" verdict is withdrawn.
+
+minseed,k_max,exact_match_recall,missed_of_5863,wall_s_200_sites
+12,2,0.9998,1,24
+10,3,1.0000,0,29
+8,4,1.0000,0,37
+6,5,1.0000,0,43
+
+# THE SEED FLOOR IS NOW DERIVED, NOT HARDCODED. It was a fixed 12, which
+# silently capped a 40 bp probe at k=2 -- one short of completeness. But the
+# floor that matters is not a constant: a seed of length L occurs by chance
+# about |hay| / 4^L times, so specificity is a property of the HAYSTACK.
+# MINSEED = clamp(ceil(log4(|hay|)) - 2, 8, 16).
+# The -2 admits ~16x more chance candidates, every one verified against the full
+# tolerance, so the ANSWER cannot change -- only the time to reach it.
+pseudogenome_bp,derived_minseed,k_max_for_40bp_probe
+2153559,9,3
+3000000000,14,1
+# On this 2.15 Mb pseudogenome that yields 9, which lets a 40 bp probe reach k=3
+# and take recall 0.9998 -> 1.0000 with no flag beyond CAPS_QUERY_MM=3.
+
+# THE TWO QUESTIONS WANT DIFFERENT TOLERANCE, AND THAT IS A FINDING NOT A FLAW.
+k,exact_match_recall,het_400_at_min2_reads,homozygous_fp_at_min2_reads,separation
+2,0.9998,400,22,378
+3,1.0000,400,35,365
+# Raising k costs specificity in the GENOTYPING interpretation. It costs nothing
+# in the exact-match answer: every candidate is verified against the full
+# tolerance, so a higher k buys time, never a wrong read.
+#
+# RECOMMENDED OPERATING POINTS
+use_case,setting,result
+genotyping_position,CAPS_QUERY_MM=2,400/400 het with 22 false positives at >=2 reads
+exact_match_completeness,CAPS_QUERY_MM=3,recall 1.0000
+# One call at k=3 returns a set containing every read that contains the probe
+# AND every read covering the locus. Filtering that set by containment is exact
+# and trivial, because the caller already has the reads.

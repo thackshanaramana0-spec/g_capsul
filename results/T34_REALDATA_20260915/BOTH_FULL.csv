@@ -1,0 +1,52 @@
+# BOTH QUESTIONS AT FULL, IN THE BINARY. 2026-09-17.
+# T3.4 = exact match, T3.5 = position. NOTE the frozen sweep uses T3.4 for the
+# POSITION claim -- when citing benchmark/results, use its own naming.
+#
+# Real HG002 archive, chr20:2,999,001-3,601,000, 117,565 real reads.
+# Scripts: scripts/t34_realdata/, binary: stages/capsule_decode.cpp
+
+table,question,result,how
+T3.5,position_bilateral_400_sites,400/400,native - reads are placements on a shared string
+T3.4,exact_match_recall_200_sites,1.0000,CAPS_QUERY_CONTAIN=1 over the .xmi index
+T3.4,exact_match_recall_without_xmi,0.9998,one read whose placement did not overlap the pg occurrence
+-,archive_lossless,yes,unchanged
+
+# THREE ENGINEERING PIECES, EACH ONE NEEDED. Removing any drops recall.
+piece,what_it_fixes,recall_without_it
+strand_bitmap,"encoder stores mismatch offset j as q+j forward but q+RL-1-j reverse. The sidecar never stored strand, so query mirrored RC substitutions onto the wrong bases and emitted a sequence that was not the read",0.9789
+n_restoration,"N-reads pass through the pipeline with each N replaced by A, so query rebuilt an A where the read had an N",0.9975
+xmi_kmer_index,"a read containing the probe whose placement does not overlap the probe's pg occurrence is invisible to a position query",0.9998
+
+# COST
+item,bytes,note
+sidecar_before,1589156,
+strand_bitmap,14704,1 bit per read
+n_positions,13336,236 reads / 2858 offsets
+sidecar_after,1617196,+1.8%
+xmi_index,3346188,separate file - only written with CAPS_XMI=1
+archive,480627,unchanged
+
+# XMI DESIGN. k derived from the data (min(20, shortest indexed read), capped at
+# 31 by 2-bit packing), never a fixed constant. Stride 8 by default. Only
+# deviation-carrying reads are indexed, because a read with no deviations is
+# emitted as pure pseudogenome and is always reachable by the ordinary search --
+# 16,415 of 117,565 here, 14%. Completeness holds for probes of length
+# >= k + stride - 1 = 27, checked at query time and REFUSED loudly rather than
+# degraded silently. The lookup is a superset filter: a read containing a probe
+# contains every one of the probe's k-mers, so one indexed hit is guaranteed and
+# every candidate is then verified.
+
+# GATES, all passing
+gate,result
+archive_lossless,PASS
+matcher_k0_identical_to_exact_find,PASS (4/4)
+no_xmi_written_without_CAPS_XMI,PASS
+sidecar_identical_with_without_CAPS_XMI,PASS
+query_output_unchanged_without_CAPS_QUERY_CONTAIN,PASS
+
+# OUTPUT-CHANGING, DELIBERATELY. The strand and N fixes change what query emits
+# for RC and N-carrying reads -- 60 of 100 sampled sites. Every aggregate
+# improves: exact-match recall 0.9789 -> 1.0000, upstream-only 391 -> 392,
+# homozygous false positives 31 -> 29, bilateral unchanged at 400/400.
+# The published 345/400 was measured with the buggy query and would likely move
+# if re-run. It has NOT been re-run and is not restated here.

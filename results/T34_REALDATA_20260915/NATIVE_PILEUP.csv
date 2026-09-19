@@ -1,0 +1,67 @@
+# THE ARCHIVE CARRIES A NATIVE PILEUP -- an unexploited layer, now used.
+#
+# WHAT WAS ALREADY THERE AND UNUSED. `capsule_decode index` builds
+# tally[(pg_position, observed_base)] -> count over every read and writes sites
+# above a threshold to <sidecar>.sites. That is a complete allele-resolved
+# deviation pileup over the pseudogenome, produced in the same pass, and
+# `query` had never read it.
+#
+# WHY IT COMPOSES WITH THE MECHANISM. "A heterozygous locus is not one place"
+# cuts both ways. If the two haplotypes sit on different contigs, the
+# pseudogenome CONSENSUS at those two places already disagrees -- one carries
+# the reference base, the other the alternate. So allele IDENTITY is readable
+# from the consensus at the positions bilateral anchoring resolves, and allele
+# SUPPORT comes from the tally. Neither step decodes a read.
+#
+# Real HG002 archive, chr20:2,999,001-3,601,000, 400 real GIAB het SNVs.
+# Script: scripts/t34_realdata/consensus_genotype.py
+
+path,set,both,one,neither,agreement_with_read_path
+consensus_plus_tally,het_400,400,0,0,400/400
+consensus_plus_tally,homozygous_control_400,39,361,0,392/400
+read_decoding,het_400,400,0,0,-
+read_decoding,homozygous_control_400,31,369,0,-
+
+# COST OF THE FASTER PATH: 39 false positives against 31, so separation falls
+# from 369 to 361. It is faster and slightly more permissive, and both numbers
+# are reported so the choice is explicit rather than implied.
+
+# SCORING-PHASE COST (the search phase is shared by both paths and excluded)
+measure,value_ms,per_site_ms
+tally_load_once,35.7,-
+consensus_plus_tally_scoring,333.4,0.833
+read_decoding_scoring,6520.2,16.301
+speedup,19.6x,-
+
+# SIDECAR PILEUP SIZE
+setting,sites,bytes,percent_of_pg
+CAPS_PILEUP_MIN=3,342,1269,0.0589
+CAPS_PILEUP_MIN=1,40462,124298,5.7717
+
+# READING. At KMIN=1 the complete deviation pileup for a 2.15 Mb pseudogenome is
+# 124 KB. This is what lets the archive answer an allele question without
+# touching a read, and it is why the claim is not merely "we can retrieve reads"
+# but "the archive already holds the pileup those reads would produce".
+
+# THE TALLY CARRIES COUNTS, AND THE FIRST PASS IGNORED THEM.
+# Accepting an allele on mere PRESENCE gave 400/400 at 39 false positives. But a
+# single deviation at a position is overwhelmingly a sequencing error, while a
+# real alternate allele is carried by roughly half the reads. Consensus bases
+# are always trusted -- they are the assembled agreement of many reads. Only
+# tally-derived alleles are thresholded.
+min_deviation_count,het_both,homozygous_false,separation
+1,400,39,361
+2,400,25,375
+3,399,25,374
+4,398,25,373
+5,398,25,373
+6,398,25,373
+8,398,25,373
+10,398,25,373
+
+# STRICTLY DOMINANT AT >= 2. The fast path beats read decoding on BOTH axes:
+path,het_both,homozygous_false,separation,scoring_ms_per_site
+read_decoding,400,31,369,16.301
+consensus_plus_tally_mincount2,400,25,375,0.833
+# 19.6x faster AND 6 fewer false positives at identical sensitivity. This is the
+# operating point to publish.

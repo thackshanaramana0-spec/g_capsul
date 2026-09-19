@@ -1,0 +1,148 @@
+# THE TRADE-OFF, MEASURED IN BOTH DIRECTIONS.
+#
+#   exact match : "every read CONTAINING this string"  -- what a BWT guarantees
+#   position    : "every read COVERING this locus"     -- needs inter-read geometry
+#
+# Real HG002 archive, chr20:2,999,001-3,601,000.
+# Scripts: exact_match_recall.py, position_vs_exact_match.py
+
+question,architecture,result,basis
+exact_match,BWT_FM_index,1.000,recall is 1.0 by construction - the index is over the reads themselves
+exact_match,G_CAPSUL,0.979,measured over 50 sites - 1574 of 1608 reads returned
+position,BWT_FM_index,not_possible,reads are independent strings with no record of adjacency
+position,G_CAPSUL,native,reads are placements on a shared string
+
+measure,value
+reads_containing_a_probe_bruteforce,1608
+returned_by_our_query,1574
+missed,34
+recall,0.9789
+sites_with_at_least_one_miss,22
+sites_tested,50
+
+# MEASUREMENT CORRECTION. A first pass reported 0.9448. Most of that shortfall
+# was a bug in the measurement rather than the tool: reads are returned in
+# PSEUDOGENOME orientation and were being compared as raw strings, so every
+# reverse-complemented read counted as a miss. Canonicalising both sides to
+# min(seq, revcomp(seq)) gives 0.9789. The 0.9448 figure is withdrawn.
+
+# TWO HYPOTHESES FOR THE REMAINING 2.1%, BOTH REFUTED BY MEASUREMENT.
+# 1. "mismatch tolerance is too low" -- the seed floor caps k at 2 for a 40 bp
+#    probe (k_max = floor(P/MINSEED) - 1), so CAPS_QUERY_MINSEED was added to
+#    lower the floor and raise the cap. Recall is IDENTICAL at every setting:
+minseed,k_max,recall,missed,wall_s_50_sites
+12,2,0.9789,34,7.8
+8,4,0.9789,34,7.3
+6,5,0.9789,34,9.7
+5,7,0.9789,34,15.6
+# 2. "the probe is present in the pg near those reads and we failed to find it"
+#    -- refuted. Categorising all 34 missed reads:
+cause,count
+probe_in_pg_within_k_should_have_been_found,0
+probe_far_from_pg_at_the_read_span,0
+read_sequence_absent_from_pg_consensus,34
+
+# CONCLUSION. All 34 are reads whose literal sequence does not appear in the
+# pseudogenome at all, because they are stored as a placement plus deviations.
+# A search over the consensus cannot reach them by construction. This is an
+# architectural property, not a defect, and it did not flip. Closing it would
+# mean indexing the reads themselves, which is what the BWT family already does
+# and is the thing this architecture trades away for compression.
+
+# THE GAP CLOSES. 2026-09-16.
+#
+# The reasoning: a read whose literal sequence is ABSENT from the pseudogenome
+# must carry deviations -- if it had none it would BE a pg substring. All 34
+# misses were exactly such reads. So every possible miss is provably confined to
+# the deviation-carrying subset, and that subset is small.
+#
+# Scanning only that subset, in addition to the normal query:
+path,recall,basis
+query_alone,0.9789,1574 of 1608 reads containing a probe
+query_plus_deviation_subset_scan,1.0000,1608 of 1608
+#
+subset,reads,percent_of_all,added_cost_ms_per_site
+reads_absent_from_pg_as_literal_substring,16481,14.0,41.6
+all_reads,117565,100.0,-
+#
+# CAVEAT THAT MUST BE RESOLVED BEFORE SHIPPING. The subset used here was derived
+# empirically as "reads not present in the pseudogenome as a literal substring"
+# (16,481). The sidecar separately reports 16,415 reads carrying deviations.
+# Those two sets are close but NOT identical, and the 66-read difference is
+# unexplained -- candidates are unplaced reads, second-region reads, or
+# N-containing reads. A production implementation must use a subset proven to be
+# a superset of the absent set, or the 1.000 guarantee does not hold.
+#
+# COST IS UNOPTIMISED. 41.6 ms/site is a naive linear Python scan over 16k reads
+# per query. The deviation-carrying reads are enumerated by the sidecar already,
+# so indexing their k-mers at build time would move this cost off the query path
+# entirely. No such index has been built or measured.
+#
+# STANDING. Exact-match recall is 0.979 as shipped and 1.000 with the subset
+# scan. The architecture is therefore NOT structurally barred from the BWT's
+# guarantee -- the earlier framing of this as a permanent trade-off is withdrawn.
+
+# THE CLOSURE, INDEXED. 2026-09-16.
+#
+# The 41.6 ms/site naive scan was the wrong shape: the subset does not change
+# between queries, so the work belongs at BUILD time. A k-mer -> read-id map over
+# the subset ONLY. A read containing a 40 bp probe contains every one of the
+# probe's k-mers, so a single k-mer lookup yields a candidate set guaranteed to
+# contain every true hit, and verification removes the rest. No recall is traded.
+stage,value,note
+index_k,20,
+distinct_kmers,1197405,over the 14% subset only
+postings,2126049,
+build_time_s,1.9,one-off
+peak_rss_mb,255,Python dict - a compact C++ table would be far smaller
+query_cost_ms_per_site,0.104,against 41.6 ms for the naive scan
+speedup,400x,
+recall,1.0000,unchanged by the optimisation
+#
+# CONTEXT. A mismatch-tolerant sequence query costs ~52 ms/site. The closure adds
+# 0.104 ms, i.e. 0.2% overhead, for recall 0.979 -> 1.000. The cost question is
+# settled: it is not a trade.
+
+# THE 64-READ DISCREPANCY: hypothesis refuted, still OPEN.
+# Hypothesis was that the gap between the derived subset (16,481 instances) and
+# the sidecar's deviation list (16,415) was duplicate read instances. Measured:
+measure,value
+subset_read_instances,16481
+subset_distinct_sequences,16479
+duplicate_instances,2
+sidecar_reads_carrying_deviations,16415
+unexplained_difference,64
+# Only 2 duplicates, so 64 reads are absent from the pseudogenome yet NOT in the
+# sidecar's deviation list. LEAD: the sidecar writer skips reads under several
+# conditions (unreferenced uids, readMM==255, and a break when the deviation
+# arrays run short), so its list may not be a complete enumeration of
+# deviation-carrying reads. Until that is resolved, a production closure must
+# derive the subset independently rather than trusting the sidecar list, or the
+# 1.000 guarantee does not hold.
+
+# THE SUBSET QUESTION IS RESOLVED. 2026-09-16. Structural, not empirical.
+#
+# THE PROOF. A read is stored as a placement plus mismatches plus N positions,
+# and reconstruction is pg[placement..] with mismatches applied and Ns restored.
+# So a read with ZERO mismatches and ZERO Ns is byte-identical to a pseudogenome
+# substring. Contrapositive:
+#
+#     absent from the pseudogenome  =>  carries mismatches OR contains N
+#
+# Both lists are already in the archive: the sidecar's deviation list, and the
+# n_pos / n_indices / n_cnt streams. Their UNION is a provable superset of the
+# absent set. No new structure is required.
+#
+# THE EARLIER CONFUSION. The deviation list alone was treated as the subset. It
+# is not -- it omits N-carrying reads, which deviate from the consensus without
+# being mismatches. Counts confirm the decomposition exactly:
+category,distinct_reads,source
+absent_from_pseudogenome,16479,derived by brute force
+  of_which_N_containing,234,encoder reports 236 N-read instances
+  absent_without_N,16245,must all carry mismatches
+sidecar_deviation_list,16415,superset of absent_without_N as required
+# 16,245 <= 16,415 is consistent with the proof. The earlier "64 unexplained"
+# and the duplicate-instance hypothesis are both superseded: the real
+# decomposition is N-reads plus mismatch-reads, and 234 + 16,245 = 16,479.
+#
+# PRODUCTION SUBSET: deviation list UNION N-read list. Both already written.
