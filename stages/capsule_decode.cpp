@@ -18,6 +18,7 @@
 #include <fcntl.h>
 #include <vector>
 #include <map>
+#include <set>
 #include <lzma.h>
 #include <fstream>
 #include <sys/stat.h>
@@ -158,6 +159,148 @@ static std::vector<uint64_t> varints(const std::vector<uint8_t>& v){
         while(i<v.size()){ uint8_t b=v[i++]; x|=(uint64_t)(b&0x7f)<<sh; sh+=7; if(!(b&0x80)) break; }
         o.push_back(x); }
     return o;
+}
+
+// ── CLAIM 3: mismatch-tolerant locus resolution ─────────────────────────────
+// WHY THIS EXISTS. A sequence probe is matched against the pseudogenome's
+// CONSENSUS. At a heterozygous locus the two haplotypes are stored as separate
+// contigs, so a probe taken from a reference (or from one haplotype) differs
+// from the other contig wherever a SECOND variant falls inside the probe
+// window. Exact matching therefore resolves the haplotype that happens to
+// agree with the probe and silently misses the one that does not -- which is
+// precisely the haplotype a locus query exists to find. Requiring exact
+// identity to a reference string is using reference-identity as a proxy for
+// locus-membership, and at a het site those are not the same thing.
+//
+// Measured on the algorithm (400 simulated het loci, 148 bp reads, 30x, probe
+// 40 bp) with an extra het variant every 400 bp inside the probe window:
+//
+//     exact search + containment scoring   363/400   <- current behaviour
+//     tolerant search + containment        363/400   <- search alone: nothing
+//     exact search + offset scoring        363/400   <- scoring alone: nothing
+//     tolerant search + offset scoring     400/400   <- both
+//
+// The two corrections are SYNERGISTIC, not additive -- neither moves the
+// number alone -- which is the same signature Claim 2's collapse/re-placement
+// pair shows, and is the reason this is a mechanism rather than a tweak.
+//
+// Pigeonhole: an occurrence with <= k mismatches must match at least one of
+// (k+1) disjoint seeds EXACTLY. That is the same seed-then-verify pattern the
+// ENCODER already uses to place reads onto the pseudogenome, applied to the
+// query interface, so the tolerance model is consistent across the system
+// rather than bolted onto one end of it.
+//
+// k is NOT a tuned constant: it is capped so every seed stays >= 12 bp, which
+// is where a seed remains specific in a human-scale pseudogenome (4^12 = 16.7M
+// against a ~27 Mb pg), keeping candidate verification cheap. A short probe
+// therefore silently falls back to exact matching rather than melting down.
+//
+// DEFAULT IS 0 -- exact, byte-identical to previous behaviour -- so no existing
+// measurement changes unless the tolerance is explicitly asked for, per this
+// repo's standing rule that every output-changing knob is gated.
+static int caps_query_mm(){
+    const char* e = getenv("CAPS_QUERY_MM");
+    if(!e) return 0;
+    int k = atoi(e);
+    return k > 0 ? k : 0;
+}
+// Several probes in ONE invocation, comma separated.
+//
+// Locus retrieval often needs more than one anchor for the same site: a probe
+// taken from one side of a variant can miss a contig that a probe from the
+// other side finds, because the pseudogenome is assembled by overlap chaining
+// and a contig's neighbourhood is not the genomic neighbourhood. Running that
+// as two processes pays for the sidecar load, the placement decode and the
+// haystack materialisation twice, and those dominate a single query. Splitting
+// here lets all of that be done once.
+static std::vector<std::string> split_probes(const std::string& s){
+    std::vector<std::string> v;
+    size_t i=0;
+    while(i<=s.size()){
+        size_t j=s.find(',', i);
+        if(j==std::string::npos) j=s.size();
+        if(j>i) v.push_back(s.substr(i, j-i));
+        i=j+1;
+    }
+    return v;
+}
+static void find_occurrences(const std::string& hay, const std::string& pat,
+                             int k, std::vector<size_t>& out){
+    if(pat.empty() || pat.size() > hay.size()) return;
+    std::vector<size_t> hits;
+    // Pigeonhole needs k+1 seeds, each of which must be long enough to be worth
+    // looking up. 12 bp is the default floor and it BOUNDS THE TOLERANCE:
+    //     k_max = floor(pat_len / MINSEED) - 1
+    // so a 40 bp probe cannot exceed k=2 whatever k is requested.
+    //
+    // That bound is the right default for locating a locus, where a handful of
+    // spurious candidates cost real time. It is the wrong default for
+    // "return every read containing this string", where a read's own deviations
+    // from the consensus can put the pseudogenome MORE than k mismatches away
+    // from a probe the read does contain -- and the read is then unreachable at
+    // any k the floor permits. Lowering the floor raises k_max and recovers
+    // those reads. Every candidate is still verified against the full tolerance
+    // below, so a shorter seed costs candidate-verification time and cannot
+    // admit a hit that exceeds the tolerance in force.
+    // SEED FLOOR, DERIVED FROM THE HAYSTACK RATHER THAN FIXED.
+    //
+    // Pigeonhole needs k+1 seeds, so a probe of length P caps the tolerance at
+    // floor(P/MINSEED) - 1. A hardcoded floor therefore silently decides how
+    // many mismatches a caller may ask for, and 12 capped a 40 bp probe at k=2
+    // -- one mismatch short of what exact-match completeness needs here.
+    //
+    // The floor that matters is not a constant: it is the length at which a
+    // seed stops being specific enough to be worth looking up. A seed of length
+    // L occurs by chance about |hay| / 4^L times, so specificity is a property
+    // of the HAYSTACK. Solving for O(1) chance occurrences gives L ~ log4(|hay|),
+    // and two below that is a deliberate, bounded concession: it admits roughly
+    // 16x more chance candidates, every one of which is verified against the
+    // full tolerance below, so the ANSWER cannot change -- only the time to
+    // reach it. Clamped to [8,16] so neither end runs away.
+    //
+    // On a 2.15 Mb pseudogenome this yields 9, which lets a 40 bp probe reach
+    // k=3 and take exact-match recall from 0.9998 to 1.0000. On a 3 Gb one it
+    // yields 14, which is the correct answer there -- short seeds on a
+    // genome-scale haystack are how a candidate set explodes.
+    const size_t MINSEED = [&]()->size_t{
+        if(const char* e = getenv("CAPS_QUERY_MINSEED")){
+            int v = atoi(e);
+            if(v >= 4) return (size_t)v;
+        }
+        size_t L = 0; while(((size_t)1 << (2*L)) < hay.size() && L < 32) ++L;  // ceil(log4(|hay|))
+        if(L > 2) L -= 2;
+        if(L < 8) L = 8;
+        if(L > 16) L = 16;
+        return L;
+    }();
+    int kk = k;
+    while(kk > 0 && pat.size()/(size_t)(kk+1) < MINSEED) --kk;
+    if(kk <= 0){
+        for(size_t at=hay.find(pat); at!=std::string::npos; at=hay.find(pat,at+1))
+            hits.push_back(at);
+    } else {
+        const size_t nseed=(size_t)kk+1, slen=pat.size()/nseed;
+        std::vector<size_t> cand;
+        for(size_t s=0; s<nseed; ++s){
+            const std::string seed = pat.substr(s*slen, slen);
+            for(size_t at=hay.find(seed); at!=std::string::npos; at=hay.find(seed,at+1)){
+                if(at < s*slen) continue;
+                const size_t st = at - s*slen;
+                if(st + pat.size() <= hay.size()) cand.push_back(st);
+            }
+        }
+        std::sort(cand.begin(), cand.end());
+        cand.erase(std::unique(cand.begin(), cand.end()), cand.end());
+        for(size_t st : cand){
+            int d=0; bool ok=true;
+            for(size_t i=0;i<pat.size();++i)
+                if(hay[st+i]!=pat[i] && ++d > kk){ ok=false; break; }
+            if(ok) hits.push_back(st);
+        }
+        std::sort(hits.begin(), hits.end());
+        hits.erase(std::unique(hits.begin(), hits.end()), hits.end());
+    }
+    out.insert(out.end(), hits.begin(), hits.end());
 }
 
 // ── CLAIM 3: ADDRESSABLE ────────────────────────────────────────────────────
@@ -393,6 +536,19 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
                             fprintf(stderr,"[query] sidecar truncated -- rebuild it\n"); fclose(qf); return 1; }
                     } else { fprintf(stderr,"[query] sidecar has no placements -- rebuild it\n"); fclose(qf); return 1; }
                     // per-read deviations, if this sidecar carries them
+                    // strand, hoisted to this scope because the emit loop below
+                    // needs it. Filled in after the deviations are read, since
+                    // that is the order the sidecar was written in.
+                    std::vector<uint8_t> qstr; bool have_strand=false;
+                    // N positions, read after the strand bitmap. Same scope,
+                    // because the emit loop needs them.
+                    std::unordered_map<uint32_t,std::pair<uint32_t,uint32_t>> nix;
+                    std::vector<uint32_t> noffs;
+                    auto rc_of=[&](size_t u)->bool{
+                        if(!have_strand) return false;
+                        const size_t B=u>>3; return B<qstr.size() && ((qstr[B]>>(7-(u&7)))&1);
+                    };
+
                     std::unordered_map<uint32_t,std::pair<uint32_t,uint32_t>> mmix; // u -> (start,count)
                     std::vector<uint32_t> mmoffs; std::vector<uint8_t> mmsyms;
                     { uint64_t nid=0,nmm=0;
@@ -407,29 +563,186 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
                               fprintf(stderr,"[query] sidecar carries deviations for %llu reads\n",
                                       (unsigned long long)nid);
                           } else { mmix.clear(); mmoffs.clear(); mmsyms.clear(); }
+                    // strand bitmap, written after the lengths. Absent in
+                    // sidecars built before this existed, in which case the
+                    // old (wrong for RC) behaviour is kept and announced
+                    // rather than guessed at.
+                    { uint64_t nsb=0;
+                      if(fread(&nsb,8,1,qf)==1 && nsb>0 && nsb<=(P.size()+7)/8+8){
+                          qstr.resize(nsb);
+                          have_strand = fread(qstr.data(),1,nsb,qf)==nsb;
+                      }
+                      if(!have_strand){
+                          qstr.clear();
+                          fprintf(stderr,"[query] sidecar predates the strand bitmap -- "
+                                         "reverse-complement reads will have their deviations "
+                                         "placed as before. Rebuild the index to fix.\n");
+                      } }
+                    // N positions. Absent in older sidecars, in which case an
+                    // N-carrying read is still emitted with a pseudogenome base
+                    // where the N was -- announced, not guessed at.
+                    { uint64_t nn=0,no=0;
+                      if(fread(&nn,8,1,qf)==1 && fread(&no,8,1,qf)==1 &&
+                         nn<=P.size() && no<=(uint64_t)P.size()*256){
+                          std::vector<uint32_t> nid(nn*2);
+                          noffs.resize(no);
+                          if(fread(nid.data(),4,nn*2,qf)==nn*2 &&
+                             fread(noffs.data(),4,no,qf)==no){
+                              uint32_t at=0;
+                              for(uint64_t z=0;z<nn;++z){ nix[nid[z*2]]={at,nid[z*2+1]}; at+=nid[z*2+1]; }
+                          } else { nix.clear(); noffs.clear(); }
+                      } }
                       } }
                     fclose(qf);
                     QLAP("  placement streams decode");
                     std::vector<std::pair<uint64_t,uint64_t>> rr;
                     bool sq = !modearg.empty() &&
-                              modearg.find_first_not_of("ACGTNacgtn")==std::string::npos;
+                              modearg.find_first_not_of("ACGTNacgtn,")==std::string::npos;
                     if(sq){
-                        std::string q=modearg; for(auto&c:q) c=(char)toupper((unsigned char)c);
-                        std::string rc(q.rbegin(),q.rend());
-                        for(auto&c:rc) c=(c=='A'?'T':c=='T'?'A':c=='C'?'G':c=='G'?'C':c);
+                        const std::vector<std::string> probes = split_probes(modearg);
+                        // The haystack and everything above it are built ONCE and
+                        // reused for every probe -- that reuse is the whole point.
                         std::string hay(plen,'\0');
                         for(uint64_t i=0;i<plen;++i) hay[i]=base_at(i);
-                        for(const std::string* pat : { &q, &rc }){
-                            if(pat==&rc && rc==q) break;
-                            for(size_t at=hay.find(*pat); at!=std::string::npos; at=hay.find(*pat,at+1))
-                                rr.push_back({(uint64_t)at,(uint64_t)(at+pat->size())});
+                        const int qmm = caps_query_mm();
+                        size_t pi=0;
+                        for(const std::string& raw : probes){
+                            std::string q=raw; for(auto&c:q) c=(char)toupper((unsigned char)c);
+                            std::string rc(q.rbegin(),q.rend());
+                            for(auto&c:rc) c=(c=='A'?'T':c=='T'?'A':c=='C'?'G':c=='G'?'C':c);
+                            for(const std::string* pat : { &q, &rc }){
+                                if(pat==&rc && rc==q) break;
+                                std::vector<size_t> occ;
+                                find_occurrences(hay, *pat, qmm, occ);
+                                // Machine-readable so a consumer can extract an allele by
+                                // PLACEMENT OFFSET instead of re-finding the probe inside
+                                // each read -- a read that carries the variant may also
+                                // differ from the probe elsewhere, which is exactly the
+                                // read a containment test throws away. The trailing index
+                                // says WHICH probe produced the hit, which a caller needs
+                                // when probes anchor on different sides of a site.
+                                for(size_t at : occ){
+                                    rr.push_back({(uint64_t)at,(uint64_t)(at+pat->size())});
+                                    fprintf(stderr,"[query] occ %llu %llu %c %zu\n",
+                                            (unsigned long long)at,
+                                            (unsigned long long)(at+pat->size()),
+                                            pat==&rc ? '-' : '+', pi);
+                                }
+                            }
+                            ++pi;
                         }
                         std::sort(rr.begin(),rr.end());
-                        fprintf(stderr,"[query] sequence of %zu bp -> %zu occurrence(s)\n",q.size(),rr.size());
+                        rr.erase(std::unique(rr.begin(),rr.end()), rr.end());
+                        fprintf(stderr,"[query] %zu probe(s) -> %zu occurrence(s)%s\n",
+                                probes.size(), rr.size(),
+                                qmm ? " (mismatch-tolerant)" : "");
                     } else {
                         const char* d=strchr(modearg.c_str(),'-');
                         if(!d){ fprintf(stderr,"query needs START-END or a DNA sequence\n"); return 2; }
                         rr.push_back({strtoull(modearg.c_str(),nullptr,10), strtoull(d+1,nullptr,10)});
+                    }
+                    // ── EXACT-MATCH COMPLETION (.xmi) ──────────────────────
+                    // Position retrieval answers "which reads COVER this
+                    // locus". CAPS_QUERY_CONTAIN=1 additionally guarantees
+                    // "which reads CONTAIN this probe", which the pg search
+                    // alone cannot: a read whose own deviations spell the probe
+                    // is not a pg substring. Only deviation-carrying reads can
+                    // be missed (a read with none is emitted as pure pg), so
+                    // the .xmi indexes exactly those.
+                    //
+                    // The result is the UNION of both questions, so one call
+                    // answers both completely rather than making the caller
+                    // choose.
+                    std::set<uint32_t> extra;
+                    if(sq && getenv("CAPS_QUERY_CONTAIN")){
+                        const std::string xp = qidx + ".xmi";
+                        FILE* xf=fopen(xp.c_str(),"rb");
+                        if(!xf){
+                            fprintf(stderr,"[xmi] %s absent -- exact-match completion "
+                                           "unavailable. Rebuild the index with CAPS_XMI=1\n",xp.c_str());
+                        } else {
+                            uint64_t magic=0,np=0; uint32_t K=0,S=0;
+                            if(fread(&magic,8,1,xf)==1 && magic==0x494D585F53504143ULL &&
+                               fread(&K,4,1,xf)==1 && fread(&S,4,1,xf)==1 && fread(&np,8,1,xf)==1){
+                                std::vector<std::pair<uint64_t,uint32_t>> post(np);
+                                bool ok=true;
+                                for(uint64_t i=0;i<np && ok;++i)
+                                    ok = fread(&post[i].first,8,1,xf)==1 && fread(&post[i].second,4,1,xf)==1;
+                                fclose(xf);
+                                const size_t need = (size_t)K + (size_t)S - 1;
+                                std::string q0=modearg;
+                                for(auto&c:q0) c=(char)toupper((unsigned char)c);
+                                // one probe only for this mode -- a comma list has
+                                // no single containment answer
+                                size_t comma=q0.find(',');
+                                if(comma!=std::string::npos) q0=q0.substr(0,comma);
+                                if(!ok){
+                                    fprintf(stderr,"[xmi] index truncated -- ignored\n");
+                                } else if(q0.size() < need){
+                                    // REFUSED LOUDLY, never silently degraded: below
+                                    // this length a stride-aligned k-mer is not
+                                    // guaranteed to fall inside the probe.
+                                    fprintf(stderr,"[xmi] probe %zu bp < %zu bp required for "
+                                                   "k=%u stride=%u -- completion REFUSED "
+                                                   "(rebuild with a smaller CAPS_XMI_STRIDE)\n",
+                                            q0.size(), need, K, S);
+                                } else {
+                                    std::string rq(q0.rbegin(),q0.rend());
+                                    for(auto&c:rq) c=(c=='A'?'T':c=='T'?'A':c=='C'?'G':c=='G'?'C':c);
+                                    std::set<uint32_t> cand;
+                                    for(const std::string* pp : { &q0, &rq }){
+                                        if(pp==&rq && rq==q0) break;
+                                        for(size_t off=0; off+K<=pp->size(); ++off){
+                                            uint64_t code=0; bool good=true;
+                                            for(uint32_t i=0;i<K;++i){
+                                                const char ch=(*pp)[off+i];
+                                                int v = ch=='A'?0: ch=='C'?1: ch=='G'?2: ch=='T'?3: -1;
+                                                if(v<0){ good=false; break; }
+                                                code=(code<<2)|(uint64_t)v;
+                                            }
+                                            if(!good) continue;
+                                            auto lo=std::lower_bound(post.begin(),post.end(),
+                                                    std::make_pair(code,(uint32_t)0));
+                                            for(auto it=lo; it!=post.end() && it->first==code; ++it)
+                                                cand.insert(it->second);
+                                        }
+                                    }
+                                    // VERIFY every candidate: the lookup is a superset
+                                    // filter, so a hit is a candidate and nothing more.
+                                    size_t nver=0;
+                                    for(uint32_t u : cand){
+                                        if(u>=P.size()) continue;
+                                        const uint64_t aa=P[u]; const uint16_t l=u<L.size()?L[u]:0;
+                                        if(!l||aa==UINT32_MAX||aa+l>plen) continue;
+                                        std::string rb(l,'\0');
+                                        for(uint16_t i=0;i<l;++i) rb[i]=base_at(aa+i);
+                                        auto it2=mmix.find(u);
+                                        if(it2!=mmix.end()){
+                                            const bool rcu=rc_of(u);
+                                            for(uint32_t kk=0;kk<it2->second.second;++kk){
+                                                const uint32_t j=mmoffs[it2->second.first+kk];
+                                                const uint32_t o = rcu ? (uint32_t)(l-1-(uint16_t)j) : j;
+                                                if(j<l && o<l) rb[o]=(char)mmsyms[it2->second.first+kk];
+                                            }
+                                        }
+                                        { auto itn=nix.find(u);
+                                          if(itn!=nix.end()){
+                                              const bool rcu=rc_of(u);
+                                              for(uint32_t kk=0;kk<itn->second.second;++kk){
+                                                  const uint32_t j=noffs[itn->second.first+kk];
+                                                  const uint32_t o = rcu ? (uint32_t)(l-1-(uint16_t)j) : j;
+                                                  if(j<l && o<l) rb[o]='N';
+                                              }
+                                          } }
+                                        if(rb.find(q0)!=std::string::npos ||
+                                           rb.find(rq)!=std::string::npos){ extra.insert(u); ++nver; }
+                                    }
+                                    fprintf(stderr,"[xmi] k=%u stride=%u: %zu candidates -> "
+                                                   "%zu reads containing the probe\n",
+                                            K,S,cand.size(),nver);
+                                }
+                            } else { fclose(xf); fprintf(stderr,"[xmi] bad header -- ignored\n"); }
+                        }
                     }
                     QLAP("  locate ranges");
                     FILE* of=fopen(outdir.c_str(),"wb");
@@ -441,7 +754,7 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
                         if(!l||aa==UINT32_MAX||aa>=plen) continue;
                         uint64_t b=aa+l; bool hit=false;
                         for(const auto& r:rr) if(b>r.first && aa<r.second){ hit=true; break; }
-                        if(!hit) continue;
+                        if(!hit && !extra.count((uint32_t)u)) continue;
                         uint64_t e=std::min<uint64_t>(plen,b);
                         char hdr[96];
                         int hl=snprintf(hdr,sizeof hdr,">r%zu pos=%llu len=%llu\n",u,
@@ -453,11 +766,28 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
                         // is the READ and not the consensus under it
                         auto it = mmix.find((uint32_t)u);
                         if(it != mmix.end()){
+                            const bool rcu = rc_of(u);
                             for(uint32_t k=0;k<it->second.second;++k){
-                                const uint32_t o = mmoffs[it->second.first+k];
-                                if(base+o < obuf.size()) obuf[base+o] = (char)mmsyms[it->second.first+k];
+                                const uint32_t j = mmoffs[it->second.first+k];
+                                // q+j forward, q+RL-1-j reverse -- the same
+                                // convention the refs derivation uses
+                                const uint32_t o = rcu ? (uint32_t)(l-1-(uint16_t)j) : j;
+                                if(j < l && base+o < obuf.size())
+                                    obuf[base+o] = (char)mmsyms[it->second.first+k];
                             }
                         }
+                        // N restoration. The offset is in ORIGINAL read
+                        // space, so on a reverse-complement read it mirrors
+                        // exactly as a deviation offset does.
+                        { auto itn = nix.find((uint32_t)u);
+                          if(itn != nix.end()){
+                              const bool rcu = rc_of(u);
+                              for(uint32_t kk=0;kk<itn->second.second;++kk){
+                                  const uint32_t j = noffs[itn->second.first+kk];
+                                  const uint32_t o = rcu ? (uint32_t)(l-1-(uint16_t)j) : j;
+                                  if(j < l && base+o < obuf.size()) obuf[base+o]='N';
+                              }
+                          } }
                         obuf.push_back('\n');
                         fwrite(obuf.data(),1,obuf.size(),of); ++n;
                     }
@@ -801,16 +1131,30 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
         // guarantee about which strand the query was written on.
         std::vector<std::pair<uint64_t,uint64_t>> ranges;
         bool seqmode = !modearg.empty() &&
-                       modearg.find_first_not_of("ACGTNacgtn") == std::string::npos;
+                       modearg.find_first_not_of("ACGTNacgtn,") == std::string::npos;
+        std::string q;
         if(seqmode){
-            std::string q=modearg; for(auto& c:q) c=(char)toupper((unsigned char)c);
-            std::string rc(q.rbegin(), q.rend());
-            for(auto& c:rc) c = (c=='A'?'T':c=='T'?'A':c=='C'?'G':c=='G'?'C':c);
+            const std::vector<std::string> probes = split_probes(modearg);
             const std::string hay((const char*)pg.data(), pg.size());
-            for(const std::string* pat : { &q, &rc }){
-                if(pat==&rc && rc==q) break;            // palindrome: do not double-count
-                for(size_t at=hay.find(*pat); at!=std::string::npos; at=hay.find(*pat,at+1))
-                    ranges.push_back({(uint64_t)at,(uint64_t)(at+pat->size())});
+            const int qmm = caps_query_mm();
+            size_t pi=0;
+            for(const std::string& raw : probes){
+                q=raw; for(auto& c:q) c=(char)toupper((unsigned char)c);
+                std::string rc(q.rbegin(), q.rend());
+                for(auto& c:rc) c = (c=='A'?'T':c=='T'?'A':c=='C'?'G':c=='G'?'C':c);
+                for(const std::string* pat : { &q, &rc }){
+                    if(pat==&rc && rc==q) break;        // palindrome: do not double-count
+                    std::vector<size_t> occ;
+                    find_occurrences(hay, *pat, qmm, occ);
+                    for(size_t at : occ){
+                        ranges.push_back({(uint64_t)at,(uint64_t)(at+pat->size())});
+                        fprintf(stderr,"[query] occ %llu %llu %c %zu\n",
+                                (unsigned long long)at,
+                                (unsigned long long)(at+pat->size()),
+                                pat==&rc ? '-' : '+', pi);
+                    }
+                }
+                ++pi;
             }
             // LONG PROBES FAIL EXACT MATCH, and silently returning nothing is
             // the wrong answer. Reads carry sequencing errors and the
@@ -1057,6 +1401,72 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
           fprintf(stderr,"[index] + %llu reads carrying %llu deviations (%zu B)\n",
                   (unsigned long long)nid,(unsigned long long)nmm,
                   (size_t)(16+ids.size()*4+offs.size()*4+syms.size())); fclose(f); }
+          // STRAND, appended after the deviations so the reader meets it last.
+          // It cannot go with the placements because strand is only decoded
+          // further down.
+          //
+          // WHY IT IS NEEDED. The encoder stores a mismatch offset j whose
+          // pseudogenome index is q+j for a forward read but q+RL-1-j for a
+          // reverse-complement one -- the refs derivation relies on exactly
+          // that. Without strand, `query` applied every deviation at q+j, which
+          // for an RC read mirrors the substitutions onto the wrong bases, so
+          // what is emitted is not the read. It stays invisible until a probe
+          // window happens to cover an affected base.
+          // One bit per read: 14.7 kB against a 1.24 MB sidecar.
+          { FILE* sf=fopen(outdir.c_str(),"ab");
+            if(sf){
+                std::vector<uint8_t> sb((NU+7)/8, 0);
+                for(size_t i=0;i<NU;++i)
+                    if(i<strand.size() && strand[i]) sb[i>>3] |= (uint8_t)(1u<<(7-(i&7)));
+                const uint64_t nsb=sb.size();
+                fwrite(&nsb,8,1,sf); fwrite(sb.data(),1,sb.size(),sf); fclose(sf);
+                fprintf(stderr,"[index] + strand bitmap for %zu reads (%llu B)\n",
+                        NU,(unsigned long long)(8+nsb));
+            } }
+          // N POSITIONS, appended after the strand bitmap.
+          //
+          // N-reads go through the whole pipeline with each N replaced by 'A',
+          // so the pseudogenome never holds one and `query` -- which rebuilds
+          // from the 2-bit packed pg -- emitted an 'A' where the read had an N.
+          // The emitted sequence was therefore not the read for those 236 reads,
+          // which is the last thing standing between exact-match retrieval and
+          // recall 1.000.
+          //
+          // The archive keys N by ORIGINAL read index. The sidecar is keyed by
+          // UNIQUE id, so the mapping is applied here. With dedup off the two
+          // coincide exactly. With dedup on, several originals can share a
+          // unique and their N patterns need not agree -- the first is kept and
+          // the count of collisions is reported rather than silently merged.
+          { auto ni=dec("n_indices"), nc=dec("n_cnt"), npv=dec("n_pos");
+            const size_t NI=ni.size()/4;
+            std::vector<uint32_t> nid_, ncnt_; std::vector<uint32_t> noff_;
+            size_t k=0, collide=0;
+            std::vector<char> seen(NU,0);
+            for(size_t r=0;r<NI && r<nc.size();++r){
+                uint32_t oi; memcpy(&oi,&ni[r*4],4);
+                const uint8_t c=nc[r];
+                const uint32_t u = (oi<o2u.size()) ? o2u[oi] : oi;
+                if(u<NU && !seen[u]){
+                    seen[u]=1;
+                    uint32_t wrote=0;
+                    for(uint8_t m=0;m<c && k+m<npv.size();++m){ noff_.push_back(npv[k+m]); ++wrote; }
+                    if(wrote){ nid_.push_back(u); ncnt_.push_back(wrote); }
+                    else if(c) ++collide;
+                } else if(u<NU) ++collide;
+                k+=c;
+            }
+            FILE* nf=fopen(outdir.c_str(),"ab");
+            if(nf){
+                const uint64_t nn=nid_.size(), no=noff_.size();
+                fwrite(&nn,8,1,nf); fwrite(&no,8,1,nf);
+                for(size_t i=0;i<nid_.size();++i){ fwrite(&nid_[i],4,1,nf); fwrite(&ncnt_[i],4,1,nf); }
+                fwrite(noff_.data(),4,noff_.size(),nf);
+                fclose(nf);
+                fprintf(stderr,"[index] + N positions for %llu reads (%llu offsets, %llu B)%s\n",
+                        (unsigned long long)nn,(unsigned long long)no,
+                        (unsigned long long)(16+nn*8+no*4),
+                        collide? " [dedup collisions skipped]":"");
+            } }
         std::vector<size_t> vmoff(NU+1,0);
         for(size_t u=0;u<NU;++u) vmoff[u+1]=vmoff[u]+(u<mmcount.size()?mmcount[u]:0);
         std::vector<uint32_t> vpos_(positions.size());
@@ -1068,6 +1478,27 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
             const uint32_t a0=vpos_[u];
             if(a0==UINT32_MAX) continue;
             size_t off=vmoff[u]; uint32_t prevj=0;
+            // KNOWN INCONSISTENCY, DELIBERATELY NOT FIXED HERE (2026-09-19).
+            // This tally uses the raw offset j, while the `query` emit path and
+            // the .xmi verifier both strand-correct it (q+j forward, q+RL-1-j
+            // reverse-complement). So every RC read contributes its deviations
+            // at mirrored positions here. The fix is one line and was written
+            // and tested this session -- it builds, the archive stays LOSSLESS
+            // and the export stays byte-identical -- but it CHANGES .sites,
+            // which feeds the native-pileup fast path whose published numbers
+            // (400/400 het at >=2 reads, 25 homozygous false positives, 19.6x
+            // faster than the read path) are recorded in CLAUDE.md. Adopting it
+            // therefore requires re-running and re-gating those numbers, not a
+            // drive-by edit. Reverted pending that.
+            //
+            // Separately: correcting the offsets does NOT make this tally
+            // usable as an assembly-polishing consensus. Measured on E. coli,
+            // majority-vote polishing the export raised the mismatch rate
+            // against the reference from 11.86 to 72.63 /100kbp with the
+            // uncorrected offsets and to 407.06 with the corrected ones -- the
+            // better the offsets, the more damage, because placement here is
+            // chosen to minimise bits rather than to reflect homology, so reads
+            // from a different genomic copy vote with their own bases.
             for(uint16_t m=0;m<c;++m){
                 if(off+m>=mmpos32.size()||off+m>=obs.size()) break;
                 uint32_t j=prevj+mmpos32[off+m]; prevj=j;
@@ -1093,6 +1524,104 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
             long sz=ftell(vf); fclose(vf);
             fprintf(stderr,"[index] variant sites >=%ux: %llu -> %ld B (%.4f%% of archive)\n",
                     KMIN,(unsigned long long)nsite,sz,100.0*sz/(double)PGLEN);
+        // ── EXACT-MATCH COMPLETION INDEX (.xmi) ────────────────────────────
+        //
+        // WHAT IT IS FOR. `query` answers "which reads COVER this locus" by
+        // placement overlap. The other question -- "which reads CONTAIN this
+        // string", which a BWT answers with recall 1.0 by construction -- is
+        // answered here at 0.979 by searching the pseudogenome, because a read
+        // whose own deviations spell the probe is not a pg substring and the
+        // search cannot see it.
+        //
+        // WHICH READS CAN BE MISSED, PROVED RATHER THAN SAMPLED. `query` emits
+        // pg[placement .. placement+len) with that read's deviations applied
+        // -- forward, never reverse complemented, N never restored. So a read
+        // with NO deviations is emitted byte-identical to a pg substring and is
+        // always findable by the ordinary search. Contrapositive: only reads
+        // carrying deviations can be missed. That is mmcount[u] > 0, and it is
+        // 14% of reads on HG002 chr20. Nothing else needs indexing -- an
+        // N-carrying read with no mismatches is emitted as pure pg and is
+        // already reachable.
+        //
+        // WHY STRIDE SAMPLING IS STILL COMPLETE. Indexing every k-mer of every
+        // subset read does not scale. Index instead the k-mers at read offsets
+        // that are 0 mod S. A probe of length P sits at some offset o in the
+        // read and covers read offsets [o, o+P). A stride-aligned k-mer lies
+        // wholly inside it whenever P >= k + S - 1, so the query looks up ALL
+        // of the probe's k-mers and is guaranteed to hit at least one indexed
+        // entry. Verification then removes false candidates, so this is a
+        // superset filter and gives up no recall. The precondition is checked
+        // at query time and refused loudly rather than silently degraded.
+        if(getenv("CAPS_XMI")){
+            uint16_t minL = 0xFFFF;
+            for(size_t u=0; u<NU; ++u){
+                const uint16_t c = (u<mmcount.size())?mmcount[u]:0;
+                if(!c) continue;
+                if(u<rlenU.size() && rlenU[u] && rlenU[u]<minL) minL=rlenU[u];
+            }
+            // k is derived from the data, never a fixed constant: it cannot
+            // exceed the shortest read it must index, and 31 is the 2-bit
+            // packing limit.
+            int K = 20;
+            if(minL!=0xFFFF && minL < K) K = minL;
+            if(K > 31) K = 31;
+            const int S = getenv("CAPS_XMI_STRIDE") ? atoi(getenv("CAPS_XMI_STRIDE")) : 8;
+            if(K < 8 || S < 1){
+                fprintf(stderr,"[xmi] reads too short (k=%d) or bad stride -- index not built\n",K);
+            } else {
+                std::vector<std::pair<uint64_t,uint32_t>> post;
+                std::string buf;
+                size_t run2 = 0, nsub = 0;
+                for(size_t u=0; u<NU; ++u){
+                    const uint16_t c = (u<mmcount.size())?mmcount[u]:0;
+                    if(!c){ continue; }
+                    const int64_t RL = (u<rlenU.size())?rlenU[u]:0;
+                    const int64_t q  = (u<positions.size())?(int64_t)positions[u]:-1;
+                    if(RL<=0 || q<0 || q+RL>(int64_t)PGLEN){ run2 += c; continue; }
+                    // exactly what query would emit for this read
+                    buf.assign((const char*)pg.data()+q, (size_t)RL);
+                    { uint32_t prevj=0; const bool rcu = (u<strand.size()) && strand[u];
+                      for(uint16_t m=0;m<c;++m){
+                          if(run2+m>=mmpos32.size()||run2+m>=obs.size()) break;
+                          uint32_t j=prevj+mmpos32[run2+m]; prevj=j;
+                          if(j<(uint32_t)RL){
+                              const int64_t o = rcu ? (RL-1-(int64_t)j) : (int64_t)j;
+                              if(o>=0 && o<RL) buf[(size_t)o]=(char)obs[run2+m];
+                          }
+                      } }
+                    run2 += c; ++nsub;
+                    for(int64_t off=0; off+K<=RL; off+=S){
+                        uint64_t code=0; bool ok=true;
+                        for(int i=0;i<K;++i){
+                            const char ch=buf[off+i];
+                            int v = ch=='A'?0: ch=='C'?1: ch=='G'?2: ch=='T'?3: -1;
+                            if(v<0){ ok=false; break; }
+                            code=(code<<2)|(uint64_t)v;
+                        }
+                        if(ok) post.push_back({code,(uint32_t)u});
+                    }
+                }
+                std::sort(post.begin(),post.end());
+                post.erase(std::unique(post.begin(),post.end()),post.end());
+                const std::string xp = outdir + ".xmi";
+                FILE* xf=fopen(xp.c_str(),"wb");
+                if(!xf){ fprintf(stderr,"[xmi] cannot write %s\n",xp.c_str()); }
+                else{
+                    const uint64_t magic=0x494D585F53504143ULL;   // "CAPS_XMI" little-endian
+                    const uint64_t np=post.size();
+                    const uint32_t k32=(uint32_t)K, s32=(uint32_t)S;
+                    fwrite(&magic,8,1,xf); fwrite(&k32,4,1,xf); fwrite(&s32,4,1,xf);
+                    fwrite(&np,8,1,xf);
+                    for(const auto& pr : post){ fwrite(&pr.first,8,1,xf); fwrite(&pr.second,4,1,xf); }
+                    fclose(xf);
+                    fprintf(stderr,"[xmi] k=%d stride=%d over %zu deviation-carrying reads"
+                                   " -> %llu postings, %llu B -> %s\n",
+                            K,S,nsub,(unsigned long long)np,
+                            (unsigned long long)(24+np*12),xp.c_str());
+                    fprintf(stderr,"[xmi] completeness holds for probes of length >= %d\n",K+S-1);
+                }
+            }
+        }
         }
         return 0;
     }

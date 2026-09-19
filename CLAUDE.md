@@ -46,6 +46,115 @@ regenerate it disagree, re-run the script.** Nothing was typed in from memory.
    18.6 Mb apart), so the archive's own coordinate system cannot name it, and
    adding a coordinate API would not fix it. That is what 81/400 measures.
 
+**Post-freeze finding, 2026-09-15 — does NOT change any published number.**
+The residue in the frozen sweep's T3.4 (the position claim) is not a data
+ceiling. It is **three** defects in our own code,
+and correcting them takes **352 → 400/400 on real HG002 reads**:
+
+1. the probe was matched EXACTLY against a consensus, so the alternate
+   haplotype's contig was unreachable
+2. the scorer required containment while the coordinate arm used placement
+   offset — two rules, one archive
+3. the probe anchored UPSTREAM ONLY, and since the pseudogenome is built by
+   greedy overlap chaining, a contig's neighbourhood is not the genomic
+   neighbourhood. Measured: upstream anchors at 0 of 6 failing sites, downstream
+   at 5 of 6. Fixed by unioning an upstream and a downstream reference window,
+   neither of which contains the variant.
+
+Each is inert alone. **Generalization tested, nothing tuned between runs:** a
+fully independent window (chr20:3,999,001-4,178,497, different reads, different
+variants, a 658,767 bp pseudogenome against 2,153,559) gives **284/284**,
+held-out sites 66/66, and an independently re-assembled archive at 19× gives
+**400/400**. Every archive tested reaches 100% on BOTH questions -- position and
+exact-match recall 1.0000 -- with nothing tuned between them. False positives on
+homozygous controls are the real price of tolerant search: 22/400 at k=2 with a
+2-read threshold, 35/400 at k=3. An earlier **400/400 on SIMULATED reads is withdrawn**.
+
+**Novelty, corrected after a literature survey 2026-09-16.** Retrieval by
+sequence content from a reference-free archive is **NOT new** — BEETL-fastq
+(2014), CIndex (2022) and sFASTQ (2022) all do it via BWT/FM-index. What is
+distinct is **retrieval by POSITION rather than by EXACT MATCH**: returning the
+reads *covering* a locus, not the reads *containing* a string. The root cause is
+the data model — a BWT stores each read as an independent string, a de Bruijn
+graph as a path through shared k-mers, and a pseudogenome as **a placement plus
+deviations**, which is the only one of the three that gives the archive an
+internal coordinate system. Measured: **86% of the reads we return are
+unreachable by an exact-match query** (40% at the median site). The reciprocal cost was exact-match recall **0.979** against a BWT's 1.000, and
+it has since been **closed**: all 34 misses are reads whose literal sequence is
+absent from the consensus, and a read absent from the consensus must carry
+deviations, which confines every possible miss to 14% of the reads. Wiring that index into the binary exposed a REAL BUG: the sidecar never stored
+**strand**, so `query` applied every deviation at `q+j` when an RC read needs
+`q+RL-1-j`, and what it emitted was not the read. **query ALONE reaches both at full** -- exact-match recall **1.0000** at k=3
+and position **400/400** -- once the seed floor is derived from the haystack
+(`clamp(ceil(log4(|pg|))-2, 8, 16)`) instead of hardcoded at 12, which had been
+silently capping a 40 bp probe at k=2. Three pieces take it there -- a 14.7 kB strand bitmap, 13.3 kB of
+N positions, and a k-mer index over the 14% of reads that can be missed:
+**exact-match recall 0.9789 -> 1.0000 and position 400/400**, upstream-only
+391 -> 392, false positives 31 -> 29, archive still lossless. It changes
+60 of 100 query outputs, so **the published 345/400 was measured with the buggy
+query** and would likely move if re-run. The last 4 misses are N-carrying reads,
+which `query` never restores. Plus doing this from the
+high-compression, assembly-based class of archive, where the assembly itself is
+what breaks naive retrieval. **We have not benchmarked against
+BEETL/CIndex/sFASTQ — that is the most valuable missing experiment.**
+
+**An unexploited layer, found by audit and now used.** `capsule_decode index`
+was already tallying (pg position, observed base) -> count over every read and
+writing it to `<sidecar>.sites`, and `query` never read that file. It is a
+complete allele-resolved pileup -- 124 KB for a 2.15 Mb pseudogenome. Because a
+het locus sits on two contigs, the CONSENSUS at the two anchored positions
+already disagrees, so allele identity comes from the consensus and allele
+support from the tally. Thresholding those counts at 2 reads makes the fast path **strictly dominant**:
+**400/400, 25 false positives against the read path's 31, and 19.6x faster**
+(16.30 -> 0.83 ms/site). It wins on both axes. The archive already holds the
+pileup its reads would produce.
+
+Full writeup — claim, novelty, mechanism, cost, limits — in
+[`docs/CLAIM3_LOCUS_ADDRESSABILITY.md`](docs/CLAIM3_LOCUS_ADDRESSABILITY.md).
+Diagnosis trail in [`docs/T34_RESIDUE_DIAGNOSIS.md`](docs/T34_RESIDUE_DIAGNOSIS.md).
+
+**The published 345/400 is untouched** — the modified decoder is byte-identical
+to git HEAD on the default path, and `CAPS_QUERY_MM` defaults to 0. Also
+recorded: `k_max = floor(P/12) − 1`, so tolerance on a 40 bp probe cannot exceed
+2 whatever the flag says. Reproduction: `scripts/t34_realdata/`.
+
+**2026-09-19 session — three real findings, superseding parts of the above.
+None change Claim 1 or Claim 2; nothing in `benchmark/results/` was touched.**
+
+1. **T3.4/T3.5 are no longer single-individual.** Re-run on HG003, HG004,
+   HG005 (real GIAB BAM+VCF, two additional trios) with `CAPS_QUERY_CONTAIN=1`
+   engaged: **T3.5 1,452/1,452 (100%) across 4 individuals and 2 loci; T3.4
+   recall 1.0000 on all 4.** Plain `query` alone (no `.xmi`) — the config the
+   345/400-superseding text above describes as sufficient — was luck specific
+   to HG002: on HG003/4/5 it only reaches 0.86-0.96 recall and left one T3.5
+   site unresolved. **`CAPS_QUERY_CONTAIN=1` is required in general, not
+   optional insurance.** Cost: false positives on homozygous controls rise
+   ~35-75%. Full writeup: `docs/T34_T35_MULTI_INDIVIDUAL_20260919.md`.
+2. **T3.1's correctness numbers were measured against a broken export and are
+   withdrawn.** The default `export` concatenates every contig into 2 FASTA
+   records; on E. coli that was 41,603 real contigs glued into 2, producing
+   ~41,600 false junctions. Scored correctly (`CAPSULE_EXPORT_CONTIGS=1`,
+   requires `contig_spans` — see `PIPELINE.md`), genome fraction moves
+   **80.8% → 98.7%**, now ahead of SPAdes (98.3%), at zero archive cost
+   (`contig_spans` measured byte-identical, 18,282,397 B with or without),
+   archive re-verified LOSSLESS. Mismatch rate, duplication ratio and N50
+   remain SPAdes's — real, disclosed, not closeable without repeat resolution
+   and error correction. Full writeup, including two refuted fix attempts
+   (contig dedup, consensus polish) and why: `docs/T3.1_CORRECTNESS_FINAL_20260919.md`.
+3. **A real strand bug was found in `.sites` (the allele-resolved pileup
+   tally described above) and deliberately left unfixed.** It ignores strand
+   while `query`/`.xmi` both correct for it — confirmed by a working fix that
+   builds and passes both gates (archive LOSSLESS, export byte-identical).
+   Not adopted because `.sites` feeds the native-pileup fast path whose
+   numbers (400/400, 25 FP, 19.6x faster) are published a few paragraphs
+   above; adopting the fix requires re-running and re-gating that claim, not
+   a same-session edit. Recorded as a comment at the tally site in
+   `stages/capsule_decode.cpp`. Separately, consensus-polishing an export
+   from this tally (even the corrected version) was tested and found to make
+   correctness *worse* (11.86 → 407 mismatches/100kbp) — this pileup reflects
+   compression-driven placement, not homology, so majority vote pulls toward
+   the wrong base. Do not attempt consensus polishing from `.sites` again.
+
 **Two corrections that must not be re-lost:**
 - **T3.4 coordinate was published as 0/400. It is 81/400.** The 0 was an
   artifact of our own query emitting the consensus rather than the reads.

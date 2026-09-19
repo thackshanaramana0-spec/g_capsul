@@ -1,0 +1,45 @@
+# COST OF LOCUS ADDRESSABILITY — a CLAIM 3 cost, not a Claim 1 cost.
+#
+# ACCOUNTING. The sidecar is built FROM the capsule, after compression has
+# finished and the archive is sealed. It is therefore a downstream operation
+# with its own costs, in exactly the way Claim 2's variant calling is. It does
+# not change the archive, the compression ratio, or any Claim 1 number, and it
+# must never be added to them. This mirrors how claim2_T2.1_snv.csv reports
+# wall_s and peak_ram_kb for the calling step separately from Claim 1 sizes.
+#
+# Measured on 117,565 real HG002 reads, chr20:2,999,001-3,601,000, 28.9x,
+# 12 vCPU / 7 GB WSL. Baseline is bwa, matching the published Claim 3 comparator.
+
+# --- the headline row: becoming locus-addressable ---
+step,tool,wall_s,peak_ram_kb,needs_reference
+ours,capsule_decode index (from the capsule),0.31,17408,no
+baseline_total,bwa index + bwa mem + samtools sort + samtools index,3.03,116992,yes
+# -> 9.8x faster, 6.7x lower peak RAM, and no reference genome required
+
+# --- baseline broken out ---
+step,tool,wall_s,peak_ram_kb,needs_reference
+bwa_index,bwa index,0.31,8432,yes
+bwa_mem,bwa mem -t 6,2.11,116992,yes
+samtools_sort,samtools sort -@4,0.48,62048,yes
+samtools_index,samtools index,0.13,3456,yes
+
+# --- artifacts produced (reported, not charged against Claim 1) ---
+artifact,bytes,side,note
+sidecar_qidx,1589156,gcapsul,derived from the capsule, rebuildable in 0.31 s
+bam,10967743,baseline,
+bai,1872,baseline,
+reference_fasta,612045,baseline,required by the baseline, not by us
+bwa_index_files,1053707,baseline,required by the baseline, not by us
+
+# --- per-query latency, 50 loci ---
+query_arm,n_loci,wall_s,ms_per_query,content_addressed
+fixed_process_cost,50,0.19,3.8,n/a
+ours_coordinate,50,0.56,11.2,no
+ours_sequence_exact,50,1.26,25.2,yes
+ours_sequence_mm2,50,2.60,52.0,yes
+samtools_view_coordinate,50,0.24,4.8,no
+# like-for-like (coordinate vs coordinate): 11.2 vs 4.8 ms -> 2.3x SLOWER.
+# Both are instantaneous in absolute terms, and 3.8 ms of ours is per-invocation
+# process startup, since each query relaunches the binary and reloads the index.
+# Content addressing has NO baseline: samtools cannot answer it without a
+# reference genome.

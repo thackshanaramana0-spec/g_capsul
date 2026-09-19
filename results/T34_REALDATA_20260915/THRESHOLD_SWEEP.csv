@@ -1,0 +1,21 @@
+rule,het_both,homozygous_both
+minor_allele_ge_1_read,400,18
+minor_allele_ge_2_reads,400,9
+minor_allele_ge_3_reads,399,8
+minor_allele_ge_4_reads,397,6
+minor_allele_ge_5_reads,395,6
+minor_allele_fraction_ge_0.05,393,4
+minor_allele_fraction_ge_0.10,383,3
+minor_allele_fraction_ge_0.15,376,3
+minor_allele_fraction_ge_0.20,367,3
+min_2_reads_and_fraction_ge_0.10,383,3
+
+# minor-allele fraction distribution
+set,p5,p25,median,p75,p95
+het,0.121,0.333,0.409,0.458,0.500
+homozygous,0.000,0.000,0.000,0.000,0.000
+
+# allele balance, mm2+offset arm
+set,ref_reads,alt_reads,ratio
+het,20078,23401,1.17
+homozygous,21892,298,0.01

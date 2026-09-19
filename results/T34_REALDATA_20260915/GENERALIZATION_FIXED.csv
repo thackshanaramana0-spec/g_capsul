@@ -1,0 +1,60 @@
+# GENERALIZATION RE-RUN ON THE FIXED BINARY. 2026-09-17.
+#
+# WHY IT HAD TO BE RE-RUN. Every generalization result recorded before this was
+# produced by the binary that mis-placed reverse-complement deviations and never
+# restored N. Those runs were measuring against emitted sequences that were not
+# the reads, so they were not a fair test of anything. Re-run at k=3 with the
+# derived seed floor, strand bitmap and N restoration in place.
+
+test,pseudogenome_bp,reads,upstream_only,bilateral,n_sites
+primary_archive,2153559,117565,394,400,400
+held_out_window,658767,33826,281,284,284
+reassembled_19x,1855826,78771,394,400,400
+
+# EVERY ARCHIVE NOW REACHES 100%. The re-assembled replicate was 398/400 on the
+# old binary and is 400/400 on the fixed one, so the earlier "398-400, not
+# universal" caveat is SUPERSEDED. The shortfall was the strand bug, not a
+# property of the data.
+
+# homozygous negative controls at k=3
+test,n_sites,upstream_fp,bilateral_fp
+primary_archive,400,35,48
+held_out_window,400,11,18
+reassembled_19x,400,26,41
+
+# allele balance, bilateral arm (het should approach 1.0, homozygous near 0)
+test,het_ratio,homozygous_ratio
+primary_archive,1.02,0.01
+held_out_window,0.88,0.02
+reassembled_19x,0.94,0.02
+
+# SIDECAR ADDITIONS SCALE WITH THE ARCHIVE, NOT WITH A CONSTANT
+test,strand_bytes,n_position_bytes,sidecar_bytes
+primary_archive,14704,13336,1617196
+held_out_window,4237,4116,367688
+reassembled_19x,9855,9452,936623
+
+# THE DERIVED SEED FLOOR ADAPTS PER ARCHIVE, WHICH IS THE POINT.
+# MINSEED = clamp(ceil(log4(|pg|)) - 2, 8, 16)
+pseudogenome_bp,derived_minseed,k_max_40bp_probe
+658767,8,4
+1855826,9,3
+2153559,9,3
+3000000000,14,1
+# No fitted constant anywhere: the floor follows the haystack, so a smaller
+# archive automatically permits a higher tolerance and a genome-scale one does
+# not. That is what makes this generalize rather than fit one dataset.
+
+# EXACT MATCH ALSO REACHES 1.0000 ON EVERY ARCHIVE, from `query` alone at k=3.
+# No index file, no separate mode. Each archive independently verified LOSSLESS
+# through the fixed binary first.
+test,reads_containing_a_probe,missed,recall,lossless
+primary_archive,5863,0,1.0000,yes
+held_out_window,2351,0,1.0000,yes
+reassembled_19x,1948,0,1.0000,yes
+
+# BOTH QUESTIONS, EVERY ARCHIVE, AT FULL.
+test,position_bilateral,exact_match_recall
+primary_archive,400/400,1.0000
+held_out_window,284/284,1.0000
+reassembled_19x,400/400,1.0000

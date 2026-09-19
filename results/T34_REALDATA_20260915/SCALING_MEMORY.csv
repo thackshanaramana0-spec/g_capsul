@@ -1,0 +1,31 @@
+# INDEX-BUILD MEMORY, MEASURED AS A TREND RATHER THAN A POINT.
+#
+# WHY. The doc previously carried a caveat that the 6.7x memory margin over bwa
+# "will shrink at scale", reasoning that bwa's peak is fixed overhead while ours
+# grows with reads. That reasoning was ASSUMED, not measured, and it is WRONG in
+# this regime. Measured at four input sizes from the same real HG002 reads,
+# chr20:2,999,001-3,601,000, run strictly sequentially.
+# Script: scripts/t34_realdata/scaling_memory.sh
+
+fraction,reads,ours_peak_kb,bwa_peak_kb,ratio
+25%,29406,16896,32384,1.9
+50%,58758,17408,60800,3.5
+75%,88253,17536,89088,5.1
+100%,117565,17536,117120,6.7
+
+# WHAT IT SHOWS. Our index-build memory is essentially INVARIANT to read count:
+# 16,896 -> 17,536 kB across a 4x increase, +3.8%. It scales with the
+# PSEUDOGENOME -- that is, the size of the region -- not with depth. bwa's peak
+# grows LINEARLY with reads here. So the margin WIDENS with coverage rather than
+# shrinking, and the earlier caveat is withdrawn.
+#
+# WHAT IT DOES NOT SHOW, AND MUST NOT BE STRETCHED TO. The reference here is
+# 602 kb, so bwa's FM-index is negligible and read batching dominates its peak.
+# At whole-genome scale bwa's index is fixed at roughly 5-8 GB for human and
+# would dominate instead, while ours would grow with the pseudogenome rather
+# than with depth. That is a DIFFERENT REGIME and this measurement does not
+# extrapolate into it. The honest claim is:
+#
+#   "At fixed region size, index-build memory is invariant to coverage while
+#    bwa's grows linearly, so the margin widens from 1.9x to 6.7x over a 4x
+#    depth increase. Whole-genome behaviour is untested."
