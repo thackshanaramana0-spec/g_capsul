@@ -134,7 +134,7 @@ being counted.
 **19/19 wins vs SPRING (−6.03% aggregate). 19/19 vs Genozip (−43.26%). 57/57 LOSSLESS.**
 
 One run, start to finish: `benchmark_1_run.sh` at commit `21ee619`, 5 h 07 m, 0 failures.
-Raw CSV: [`benchmark/results/claim1_T1.1_T1.2.csv`](benchmark/results/claim1_T1.1_T1.2.csv).
+Raw CSV: [`benchmark/results/claim1/claim1_T1.1_T1.2.csv`](benchmark/results/claim1/claim1_T1.1_T1.2.csv).
 Traced to the code that produced it in
 [`benchmark/documentation/RESULT_CODE.md`](benchmark/documentation/RESULT_CODE.md).
 

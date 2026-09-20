@@ -14,7 +14,7 @@
 > | vs DiscoSNP++ | 0.576 — a loss | 0.576 — **a win** |
 > | across 4 individuals | — | **3 wins, 1 loss** (0.620/0.637/0.632/0.593 vs 0.576/0.587/0.595/0.605) |
 >
-> `benchmark/results/claim2_T2.3_indel.csv`, traced in
+> `benchmark/results/claim2/claim2_T2.3_indel.csv`, traced in
 > `benchmark/documentation/RESULT_CODE.md`.
 >
 > **The analysis below was not wrong — it was RIGHT, and it named the way out.**

@@ -365,7 +365,7 @@ rebuilt.
 | **T3.5** | retrieval by **position** | **400/400** | **bwa + samtools view** — the workflow a user actually runs today | competitive — exclusive |
 
 > **Numbering collision, stated so it is never confused.** The frozen sweep's
-> `benchmark/results/claim3_T3.4_locus_fidelity.csv` is the **position** claim
+> `benchmark/results/claim3/claim3_T3.4_locus_fidelity.csv` is the **position** claim
 > (345/400 content vs 81/400 coordinate). In this document T3.4 is **exact
 > match** and T3.5 is position. When citing the frozen sweep, use its own names.
 

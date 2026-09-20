@@ -73,7 +73,7 @@ tolerance). Produces all eight tables into
 
 ## 6. Compare against the recorded results
 
-    diff <(sort benchmark/results/claim1_T1.1_T1.2.csv) \
+    diff <(sort benchmark/results/claim1/claim1_T1.1_T1.2.csv) \
          <(sort results/benchmark_1_*/claim1_T1.1_T1.2.csv)
 
 **What must match exactly**
