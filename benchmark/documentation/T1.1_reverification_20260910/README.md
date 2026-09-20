@@ -49,7 +49,7 @@ four silent data-loss bugs earlier in this project (CLAUDE.md §6.1).
 | file | what it is |
 |---|---|
 | `sanity.log` | the full run, timestamped |
-| `claim1_T1.1_T1.2.csv` | the row it produced — compare against `benchmark/results/claim1_T1.1_T1.2.csv` |
+| `claim1_T1.1_T1.2.csv` | the row it produced — compare against `benchmark/results/claim1/claim1_T1.1_T1.2.csv` |
 | `_manifest.tsv` | input file identity (size + checksum) |
 | `SRR2584863.capsule.log` | the encoder's own stage-by-stage log |
 | `encode.stdout` | encoder stdout |

@@ -6,10 +6,10 @@
 > paper now reports. Claim 3's citable numbers are the executed 19-dataset
 > sweep:
 >
->     benchmark/results/claim3_T3.1_T3.2_T3.3.csv    T3.1 export   129-784x
+>     benchmark/results/claim3/claim3_T3.1_T3.2_T3.3.csv    T3.1 export   129-784x
 >                                                    T3.2 coverage  16-54x
 >                                                    T3.3 query     all 19
->     benchmark/results/claim3_T3.4_locus_fidelity.csv
+>     benchmark/results/claim3/claim3_T3.4_locus_fidelity.csv
 >                                                    coordinate  81/400
 >                                                    content    345/400
 >

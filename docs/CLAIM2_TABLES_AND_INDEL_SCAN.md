@@ -13,7 +13,7 @@
 > and a single-base comparison cannot evaluate them — this document reaches
 > that conclusion itself in §1; the fix was to score only the sites the metric
 > can actually evaluate. The 11/18 denominator is unreproducible and is
-> withdrawn. Citable source: `benchmark/results/claim2_T2.4_multiallelic.csv`,
+> withdrawn. Citable source: `benchmark/results/claim2/claim2_T2.4_multiallelic.csv`,
 > traced in `benchmark/documentation/RESULT_CODE.md`.
 >
 > **The het-indel scan below is NOT superseded** and remains the root-cause

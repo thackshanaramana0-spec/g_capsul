@@ -170,7 +170,7 @@ This paragraph is kept because this project marks retractions in place:
 > SPRING/Genozip comparison yet. SRR065390 (C. elegans) has never been run
 > through this repo's own comparison at all.~~
 
-Both were run in full. From `benchmark/results/claim1_T1.1_T1.2.csv`:
+Both were run in full. From `benchmark/results/claim1/claim1_T1.1_T1.2.csv`:
 
 | accession | CAPSULE | SPRING | Genozip | lossless |
 |---|---|---|---|---|

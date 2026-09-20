@@ -70,7 +70,7 @@ claim**, not about the recall claim being incomplete. The two are separable:
 - 4 of the 5 missing ones (`ERR5181310`, `SRR29296997`, `SRR37283774`,
   `DRR976266`) are almost certainly small (same order of magnitude as
   `SRR2584863`, going by their SPAdes/coverage runtimes already measured in
-  `benchmark/results/claim3_T3.1_T3.2_T3.3.csv`).
+  `benchmark/results/claim3/claim3_T3.1_T3.2_T3.3.csv`).
 - `HG002` is the outlier — 300x coverage over chr21+22, its own SPAdes run
   took 2,679s versus 50-550s for the others. Its real size must be re-checked
   immediately before running it, not assumed from the others.

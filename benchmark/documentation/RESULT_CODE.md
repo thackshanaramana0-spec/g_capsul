@@ -90,7 +90,7 @@ should be investigated before trusting any number here.
 | **RAM/time method** | one timed job at a time, idle box; `parse_time_v` takes the LAST `time -v` block and the MAX resident size |
 | **script** | `benchmark/scripts/benchmark_1_run.sh` → `run_phase1` |
 | **encoder invoked via** | `benchmark/scripts/encode_adaptive.sh` (never the binary directly) |
-| **output** | `benchmark/results/claim1_T1.1_T1.2.csv` (57 rows = 19 × 3 tools) |
+| **output** | `benchmark/results/claim1/claim1_T1.1_T1.2.csv` (57 rows = 19 × 3 tools) |
 
 **Reported:** 19/19 wins vs SPRING, 19/19 vs Genozip, **57/57 rows LOSSLESS**.
 Aggregate ours **6,011,370,147 B** vs SPRING 6,396,897,280 (**−6.03%**) vs
@@ -125,7 +125,7 @@ differs.
 | **compared with** | DiscoSNP++ (`-k 31 -c 3 -D 100 -P 3 -b 0 -G ref`, POS off-by-one corrected), Kmer2SNP (KMC counts, band derived from the histogram) |
 | **metric** | TP/FP/FN, precision, recall, F1 from `rtg vcfeval` |
 | **scripts** | ours `run_fullchr20_archive_capsule.sh`; DiscoSNP++ `run_fullchr20_bench_disco.sh`; Kmer2SNP `run_kmer2snp.sh` |
-| **output** | `benchmark/results/claim2_T2.1_snv.csv` |
+| **output** | `benchmark/results/claim2/claim2_T2.1_snv.csv` |
 
 **Reported:** mean F1 **0.876** (ours) / 0.853 (DiscoSNP++) / 0.475 (Kmer2SNP).
 Per individual 0.888 / 0.891 / 0.891 / 0.834. **3 wins, 1 loss.**
@@ -139,7 +139,7 @@ variable-length dataset.
 | **input** | HG002 subsampled with `seqtk sample -s11` at fraction depth/30 |
 | **configuration** | each depth is a full re-compress and re-call, so depth is the only variable. 30× is **carried from T2.1**, not re-run |
 | **script** | `benchmark_1_run.sh`, the T2.2 block |
-| **output** | `benchmark/results/claim2_T2.2_coverage_sweep.csv` |
+| **output** | `benchmark/results/claim2/claim2_T2.2_coverage_sweep.csv` |
 
 **Reported:** 10× **0.487**, 15× **0.704**, 20× **0.797**, 30× **0.888** — monotone.
 
@@ -160,7 +160,7 @@ of the tool.
 | **input** | HG002; every `GT=1/2` site on chr20 whose two ALT alleles are both single-base |
 | **compared with** | DiscoSNP++ on the identical reads |
 | **script** | `benchmark/scripts/run_multiallelic_bench_capsule.sh` |
-| **output** | `benchmark/results/claim2_T2.4_multiallelic.csv` |
+| **output** | `benchmark/results/claim2/claim2_T2.4_multiallelic.csv` |
 
 **Reported:** **17/26 (65.4%)** — and **26 is the complete census** for chr20,
 not a sample. DiscoSNP++ emits **0 multi-allelic records in 3,989 total
@@ -184,7 +184,7 @@ records**: a structural inability, not a miss.
 |---|---|
 | **input** | HG003+HG004 real reads concatenated, ploidy 4, truth = union of their GIAB calls (Cooke, Wedge & Lunter, *Genome Research* 2022) |
 | **script** | `benchmark/scripts/run_tetraploid_bench_capsule.sh` |
-| **output** | `benchmark/results/claim2_T2.5_tetraploid.csv` |
+| **output** | `benchmark/results/claim2/claim2_T2.5_tetraploid.csv` |
 
 **Reported:** SNV **0.897** vs 0.782; INDEL **0.597** vs 0.553.
 
@@ -200,7 +200,7 @@ records**: a structural inability, not a miss.
 | **compared with** | T3.1 SPAdes 4.0.0; T3.2 bwa + samtools sort + index + mosdepth **timed as one pipeline** |
 | **metric** | wall + peak RSS via `/usr/bin/time -v`, plus output bytes and row count for both sides |
 | **script** | `benchmark_1_run.sh`, `run_phase3` |
-| **output** | `benchmark/results/claim3_T3.1_T3.2_T3.3.csv` (31 rows, tagged by sub-table) |
+| **output** | `benchmark/results/claim3/claim3_T3.1_T3.2_T3.3.csv` (31 rows, tagged by sub-table) |
 
 **Reported:** export **129–784×** vs SPAdes; coverage **16–54×** vs
 bwa+mosdepth; query on all 19.
@@ -226,7 +226,7 @@ honest comparator and Claim 3 does not lead with speed.
 | **metric** | does the returned read set contain BOTH truth alleles |
 | **script** | `benchmark/scripts/run_locus_fidelity.sh` |
 | **REQUIRED SETUP** | the sidecar must exist and must have been built **with `CAPS_PILEUP=1`**: `CAPS_PILEUP=1 capsule_decode index <archive> <archive>.qidx`. Without that flag the sidecar omits per-read deviations, `query` emits the consensus instead of the reads, and the coordinate arm scores **0**, not 18 — reproduced three times on 2026-09-10 before the cause was found. `query` finds `<archive>.qidx` automatically. |
-| **output** | `benchmark/results/claim3_T3.4_locus_fidelity.csv` |
+| **output** | `benchmark/results/claim3/claim3_T3.4_locus_fidelity.csv` |
 
 **Reported:** coordinate **81/400 (20.2%)**, content **345/400 (86.2%)**,
 pooled allele balance **1.00**.
