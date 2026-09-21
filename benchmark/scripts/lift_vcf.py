@@ -1,1 +1,0 @@
-../../scripts/lift_vcf.py

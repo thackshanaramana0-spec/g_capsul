@@ -1,1 +1,0 @@
-../../scripts/encode_adaptive.sh

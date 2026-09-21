@@ -1,1 +1,0 @@
-../../docs/CLAIM2_RESULTS_V2.md

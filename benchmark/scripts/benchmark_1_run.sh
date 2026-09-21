@@ -1,1 +1,0 @@
-../../scripts/benchmark_1_run.sh

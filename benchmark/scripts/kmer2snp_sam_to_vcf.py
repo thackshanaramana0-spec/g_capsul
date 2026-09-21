@@ -1,1 +1,0 @@
-../../scripts/kmer2snp_sam_to_vcf.py

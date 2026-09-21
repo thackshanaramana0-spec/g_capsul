@@ -1,1 +1,0 @@
-../../scripts/run_fullchr20_bench_disco.sh

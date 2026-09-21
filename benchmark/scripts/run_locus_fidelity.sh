@@ -1,1 +1,0 @@
-../../scripts/run_locus_fidelity.sh

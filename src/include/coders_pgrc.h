@@ -1,0 +1,213 @@
+#pragma once
+// Real entropy coders, matching what PgRC2 actually uses per stream.
+//
+// Until now our "per-stream coder selection" only chose among xz / bzip2 /
+// zstd, which was selection in name only -- PgRC2's advantage on the streams
+// where it still beat us comes from PPMd7, FSE/Huff0 and range coders with
+// per-position models, not from a different general-purpose compressor.
+// (See their PropsLibrary.cpp: mismatched symbols use PPMd order 5; mismatch
+// counts use range_coder period 1; mismatch positions use a selector over
+// range/FSE/PPMd per bucket.)
+//
+// PPMd7 (LZMA SDK, public domain) and FSE/Huff0 (Yann Collet, BSD) are
+// standard third-party libraries that PgRC2 merely bundles -- using them is
+// no different from our already using liblzma, and is not a copy of their
+// implementation. The range coder below is our own, modelled on the same
+// idea their rangecoder/simple_model.h uses.
+#include <cstdint>
+#include <cstring>
+#include <vector>
+#include <cstdio>
+
+extern "C" {
+#include "thirdparty/ppmd/Ppmd7.h"
+#include "thirdparty/fse/fse.h"
+#include "thirdparty/fse/huf.h"
+#include "thirdparty/ppmd/Alloc.h"
+}
+
+namespace pgc {
+
+// ---------------- PPMd7 ----------------
+struct OutBuf { IByteOut vt; uint8_t* cur; uint8_t* lim; size_t written=0; bool overflow=false; };
+static void ppmd_write(const IByteOut* p, Byte b){
+    OutBuf* o = (OutBuf*)((char*)p - offsetof(OutBuf, vt));
+    if(o->cur == o->lim){ o->overflow=true; return; }
+    *o->cur++ = b; ++o->written;
+}
+// order/memSize mirror PgRC2's getDefaultCoderProps(PPMD7_CODER, level, order).
+static std::vector<uint8_t> ppmd_encode(const uint8_t* src, size_t n,
+                                        unsigned order=5, uint32_t memMB=32){
+    if(!n) return {};
+    CPpmd7 ppmd;
+    Ppmd7_Construct(&ppmd);
+    uint32_t memSize = memMB << 20;
+    if(!Ppmd7_Alloc(&ppmd, memSize, &g_Alloc)) return {};
+    std::vector<uint8_t> out(n + n/3 + 256);
+    OutBuf ob; ob.vt.Write = ppmd_write;
+    ob.cur = out.data()+5; ob.lim = out.data()+out.size();
+    out[0]=(uint8_t)order;
+    out[1]=(uint8_t)(memSize); out[2]=(uint8_t)(memSize>>8);
+    out[3]=(uint8_t)(memSize>>16); out[4]=(uint8_t)(memSize>>24);
+    Ppmd7z_Init_RangeEnc(&ppmd);
+    Ppmd7_Init(&ppmd, order);
+    ppmd.rc.enc.Stream = &ob.vt;
+    Ppmd7z_EncodeSymbols(&ppmd, src, src+n);
+    Ppmd7z_Flush_RangeEnc(&ppmd);
+    Ppmd7_Free(&ppmd, &g_Alloc);
+    if(ob.overflow) return {};
+    out.resize(5 + ob.written);
+    return out;
+}
+
+// ---------------- FSE / Huff0 ----------------
+static std::vector<uint8_t> fse_encode(const uint8_t* src, size_t n){
+    if(!n) return {};
+    std::vector<uint8_t> out(FSE_compressBound(n)+16);
+    size_t r = FSE_compress(out.data(), out.size(), src, n);
+    // r==1 is FSE's RLE form, and its single byte is NOT the repeated symbol.
+    // The decoder used to reconstruct it as `rawlen copies of src[0]`, which is
+    // only correct when that symbol happens to be zero -- true for the
+    // all-zeros stream the workaround was written for (orig2uid_flags), and
+    // silently WRONG for every other constant stream. Measured: n_cnt on
+    // M. tuberculosis is three bytes of 0x23, FSE emitted 0x00, and the column
+    // decoded as zeros -- so every N in an all-N read was lost. Rejecting r<=1
+    // here makes the selector fall through to a coder that round-trips, and
+    // costs nothing: a constant stream is already handled by const_or_encode,
+    // and any other method codes 1-3 bytes just as small.
+    if(FSE_isError(r) || r<=1 || r>=n) return {};
+    out.resize(r); return out;
+}
+static std::vector<uint8_t> huf_encode(const uint8_t* src, size_t n){
+    if(!n) return {};
+    std::vector<uint8_t> out(HUF_compressBound(n)+16);
+    size_t r = HUF_compress(out.data(), out.size(), src, n);
+    if(HUF_isError(r) || r<=1 || r>=n) return {};   // same RLE hazard as FSE
+    out.resize(r); return out;
+}
+
+// ---------------- adaptive range coder, order-0 with `period` models -------
+// PgRC2's RangeCoderCompressTemplate interleaves `period` independent models
+// so that column k of a fixed-stride record gets its own statistics. That is
+// the transpose idea expressed inside the coder.
+struct RC {
+    std::vector<uint8_t> out; uint64_t low=0; uint32_t range=0xFFFFFFFFu;
+    uint8_t cache=0; uint64_t cacheSize=1;
+    void shiftLow(){
+        if((uint32_t)(low>>32)!=0 || (uint32_t)low < 0xFF000000u){
+            uint8_t t=cache; do{ out.push_back((uint8_t)(t+(uint8_t)(low>>32))); t=0xFF; }while(--cacheSize);
+            cache=(uint8_t)((uint32_t)low>>24);
+        }
+        ++cacheSize; low=(uint64_t)((uint32_t)low<<8);
+    }
+    void encode(uint32_t lo,uint32_t hi,uint32_t tot){
+        range/=tot; low+=(uint64_t)lo*range; range*=(hi-lo);
+        while(range<(1u<<24)){ range<<=8; shiftLow(); }
+    }
+    void flush(){ for(int i=0;i<5;++i) shiftLow(); }
+};
+struct Model256 {
+    uint16_t f[256]; uint32_t tot;
+    Model256(){ for(int i=0;i<256;++i) f[i]=1; tot=256; }
+    void encode(RC& rc, uint8_t s){
+        uint32_t lo=0; for(int i=0;i<s;++i) lo+=f[i];
+        rc.encode(lo, lo+f[s], tot);
+        f[s]+=32; tot+=32;
+        if(tot>60000){ tot=0; for(int i=0;i<256;++i){ f[i]=(uint16_t)((f[i]>>1)|1); tot+=f[i]; } }
+    }
+};
+static std::vector<uint8_t> range_encode(const uint8_t* src, size_t n, unsigned period=1){
+    if(!n) return {};
+    if(period<1) period=1;
+    std::vector<Model256> m(period);
+    RC rc; rc.out.reserve(n/2+64);
+    for(size_t i=0;i<n;++i) m[i%period].encode(rc, src[i]);
+    rc.flush();
+    return std::move(rc.out);
+}
+
+
+// ============================ DECODERS ======================================
+// Inverses of the three coders above. Written for the CAPSULE decoder: the
+// archive was previously unreadable, so losslessness could only be checked
+// through the raw dumped streams, never through the entropy layer.
+
+struct InBuf { IByteIn vt; const uint8_t* cur; const uint8_t* lim; };
+static Byte ppmd_read(const IByteIn* p){
+    InBuf* b = (InBuf*)((char*)p - offsetof(InBuf, vt));
+    return b->cur < b->lim ? *b->cur++ : 0;
+}
+static std::vector<uint8_t> ppmd_decode(const uint8_t* src, size_t n, size_t rawlen){
+    if(n<5 || !rawlen) return {};
+    const unsigned order = src[0];
+    const uint32_t memSize = (uint32_t)src[1] | ((uint32_t)src[2]<<8)
+                           | ((uint32_t)src[3]<<16) | ((uint32_t)src[4]<<24);
+    InBuf ib; ib.vt.Read = ppmd_read; ib.cur = src+5; ib.lim = src+n;
+    CPpmd7 ppmd; Ppmd7_Construct(&ppmd);
+    if(!Ppmd7_Alloc(&ppmd, memSize, &g_Alloc)) return {};
+    ppmd.rc.dec.Stream = &ib.vt;
+    if(!Ppmd7z_RangeDec_Init(&ppmd.rc.dec)){ Ppmd7_Free(&ppmd,&g_Alloc); return {}; }
+    Ppmd7_Init(&ppmd, order);
+    std::vector<uint8_t> out(rawlen);
+    for(size_t i=0;i<rawlen;++i){
+        int sym = Ppmd7z_DecodeSymbol(&ppmd);
+        if(sym < 0){ Ppmd7_Free(&ppmd,&g_Alloc); return {}; }
+        out[i] = (uint8_t)sym;
+    }
+    Ppmd7_Free(&ppmd,&g_Alloc);
+    return out;
+}
+
+static std::vector<uint8_t> fse_decode(const uint8_t* src, size_t n, size_t rawlen){
+    if(!n || !rawlen) return {};
+    // FSE_compress returns 1 for RLE -- a single repeated symbol, emitted as one
+    // byte. fse_encode accepts that (its own comment says "1 = RLE" but only
+    // excludes 0 and r>=n), and FSE_decompress cannot read it: it expects a
+    // table header. A constant stream therefore encoded fine and decoded to
+    // nothing. Measured: orig2uid_flags, 57,563 zero bytes -> 1 byte -> decode
+    // failure -> zero reads reconstructed.
+    if(n==1){ return std::vector<uint8_t>(rawlen, src[0]); }
+    std::vector<uint8_t> out(rawlen);
+    size_t r = FSE_decompress(out.data(), rawlen, src, n);
+    if(FSE_isError(r) || r!=rawlen) return {};
+    return out;
+}
+
+// Mirror of RC/Model256. The decoder must update its models in exactly the same
+// order and by the same increments as the encoder, so the frequency tables stay
+// in lockstep -- that is what makes an adaptive coder invertible.
+struct RCD {
+    const uint8_t* p; const uint8_t* lim;
+    uint32_t range=0xFFFFFFFFu, code=0;
+    void init(){ p++; for(int i=0;i<4;++i) code=(code<<8)|(p<lim?*p++:0); }
+    uint32_t getFreq(uint32_t tot){ range/=tot; uint32_t v=code/range; return v>=tot?tot-1:v; }
+    void decode(uint32_t lo,uint32_t hi){
+        code-=lo*range; range*=(hi-lo);
+        while(range<(1u<<24)){ code=(code<<8)|(p<lim?*p++:0); range<<=8; }
+    }
+};
+struct Model256D {
+    uint16_t f[256]; uint32_t tot;
+    Model256D(){ for(int i=0;i<256;++i) f[i]=1; tot=256; }
+    uint8_t decode(RCD& rc){
+        uint32_t target=rc.getFreq(tot), lo=0; int s=0;
+        for(; s<256; ++s){ if(lo+f[s]>target) break; lo+=f[s]; }
+        if(s==256) s=255;
+        rc.decode(lo, lo+f[s]);
+        f[s]+=32; tot+=32;
+        if(tot>60000){ tot=0; for(int i=0;i<256;++i){ f[i]=(uint16_t)((f[i]>>1)|1); tot+=f[i]; } }
+        return (uint8_t)s;
+    }
+};
+static std::vector<uint8_t> range_decode(const uint8_t* src, size_t n, size_t rawlen,
+                                         unsigned period=1){
+    if(!n || !rawlen) return {};
+    if(period<1) period=1;
+    std::vector<Model256D> m(period);
+    RCD rc; rc.p=src; rc.lim=src+n; rc.init();
+    std::vector<uint8_t> out(rawlen);
+    for(size_t i=0;i<rawlen;++i) out[i]=m[i%period].decode(rc);
+    return out;
+}
+
+} // namespace pgc

@@ -1,1 +1,0 @@
-../../scripts/run_multiallelic_bench_capsule.sh

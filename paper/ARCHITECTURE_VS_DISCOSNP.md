@@ -1,1 +1,0 @@
-../docs/ARCHITECTURE_VS_DISCOSNP.md
