@@ -16,7 +16,7 @@ gcc -O3 -I"$HERE/thirdparty/htscodecs" -c "$HERE/thirdparty/htscodecs/fqzcomp_qu
 gcc -O3 -I"$HERE/thirdparty/htscodecs" -c "$HERE/thirdparty/htscodecs/utils.c"        -o "$HTSOBJ/utils.o"
 
 g++ -O3 -march=native -std=c++17 -pthread -fopenmp -o "$OUT" \
-    "$HERE/stages/106_inprocess.cpp" \
+    "$HERE/src/encoder.cpp" \
     "$HERE/thirdparty/ppmd/Ppmd7.c" "$HERE/thirdparty/ppmd/Ppmd7Enc.c" \
     "$HERE/thirdparty/ppmd/Ppmd7Dec.c" "$HERE/thirdparty/ppmd/Alloc.c" \
     "$HERE/thirdparty/ppmd/CpuArch.c" \

@@ -1,1 +1,0 @@
-../../docs/COMPACT_HEADROOM.md

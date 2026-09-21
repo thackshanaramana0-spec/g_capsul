@@ -1,1 +1,0 @@
-../../docs/LOCALITY_TENSION.md

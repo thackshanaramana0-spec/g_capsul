@@ -1,1 +1,0 @@
-../../docs/TABLE_MAP.md

@@ -1,3 +1,8 @@
+# Working history, paper drafts, and internal notes -- kept on this machine
+# only, never pushed. The root of this repo is the clean, code+results+docs
+# view; everything else this project produced during development lives here.
+local/
+
 # Compiled encoders (regenerate: scripts/build106.sh)
 best*
 *.o
@@ -37,7 +42,6 @@ out.arcs2
 # The CSVs and logs are what belong in the repo, not the artefacts themselves.
 results/sanity_*/
 results/benchmark_1_*/
-results/claim1/
 *.capsule
 *.spring
 *.genozip
