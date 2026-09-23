@@ -1,28 +1,28 @@
 ---
 Date: 2026-09-19
 Title: Claim 1 — Code-to-Table Mapping and Result File Index
-Purpose: Exact stage/function references in stages/106_inprocess.cpp and
+Purpose: Exact stage/function references in src/encoder.cpp and
   the shared coder headers for T1.1/T1.2, and the exact source file for
   every number cited in this folder. Traced directly from the actual repo
   this session.
 When to refer to this file: Verifying a claim in another file of this
   folder against the real code; before citing any number, to find its
   exact source file.
-Keywords: code mapping, 106_inprocess.cpp, coders_inproc.h, seqpar_core.h,
+Keywords: code mapping, encoder.cpp, coders_inproc.h, seqpar_core.h,
   pipeline stages, selector, benchmark results, file index, silent data
   loss bugs
 ---
 
 # Code-to-table mapping
 
-Line/stage numbers from `stages/106_inprocess.cpp` (4,961 lines),
+Line/stage numbers from `src/encoder.cpp` (4,961 lines),
 `include/coders_inproc.h` (931 lines), `include/coders_pgrc.h` (213 lines),
 `include/seqpar_core.h` (357 lines), as present in the repo this session.
 Traced by targeted grep/read, not a full line-by-line read of all 6,462
 combined lines — sufficient to ground the mechanism claims in
 `mechanism_insight_claim1.md`, not a claim to have read every line.
 
-## Pipeline stages, `stages/106_inprocess.cpp` — confirmed via `phase(...)` markers
+## Pipeline stages, `src/encoder.cpp` — confirmed via `phase(...)` markers
 
 1. **`greedy-sweep`** (line 2331) — the pseudogenome construction stage:
    suffix-prefix overlap chaining. This is the stage whose cost is the
@@ -76,7 +76,7 @@ default one.
 
 | Number / claim | File |
 |---|---|
-| T1.1 (archive size, all rows, aggregate) | `benchmark/results/claim1_T1.1_T1.2.csv` |
+| T1.1 (archive size, all rows, aggregate) | `results/claim1/claim1_T1.1_T1.2.csv` |
 | T1.2 (wall time, all rows) | same CSV, `compress_s`/`decompress_s` columns |
 | 19/19, −6.03%, −43.26%, 57/57 LOSSLESS headline | `CLAUDE.md` (top section); independently re-derived this session from the CSV above |
 | PgRC2 sequence-only comparison (+1.88%, 6 wins/1 loss, ~1.7x/2.5x) | `CLAUDE.md` lines ~248-268, citing `refer_paper_docs/CLAIM1_FINAL_VERDICT.md` §42 and `refer_paper_docs/FINAL_HEADROOM.md` |

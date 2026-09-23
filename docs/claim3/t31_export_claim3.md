@@ -31,7 +31,7 @@ separately when claimed at all).
 
 ## Speed — locked, dominant, unconditional
 
-Source: `benchmark/results/claim3_T3.1_T3.2_T3.3.csv`, table=T3.1 rows.
+Source: `results/claim3/claim3_T3.1_T3.2_T3.3.csv`, table=T3.1 rows.
 
 | Dataset | Ours (s) | SPAdes (s) | Speedup |
 |---|---|---|---|

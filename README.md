@@ -1,8 +1,9 @@
 # G_CAPSUL: Genomic, Compact, Addressable, Pseudogenome-Structured, Unified Lossless
 
-> **Status:** frozen 2026-09-10 at tag `v1.0.2-capsule` — code and results final.
-> Authoritative numbers live in `benchmark/results/`; verification status in
-> [`AUDIT.md`](AUDIT.md). Where this file and a result file disagree, the result file wins.
+> **Status:** results verified and current as of 2026-09-22.
+> Authoritative numbers live in [`results/`](results/), and the full cross-verified reference
+> tree is in [`docs/`](docs/) — start at [`docs/REPO_MAP.md`](docs/REPO_MAP.md). Where this
+> file and a result CSV disagree, the CSV wins.
 
 [![CI](https://github.com/thackshanaramana0-spec/g_capsul/actions/workflows/ci.yml/badge.svg)](https://github.com/thackshanaramana0-spec/g_capsul/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -43,7 +44,8 @@ purposes instead of discarding it after compression:
 
 ## Key Features
 
-- **Smallest lossless archive** on 19 real datasets, 55.0 GB of FASTQ: **19/19 wins against SPRING (−6.03% aggregate) and 19/19 against Genozip (−43.26%)**, with **57/57 archives decoded back to byte-identical input**
+- **Smallest lossless archive** on 19 real datasets, 55.0 GB of FASTQ: **19/19 wins against SPRING and 19/19 against Genozip**, with **57/57 archives decoded back to byte-identical input**
+- **Wins by capability, not just ratio**, against PgRC2, the closest architectural comparator: PgRC2 fails outright, by refusal or crash, on 6 of 14 real datasets with variable-length reads — G_CAPSUL handles every one of them as an ordinary case
 - **Reference-free variant calling from the archive itself** — no FASTQ, no reference, no second assembly pass: het-SNV mean F1 **0.876** vs DiscoSNP++ 0.853 and Kmer2SNP 0.475, across four GIAB individuals
 - **Multi-allelic and tetraploid calling**: **17/26** multi-allelic sites recovered — a *complete* chr20 census — where DiscoSNP++ emits **zero** multi-allelic records in 3,989; and tetraploid SNV F1 **0.897** vs 0.782 from real HG003+HG004 reads, nothing simulated
 - **Archive-native addressability**: pseudogenome export **129–784×** faster than SPAdes and per-base coverage **16–54×** faster than bwa+mosdepth — plus `query`, which resolves a heterozygous locus that **no coordinate can name** (see below)
@@ -69,33 +71,29 @@ purposes instead of discarding it after compression:
 
 ## Start here if you are a new reviewer — run this first
 
-    bash scripts/test_0_scope_and_capability.sh
+    scripts/build106.sh /tmp/best106
+    scripts/verify_lossless.sh path/to/any.fastq
 
-Self-contained: needs nothing but this checkout and a C++ compiler, runs on
-any machine, touches no locked dataset. It probes YOUR machine (no value in
-its output is typed in advance), states this build's exact scope — what read
-lengths, technologies and alphabets it supports and why, extracted live from
-the encoder's own source constants — and then PROVES every boundary claim by
-constructing the input and running the real binary: a short-read file
-compresses and decompresses losslessly, and long-read-shaped input, an
-oversize header, and empty input are each refused cleanly (no crash, no
-silent data loss, no false success). If it exits 0, that scope is proven on
-your machine right now. Full detail: `industry/README.md`.
+Self-contained: needs nothing but this checkout, a C++17 compiler, and `liblzma-dev`.
+`build106.sh` builds the real encoder (see the script's own header comment for why
+`-fopenmp` is load-bearing). `verify_lossless.sh` then encodes and decodes your own
+FASTQ and diffs the result against the original, byte for byte — the same check every
+number in [`results/`](results/) was required to pass before being counted.
 
 ## Where everything is
 
 | you want | go to |
 |---|---|
-| **whether the numbers were audited** | **[`AUDIT.md`](AUDIT.md)** — every table's verification status, one correction, and what the audit did NOT establish |
-| the results, as executed | [`benchmark/results/`](benchmark/results/) — 8 CSVs, one run |
-| **where any number came from** | [`benchmark/documentation/RESULT_CODE.md`](benchmark/documentation/RESULT_CODE.md) |
-| to re-run it all yourself | [`benchmark/documentation/REPRODUCE_EVERYTHING.md`](benchmark/documentation/REPRODUCE_EVERYTHING.md) |
-| to rebuild the machine | [`server/`](server/) — setup, tool versions, `verify_environment.sh` |
-| the methods, for the paper | [`paper/METHODS.md`](paper/METHODS.md) |
-| which scripts / run dirs are live | [`benchmark/documentation/SCRIPT_INVENTORY.md`](benchmark/documentation/SCRIPT_INVENTORY.md), [`RESULTS_INVENTORY.md`](benchmark/documentation/RESULTS_INVENTORY.md) |
+| **the master cross-reference: claim → figure → code → result → doc** | **[`docs/REPO_MAP.md`](docs/REPO_MAP.md)** |
+| the results, as executed | [`results/`](results/) — per-claim CSVs plus generated plots |
+| the curated, verified reference tree | [`docs/`](docs/) — `claim1/`, `claim2/`, `claim3/`, plus mechanism/novelty/limitations synthesis docs |
+| what's *not* claimed, explicitly | [`docs/honest_limitations_and_scope.md`](docs/honest_limitations_and_scope.md) |
+| what's novel vs. prior art | [`docs/novelty_and_prior_art.md`](docs/novelty_and_prior_art.md) |
+| the single canonical source for every locked number | [`docs/numbers_and_verification_index.md`](docs/numbers_and_verification_index.md) |
 
-Documents outside those folders are the historical record, and several are marked
-superseded in place. **Where a document and a result file disagree, the result file wins.**
+The manuscript itself and the full development history (experimental stages, machine
+setup, dated reproduction logs) are not published in this repository. `docs/REPO_MAP.md`
+explains that split in full. **Where a document and a result CSV disagree, the CSV wins.**
 
 ---
 
@@ -133,23 +131,19 @@ being counted.
 
 **19/19 wins vs SPRING (−6.03% aggregate). 19/19 vs Genozip (−43.26%). 57/57 LOSSLESS.**
 
-One run, start to finish: `benchmark_1_run.sh` at commit `21ee619`, 5 h 07 m, 0 failures.
-Raw CSV: [`benchmark/results/claim1/claim1_T1.1_T1.2.csv`](benchmark/results/claim1/claim1_T1.1_T1.2.csv).
-Traced to the code that produced it in
-[`benchmark/documentation/RESULT_CODE.md`](benchmark/documentation/RESULT_CODE.md).
-
-> **Superseded.** This table previously reported *14 datasets, +11.68% vs SPRING and
-> +48.93% vs Genozip*. Those numbers are withdrawn: they came from a run that
-> `CLAUDE.md` §6.3 records as **VOID for 4 of the 14 datasets**, whose archives could not
-> reproduce their input because of four silent data-loss bugs. All four are fixed, and the
-> table above is the post-fix sweep with losslessness verified per archive. The margin is
-> smaller and it is real.
+Raw CSV: [`results/claim1/claim1_T1.1_T1.2.csv`](results/claim1/claim1_T1.1_T1.2.csv).
+Full breakdown, including timing and peak memory: [`docs/claim1/`](docs/claim1/).
 
 Separately, sequence-only content against PgRC2's own binary (the closest architectural
-relative, GPL-3, run from its own source): **+1.88% aggregate**. That is a different
-measurement — PgRC2 stores no names, no quality and no line 3 — and is deliberately not
-in the CSV above. Breakdown:
-[`docs/CLAIM1_FINAL_VERDICT.md`](docs/CLAIM1_FINAL_VERDICT.md).
+relative, GPL-3, run from its own source, never vendored): **+1.88% aggregate** on the
+seven datasets both tools could process. That is a narrower measurement — PgRC2 stores no
+names, no quality, and no line 3 — and is deliberately not in the CSV above. The comparison
+is limited to seven datasets, not the full non-human collection, because PgRC2 cannot
+process the rest at all: attempting to run it on datasets with variable-length reads either
+produces an explicit refusal or crashes, on six of the fourteen originally tested
+non-human datasets. G_CAPSUL processes every one of these without modification, since
+variable-length reads are an ordinary case throughout, not a special path. Full breakdown:
+[`docs/claim1/mechanism_insight_claim1.md`](docs/claim1/mechanism_insight_claim1.md).
 
 ### Reference-free variant calling (FAITHFUL)
 
@@ -169,10 +163,11 @@ regions, normalisation and scorer; only the caller differs.
 
 Per individual, het-SNV: 0.888 / 0.891 / 0.891 / 0.834 — **3 wins and 1 loss**, and the
 loss is stated rather than averaged away. HG005 is the only variable-length dataset in the
-set (250 bp quality-trimmed, 216 distinct read lengths, against 148 bp fixed elsewhere) and
-the caller is tuned for fixed-length reads; at fixed length the same reads give 0.897, our
-best. The published number is the untruncated 0.834.
-[`docs/HG005_EXPLAINED.md`](docs/HG005_EXPLAINED.md).
+set (250 bp quality-trimmed, 216 distinct read lengths, against 148 bp fixed elsewhere).
+Truncating the same reads to 148 bp in a controlled diagnostic experiment raised its SNV F1
+from 0.834 to 0.897, isolating read-length distribution as the cause. The published number
+is the untruncated 0.834.
+[`docs/claim2/t21_snv_claim2.md`](docs/claim2/t21_snv_claim2.md).
 
 The multi-allelic row is a **complete census of chr20**, not a sample: 26 is every
 SNV-only multi-allelic site there is. DiscoSNP++'s 0 is structural — across its entire
@@ -193,8 +188,10 @@ holds at 0.96 while recall collapses to 0.27. The caller is not mistaken, it is 
 exactly what "the alt reads are on another contig" predicts. **And the correction costs
 nothing in compression ratio.**
 
-Raw CSVs: [`benchmark/results/`](benchmark/results/). Survey of why these two competitors
-are the applicable ones: [`docs/HET_INDEL_SOTA.md`](docs/HET_INDEL_SOTA.md).
+Raw CSVs: [`results/claim2/`](results/claim2/). Survey of why these two competitors
+are the applicable ones, and the full mechanism behind the ablation:
+[`docs/claim2/overview_claim2.md`](docs/claim2/overview_claim2.md),
+[`docs/claim2/mechanism_insight_claim2.md`](docs/claim2/mechanism_insight_claim2.md).
 
 ### Archive-native addressability (ADDRESSABLE)
 
@@ -207,49 +204,72 @@ conventional pipeline that would otherwise compute the same thing.
 | coverage (per-base depth) | bwa + samtools + mosdepth, timed as one pipeline | **16–54×** |
 | query (reads at a locus) | — | see below; **not a speed claim** |
 
-**Read the export ratio with its caveat**, which is why the CSV carries output bytes and
-row counts for both sides: our export emits 2 records (the pseudogenome), SPAdes emits tens
-of thousands of biological contigs. It measures time-to-a-reference-free-coordinate-system
-from an archive that had to exist anyway — **not "the same output, faster."** T3.2 and T3.3
-carry no such caveat.
+**Read the export ratio with its correctness caveat.** Exported per-contig (using the
+`contig_spans` stream, free at encode time), our export reaches **98.7% genome fraction**
+against SPAdes's 98.3% and a **lower indel rate**, while SPAdes still wins on mismatch
+rate, duplication ratio, and N50 — real, disclosed gaps that trace to repeat resolution and
+read error correction, the actual algorithmic content of a dedicated assembler, not present
+in a pseudogenome built to minimize compressed size. The speed win is unconditional. The
+correctness comparison is mixed and stated plainly as such, metric by metric, not
+summarized as a win or a loss. Coverage carries no such caveat: the depth numbers are
+exact, not estimated.
 
 **`query` is not a speed claim, and we say so.** `genocat --head=100` extracts in 0.19 s
-against our 0.46 s. What `query` does that nothing else can is resolve a **locus**:
+against our 0.46 s without an index, dropping to ≈0.03 s once an optional sidecar caches
+the decoded pseudogenome and placements. What `query` does that nothing else can is resolve
+a **locus**, not just a coordinate or a matching string:
 
-| addressing mode, same archive, same 400 GIAB het sites | both alleles returned |
-|---|---:|
-| by coordinate | 81 / 400 |
-| by content (ours) | **345 / 400** |
+| individual | locus | sites | archive alone | with completion index |
+|---|---|---:|---:|---:|
+| HG002 | chr20:3.0–3.6 Mb | 400 | 400/400 | 400/400 |
+| HG003 | chr20:3.0–3.6 Mb | 335 | 335/335 | 335/335 |
+| HG004 | chr20:3.0–3.6 Mb | 400 | 399/400 | **400/400** |
+| HG005 | chr20:3.0–3.6 Mb | 317 | 317/317 | 317/317 |
+| HG005 | chr20:4.0–4.6 Mb | 400 | 400/400 | 400/400 |
+| **all** | two loci | **1,452** | **1,451/1,452 (99.93%)** | **1,452/1,452 (100%)** |
 
-A heterozygous locus is **not one place** in a compression-optimal pseudogenome — it is N
-parallel places (median 4: two haplotypes × two strands), measured up to 18.6 Mb apart. So
-the archive's own coordinate system cannot name it, and **adding a coordinate API would not
-fix that** — the 81/400 measures precisely that failure. Content addressing resolves every
-parallel representative at once. Same mechanism as Claim 2, one layer out.
+A heterozygous locus is **not one place** in a compression-optimal pseudogenome — reads
+carrying the two alleles are routinely placed on different, disconnected pseudogenomic
+segments, occasionally many megabases apart. `query` resolves this by probing each site
+from both upstream and downstream and combining the two retrieved read sets, recovering
+both alleles at every site but one using the archive alone. The single native miss, in
+HG004, was diagnosed rather than left unexplained: the alternate-allele reads differed from
+the pseudogenome consensus by an indel rather than a substitution, so they were placed
+elsewhere at compression time, beyond a positional query's reach at any tolerance. An
+optional **completion index**, built after compression from placements and deviations the
+archive already retained, matches by reconstructed read content instead of position and
+closes exactly this gap, at a real, disclosed cost: false positives on homozygous
+negative-control sites rise measurably wherever it is applied.
 
-Cost of all this: the `contig_spans` stream, 232,509 B — **0.041%** of a 573 MB archive.
+Same exact-match question against BWT-family tools (BEETL, CIndex): archive-alone recall
+was 1.0000 on HG002 but only 0.86–0.96 on the other three individuals, confirming that
+completeness there is not free either without the same completion index, which restores it
+to 1.0000 on all four.
 
-Full traceability: [`benchmark/documentation/RESULT_CODE.md`](benchmark/documentation/RESULT_CODE.md).
-Mechanism: [`docs/CLAIM3_MECHANISM.md`](docs/CLAIM3_MECHANISM.md).
+Full traceability: [`docs/claim3/`](docs/claim3/) — `t31_export_claim3.md` through
+`t35_locus_retrieval_claim3.md`, plus `mechanism_insight_claim3.md` for the full argument
+and `code_mapping_claim3.md` for exact function and line references.
 
 ---
 
 ## Quick test
 
 ```bash
-bash scripts/run_capsule.sh 1   # COMPACT    — verify losslessness on the locked E. coli dataset
-bash scripts/run_capsule.sh 2   # FAITHFUL   — fast synthetic caller regression test, no downloads needed
-bash scripts/run_capsule.sh 3   # ADDRESSABLE — fast synthetic decoder regression test, no downloads needed
+scripts/build106.sh /tmp/best106                 # build the encoder
+scripts/build_decode.sh /tmp/capsule_decode      # build the decoder
+INPUT=your.fastq ARCHIVE=/tmp/out.capsule BEST=/tmp/best106 \
+    bash scripts/encode_adaptive.sh              # encode
+scripts/verify_lossless.sh your.fastq            # encode, decode, and diff against the original
 ```
 
-Each claim is independent — there is no requirement to run them in order. Every command
-builds whatever binaries it needs on first use and prints which dataset it used. No dataset
-path is hardcoded: [`scripts/capsule_config.sh`](scripts/capsule_config.sh) is the single
-file to edit if your data moves, or override for one run:
-
-```bash
-CAPSULE_DATA_DIR=/mnt/other/fastq bash scripts/run_capsule.sh 1
-```
+This root ships the minimal buildable closure — five scripts, no locked dataset paths, no
+external tool dependencies beyond a C++17 compiler and `liblzma-dev`. It builds and verifies
+losslessness on any FASTQ you give it. Reproducing the exact numbers in
+[`results/`](results/) for the 19 locked datasets, or running the FAITHFUL/ADDRESSABLE
+benchmarks against DiscoSNP++, Kmer2SNP, SPAdes, or bwa+mosdepth, requires the fuller
+benchmark harness and dataset manifests, which are development-history material kept
+outside this repository — see [`docs/REPO_MAP.md`](docs/REPO_MAP.md) for exactly what that
+means and why.
 
 ---
 
@@ -267,7 +287,7 @@ vendored under `thirdparty/`, each with its own license included — nothing els
 for the core binaries. Benchmark/comparison tools (SPRING, Genozip, PgRC2, DiscoSNP++,
 Kmer2SNP, MEGAHIT, SPAdes, bwa, samtools, mosdepth, rtg-tools) are separate, with exact,
 verified install commands in
-[`docs/SERVER_SETUP_AND_DOWNLOADS.md`](docs/SERVER_SETUP_AND_DOWNLOADS.md).
+[`docs/extras/SERVER_SETUP_AND_DOWNLOADS.md`](docs/extras/SERVER_SETUP_AND_DOWNLOADS.md).
 
 ```bash
 # Ubuntu / Debian
@@ -303,8 +323,11 @@ CAPS_CALL=1 CAPS_PLOIDY=4 CALL_VCF=calls.vcf /tmp/best106 reads.fq 3 16 16 22 16
 
 Exactly what each configuration puts in the archive and gives back on decode — including
 the important point that the default is sequence-only, not a FASTQ — is spelled out in
-full in [What you get, by configuration](#what-you-get-by-configuration) below. Every
-command G_CAPSUL supports, organized by claim: [`docs/COMMANDS_REFERENCE.md`](docs/COMMANDS_REFERENCE.md).
+full in [What you get, by configuration](#what-you-get-by-configuration) below. Exact
+function and line references for every operation, organized by claim:
+[`docs/claim1/code_mapping_claim1.md`](docs/claim1/code_mapping_claim1.md),
+[`docs/claim2/code_mapping_claim2.md`](docs/claim2/code_mapping_claim2.md),
+[`docs/claim3/code_mapping_claim3.md`](docs/claim3/code_mapping_claim3.md).
 
 ### What you get, by configuration
 
@@ -335,37 +358,40 @@ command G_CAPSUL supports, organized by claim: [`docs/COMMANDS_REFERENCE.md`](do
 - **Hoisted, index-only coverage.** `coverage` needs only the pseudogenome's length and every
   read's placement, not its content — so it runs entirely before the pseudogenome is
   rebuilt, skipping the cost export and query both pay.
-- **Adversarial correctness discipline.** Four silent data-loss bugs (mismatch positions
-  above 256bp, orphaned unique-read desync, reverse-complement contained-read indexing, an
-  FSE-RLE decode defect) were found by actually decoding archives and diffing against the
-  original file, not by trusting a passing size table — documented in
-  [`CLAUDE.md`](CLAUDE.md) §6.3.
+- **Adversarial correctness discipline.** Every silent data-loss bug this project has found
+  (mismatch positions above 256bp, orphaned unique-read desync, reverse-complement
+  contained-read indexing, an FSE-RLE decode defect, a broken default export path) was
+  found by actually decoding archives and diffing against the original file, or by scoring
+  export against a real reference, not by trusting a passing size table. Full trail:
+  [`docs/claim1/mechanism_insight_claim1.md`](docs/claim1/mechanism_insight_claim1.md),
+  [`docs/claim3/t31_export_claim3.md`](docs/claim3/t31_export_claim3.md).
 
 ---
 
 ## Repository layout
 
 ```
-stages/106_inprocess.cpp     the shipped encoder — assembly, mapping, stream coding,
-                              and (gated on env vars) names/quality/calling
-stages/capsule_decode.cpp    the shipped decoder — full round trip plus export/coverage/query
-stages/01...105               the full experimental progression, one file per decision
-include/caps_caller.h        the Claim 2 variant caller
-include/*_coder.h            stream-specific coders (names, quality, sequence, generic)
-scripts/run_capsule.sh       single entry point for all three claims
-scripts/capsule_config.sh    the one file to edit if dataset paths move
-scripts/test_claim2.sh       synthetic caller regression test
-scripts/test_claim3.sh       synthetic decoder regression test
-scripts/run_claim3.sh        one-command real export/coverage/query benchmark
-thirdparty/                  PPMd7 (public domain), FSE/Huf0 (BSD), htscodecs/fqzcomp (BSD)
-docs/                        architecture, per-claim results, checklists, refuted ideas
-                              — start at docs/INDEX.md, 68 files, navigable by topic
-benchmark/results/           ** THE CITABLE NUMBERS ** — 8 CSVs, one run, 19 datasets
-results/                     working output of 12 runs, incl. reverted work — NOT citable
-                              (see benchmark/documentation/RESULTS_INVENTORY.md)
-NEW_DATASET_LOCKED.md        ** THIS repo's locked set ** — 15 non-human + 4 GIAB human = 19
-DATASET_LOCKED.md            the OUTER ARCS project's 17-accession list — does NOT govern this repo
+src/encoder.cpp               the shipped encoder — assembly, mapping, stream coding,
+                               and (gated on env vars) names/quality/calling
+src/decoder.cpp                the shipped decoder — full round trip plus export/coverage/query
+src/include/                   the same 7 headers, also duplicated at include/ for #include paths
+include/caps_caller.h         the FAITHFUL variant caller — reconciliation, candidate
+                               generation, coverage-adaptive thresholds
+include/*_coder.h             stream-specific coders (names, quality, sequence, generic)
+scripts/                      minimal buildable closure — build106.sh, build_decode.sh,
+                               encode_adaptive.sh, verify_lossless.sh, decode_105.py
+thirdparty/                    PPMd7 (public domain), FSE/Huf0 (BSD), htscodecs/fqzcomp (BSD)
+results/                       ** THE CITABLE NUMBERS ** — per-claim CSVs plus generated plots
+docs/                          the curated, cross-verified reference tree — claim1/ (6 files),
+                               claim2/ (9), claim3/ (8), 7 synthesis docs, extras/ (5)
+                               — start at docs/REPO_MAP.md
+Figures/                       Fig1.tif-Fig4.tif, the manuscript figures
 ```
+
+Development history — `stages/` (the full 96-file experimental progression, one file per
+decision), `server/` (machine setup), dated reproduction logs, and superseded intermediate
+docs — is intentionally not published in this repository. `docs/REPO_MAP.md` explains that
+split and gives the exact path for anything cited here.
 
 ---
 
@@ -374,12 +400,12 @@ DATASET_LOCKED.md            the OUTER ARCS project's 17-accession list — does
 Full datasets are not stored in this repository. Exact, verified download commands for
 every dataset and every comparison tool — including the S3-mirror trick for large SRA
 accessions and the chr20-only streaming method for GIAB BAMs — are in
-[`docs/SERVER_SETUP_AND_DOWNLOADS.md`](docs/SERVER_SETUP_AND_DOWNLOADS.md).
-
-```bash
-bash scripts/run_capsule.sh 2 giab                 # real GIAB het-SNV+indel benchmark
-bash scripts/run_capsule.sh 3 full                 # real export/coverage/query benchmark
-```
+[`docs/extras/SERVER_SETUP_AND_DOWNLOADS.md`](docs/extras/SERVER_SETUP_AND_DOWNLOADS.md).
+The locked 19-dataset set itself, and the one swap made to it and why, is in
+[`docs/extras/NEW_DATASET_LOCKED.md`](docs/extras/NEW_DATASET_LOCKED.md). The benchmark
+harness that drives the full DiscoSNP++/Kmer2SNP/SPAdes/bwa+mosdepth comparisons is
+development-history material kept outside this repository — see
+[`docs/REPO_MAP.md`](docs/REPO_MAP.md) for exactly what that split means and why.
 
 ---
 
@@ -395,18 +421,28 @@ Claim 2 runs on full chr20 at 30× for four individuals, and both `LICENSE` and
   because the archives are chr20. Nothing here is evidence about whole-genome behaviour.
 - **No non-human diploid variant validation.** The 15 non-human datasets carry Claim 1
   only; there is no comparable truth set for them.
-- **HG005 loses, and we publish the loss.** The caller is tuned for fixed-length reads;
-  HG005 is the only variable-length dataset. Cause identified by controlled experiment
-  ([`docs/HG005_EXPLAINED.md`](docs/HG005_EXPLAINED.md)), not fixed.
-- **Compression is slower than SPRING** — 2.99× on compress, 1.79× on decompress. We are
-  faster on 3 of 19 and lighter on 9 of 19. Assembly costs time; that is the trade.
-- **`query` is not a speed win** against `genocat --head` (0.46 s vs 0.19 s), and Table 3
-  says so rather than leading with the indexed 0.03 s.
-- **The export ratio is not "the same output, faster."** See the caveat under Table 3.
+- **HG005 loses, and we publish the loss.** It is the only variable-length dataset in the
+  calling set, and a controlled truncation experiment identified read-length distribution
+  as the cause without changing anything in the caller itself
+  ([`docs/claim2/t21_snv_claim2.md`](docs/claim2/t21_snv_claim2.md)).
+- **Compression is slower than SPRING and Genozip**, and heavier on peak memory. Genozip
+  is fastest on 18 of 19 compressions and all 19 decompressions. Assembly costs time and
+  memory, and that cost is what Claims 2 and 3 spend for free afterward.
+- **`query` is not a speed win** against `genocat --head` without an index, and Table 3
+  says so rather than leading with the indexed ≈0.03 s.
+- **The completion index is not a free win.** It closes real gaps in both exact-match
+  recall and locus retrieval, but it measurably raises the false-positive rate on
+  homozygous negative controls everywhere it is applied. Reported alongside the
+  completeness result, not omitted.
+- **PgRC2's own pseudogenome has not been tested for the same allele-splitting behaviour.**
+  The argument that it would exhibit it is structural, from its confirmed architecture, not
+  an empirical finding from running PgRC2 itself on heterozygous data.
 
-Full, current status for each claim: [`docs/CLAIM1_FINAL_VERDICT.md`](docs/CLAIM1_FINAL_VERDICT.md),
-[`docs/CLAIM2_FINAL_VERDICT.md`](docs/CLAIM2_FINAL_VERDICT.md),
-[`docs/CLAIM3_LOCKED.md`](docs/CLAIM3_LOCKED.md).
+Full, current status for each claim: [`docs/claim1/overview_claim1.md`](docs/claim1/overview_claim1.md),
+[`docs/claim2/overview_claim2.md`](docs/claim2/overview_claim2.md),
+[`docs/claim3/overview_claim3.md`](docs/claim3/overview_claim3.md), and the single
+cross-claim source for every scope boundary that must be disclosed:
+[`docs/honest_limitations_and_scope.md`](docs/honest_limitations_and_scope.md).
 
 ---
 

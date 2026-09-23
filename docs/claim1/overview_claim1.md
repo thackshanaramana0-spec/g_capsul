@@ -26,7 +26,7 @@ Every other claim in this paper is evaluated against a compressed
 representation that this claim's own discipline protects. The project's
 own standing rule, verified in this session's Claim 3 work: *"Claim 1 is
 the stronger claim and must not be spent buying Claim 3 a constant"*
-(directly quoted from code comments found this session, `capsule_decode.cpp`
+(directly quoted from code comments found this session, `decoder.cpp`
 line ~511). Concretely, this was tested and enforced, not just stated —
 when this session's own investigation drifted toward retuning the encoder
 to chase a Claim 3 (T3.1) metric, it was correctly stopped because doing so
@@ -62,7 +62,7 @@ itself evidence worth citing.
 ## Verification status of this overview and its 4 companion files
 
 The T1.1 aggregate figures above were **independently recomputed from the
-raw CSV this session** (`benchmark/results/claim1_T1.1_T1.2.csv`), not just
+raw CSV this session** (`results/claim1/claim1_T1.1_T1.2.csv`), not just
 cited from `CLAUDE.md` — summed all 19 datasets' archive bytes for each
 tool and derived the percentage margins from scratch. Result: exact match
 to `CLAUDE.md`'s stated headline (19/19 vs SPRING −6.03%, 19/19 vs Genozip
@@ -99,11 +99,11 @@ folders in `refer_paper_docs/` — re-derivation, not just cross-checking.
   the allele-splitting phenomenon Claims 2 and 3 build on; honest PgRC2
   sequence-only comparison.
 - `code_mapping_claim1.md` — exact stage/function references in
-  `stages/106_inprocess.cpp` and the shared coder headers, and exact source
+  `src/encoder.cpp` and the shared coder headers, and exact source
   file for every number cited.
 
 ## Source-of-truth rule for this whole folder
 
-Where any file here disagrees with `benchmark/results/`, the result file
+Where any file here disagrees with `results/`, the result file
 wins. This folder is navigation/synthesis, not a replacement source of
 truth.

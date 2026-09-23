@@ -20,7 +20,7 @@ Lossless whole-FASTQ archive size (sequence + names + quality + line-3 mode
 across 19 real datasets spanning seven kingdoms (human, bacteria, archaea,
 protista, fungi, virus, plantae), vs SPRING and Genozip.
 
-## Results — independently recomputed from `benchmark/results/claim1_T1.1_T1.2.csv`, not just cited
+## Results — independently recomputed from `results/claim1/claim1_T1.1_T1.2.csv`, not just cited
 
 **Aggregate (recomputed this session by summing all 19 datasets'
 `archive_bytes` per tool from the raw CSV and deriving the margin
@@ -40,7 +40,7 @@ assumed correct because it was previously stated.
 9,984,000 B (9.98 MB) vs Genozip 9,222,378 B (9.22 MB). Manuscript's T1.1
 row for this dataset: `8.68 | 9.98 | 9.22` — exact match.
 
-Full 19-row table: `benchmark/results/claim1_T1.1_T1.2.csv`, `archive_bytes`
+Full 19-row table: `results/claim1/claim1_T1.1_T1.2.csv`, `archive_bytes`
 column per tool, or the manuscript's own T1.1 table (lines 364-393).
 
 ## What "LOSSLESS" actually means here, verified — not just a column label

@@ -206,8 +206,8 @@ merely asserted:
 
 **The "one representation" claim was independently code-audited, not
 inferred from the architecture diagram**: a direct source scan (this
-session's verification, of `stages/106_inprocess.cpp`, `include/caps_caller.h`,
-and `stages/capsule_decode.cpp` — the encoder, caller, and all of
+session's verification, of `src/encoder.cpp`, `include/caps_caller.h`,
+and `src/decoder.cpp` — the encoder, caller, and all of
 export/coverage/query) found **zero `system()`/`popen()`/`exec()`/network
 calls anywhere** in any of the three. The only `fork()` calls (3, in the
 encoder) each continue running the binary's own compiled code under a

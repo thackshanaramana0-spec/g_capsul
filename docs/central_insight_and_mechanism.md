@@ -97,7 +97,7 @@ tuned to make one benchmark look good.
 ## Why Claim 3's operations are not five bolted-on features — the architectural version of the same point
 
 Verified in code this session (`refer_paper_docs/claim3/code_mapping_claim3.md`):
-T3.3 and T3.4 are literally the same function in `capsule_decode.cpp`; T3.5
+T3.3 and T3.4 are literally the same function in `decoder.cpp`; T3.5
 is not a separate code path at all, only an orchestration layer calling
 T3.4's primitive twice. This is the structural signature of one retained
 data structure being reused in increasingly demanding ways, not five

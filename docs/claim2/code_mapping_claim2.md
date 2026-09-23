@@ -2,7 +2,7 @@
 Date: 2026-09-19
 Title: Claim 2 — Code-to-Table Mapping and Result File Index
 Purpose: Exact function/line references in include/caps_caller.h and
-  stages/capsule_decode.cpp for every Claim 2 operation, and the exact
+  src/decoder.cpp for every Claim 2 operation, and the exact
   file path for every number cited anywhere in this folder. Traced
   directly from the actual repo this session.
 When to refer to this file: Verifying a claim in another file of this
@@ -16,7 +16,7 @@ Keywords: code mapping, caps_caller.h, capsule_call_from_archive,
 # Code-to-table mapping
 
 Line numbers from `include/caps_caller.h` (6,908 lines) and
-`stages/capsule_decode.cpp`, as committed. This file maps *structure and
+`src/decoder.cpp`, as committed. This file maps *structure and
 entry points*, verified directly by grep and targeted reads this session —
 it is not a claim to have read all 6,908 lines of `caps_caller.h` (not
 feasible or necessary for this purpose). If a specific line number below
@@ -25,9 +25,9 @@ mechanism should still hold even if a line moves.
 
 ## Entry point
 
-- `capsule_decode.cpp:2136-2137` — dispatch: `capsule_decode call <in.capsule>
+- `decoder.cpp:2136-2137` — dispatch: `capsule_decode call <in.capsule>
   <out.vcf> [workdir]` routes to `capsule_call_from_archive`, defined at
-  `capsule_decode.cpp:1857`.
+  `decoder.cpp:1857`.
 - This is the "Claim 2 from a STORED archive" path (comment at line 2135) —
   calling reads a `.capsule` file, not live in-memory state from
   compression, confirming the "archive-native, no FASTQ re-read" claim at
@@ -80,12 +80,12 @@ mechanism should still hold even if a line moves.
 
 | Number / claim | File |
 |---|---|
-| T2.1 (het-SNV, all rows) | `benchmark/results/claim2_T2.1_snv.csv` |
-| T2.2 (coverage sweep, all rows) | `benchmark/results/claim2_T2.2_coverage_sweep.csv` |
-| T2.3 (het-indel, all rows) | `benchmark/results/claim2_T2.3_indel.csv` |
-| T2.4 (multi-allelic, 17/26) | `benchmark/results/claim2_T2.4_multiallelic.csv` |
-| T2.5 (tetraploid, all rows) | `benchmark/results/claim2_T2.5_tetraploid.csv` |
-| Withdrawn multi-allelic numbers (5/111, 11/18, 21/26) and why | `CLAUDE.md` "Two corrections that must not be re-lost"; `benchmark/documentation/T2.4_reproduction_20260910/README.md` |
+| T2.1 (het-SNV, all rows) | `results/claim2/claim2_T2.1_snv.csv` |
+| T2.2 (coverage sweep, all rows) | `results/claim2/claim2_T2.2_coverage_sweep.csv` |
+| T2.3 (het-indel, all rows) | `results/claim2/claim2_T2.3_indel.csv` |
+| T2.4 (multi-allelic, 17/26) | `results/claim2/claim2_T2.4_multiallelic.csv` |
+| T2.5 (tetraploid, all rows) | `results/claim2/claim2_T2.5_tetraploid.csv` |
+| Withdrawn multi-allelic numbers (5/111, 11/18, 21/26) and why | Internal reproduction log, not included in this public repo; the surviving, correct number (17/26) is the one reported in this folder and in `results/claim2/claim2_T2.4_multiallelic.csv` |
 | Withdrawn het-indel numbers (0.637, 0.666) and why | `docs/CLAIM2_FINAL_VERDICT.md` (marked SUPERSEDED at top) |
 | Full session-by-session history of Claim 2's development | `docs/CLAIM2_RESULTS.md`, `docs/CLAIM2_RESULTS_V2.md`, `docs/CLAIM2_TABLES_AND_INDEL_SCAN.md`, `docs/HET_INDEL_FRESH_SCAN.md` |
 | Literature survey justifying DiscoSNP++/Kmer2SNP as comparators | `docs/HET_INDEL_SOTA.md` |

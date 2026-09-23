@@ -46,7 +46,7 @@ contain at least one stride-aligned indexed k-mer, so any read genuinely
 containing the probe is guaranteed to surface as a *candidate*. Every
 candidate is then verified by reconstructing the read in full (deviations,
 strand, N all applied) and doing a literal substring test — confirmed
-directly in the code this session (`capsule_decode.cpp` ~line 705-720). A
+directly in the code this session (`decoder.cpp` ~line 705-720). A
 genuine match cannot be missed, on any dataset, given the code is correct —
 which is a stronger guarantee than "we tested N samples and it worked."
 

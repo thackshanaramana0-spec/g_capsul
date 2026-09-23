@@ -102,7 +102,7 @@ in their own text (per this project's own stated rule: retractions stay in
 place, never deleted). **The authoritative, current sources are**:
 `CLAUDE.md` (top-level, always the first thing to read), the three
 `refer_paper_docs/CLAIM{1,2,3}_FINAL_VERDICT.md` files (each explicitly marks its own
-superseded sections), `benchmark/results/*.csv` (the actual numeric ground
+superseded sections), `results/*.csv` (the actual numeric ground
 truth), and this `refer_paper_docs/` folder tree (built and verified this
 session specifically to be the current, navigable synthesis layer). When in
 doubt about whether a `refer_paper_docs/` file is current, check whether `CLAUDE.md`

@@ -18,7 +18,7 @@ downsampled with `seqtk sample` — depth is the only variable that changes
 row to row. The 30x row is not re-run; it is the identical measurement
 carried from T2.1 (same individual, same method), not duplicated work.
 
-## Results — verified against `benchmark/results/claim2_T2.2_coverage_sweep.csv`
+## Results — verified against `results/claim2/claim2_T2.2_coverage_sweep.csv`
 
 | Depth | Reads | Archive bytes | TP | FP | FN | Precision | Recall | F1 |
 |---|---|---|---|---|---|---|---|---|

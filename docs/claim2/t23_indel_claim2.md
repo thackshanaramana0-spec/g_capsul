@@ -18,7 +18,7 @@ archive, but for **indels** instead of SNVs. Kmer2SNP is correctly marked
 `NOT_APPLICABLE_SNP_ONLY` in the CSV — it has no indel model by
 construction, not a missing measurement.
 
-## Results — verified against `benchmark/results/claim2_T2.3_indel.csv`, exact match to manuscript lines 582-610
+## Results — verified against `results/claim2/claim2_T2.3_indel.csv`, exact match to manuscript lines 582-610
 
 | Individual | Ours F1 | DiscoSNP++ F1 |
 |---|---|---|

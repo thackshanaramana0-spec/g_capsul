@@ -21,10 +21,10 @@ Keywords: architecture, container format, assembly, chaining, pseudogenome,
 
 ## Container format
 
-File: `stages/106_inprocess.cpp`, struct `Archive`. On-disk layout: an 8-byte
+File: `src/encoder.cpp`, struct `Archive`. On-disk layout: an 8-byte
 magic, a version field, pseudogenome length + main-region boundary, and then
 a sequence of self-identifying streams (name, length, payload). The decoder
-(`stages/capsule_decode.cpp`) reads every stream into a name-keyed map and
+(`src/decoder.cpp`) reads every stream into a name-keyed map and
 looks each one up by name rather than by position — adding a stream is
 additive and cannot shift any other stream's offset, a property an earlier
 positional format lacked (it broke silently once; see

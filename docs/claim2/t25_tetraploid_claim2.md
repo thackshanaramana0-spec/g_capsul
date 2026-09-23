@@ -23,7 +23,7 @@ wording, verified accurate: the reads themselves are real sequencing data
 from two real people; what's artificial is only the act of treating their
 combined reads as one 4-ploid sample).
 
-## Results — verified against `benchmark/results/claim2_T2.5_tetraploid.csv`, exact match to manuscript
+## Results — verified against `results/claim2/claim2_T2.5_tetraploid.csv`, exact match to manuscript
 
 | Class | Ours F1 | DiscoSNP++ F1 |
 |---|---|---|
