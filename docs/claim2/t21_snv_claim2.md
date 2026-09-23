@@ -19,7 +19,7 @@ introduced only after calling, to score against GIAB truth), across four
 GIAB individuals, full chr20, ~30x, against DiscoSNP++ and Kmer2SNP. Scored
 with `rtg vcfeval --squash-ploidy` against GIAB v4.2.1 confident regions.
 
-## Results — verified against `benchmark/results/claim2_T2.1_snv.csv`, exact match to manuscript
+## Results — verified against `results/claim2/claim2_T2.1_snv.csv`, exact match to manuscript
 
 | Individual | Ours F1 | DiscoSNP++ F1 | Kmer2SNP F1 |
 |---|---|---|---|

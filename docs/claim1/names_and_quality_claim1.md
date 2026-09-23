@@ -161,7 +161,7 @@ previously-measured archive size byte for byte.
 
 ## Decode order, and the one real ordering bug it had to avoid
 
-`stages/capsule_decode.cpp` rebuilds the pseudogenome first (replaying every
+`src/decoder.cpp` rebuilds the pseudogenome first (replaying every
 `mem_triples` reference, applying extension mismatches *immediately* after
 each reference's own copy — a batch decode-then-apply approach was found to
 read stale bytes whenever a later match's source fell inside an earlier

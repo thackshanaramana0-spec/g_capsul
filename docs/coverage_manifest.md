@@ -167,7 +167,7 @@ in this session excluded by construction, since the counting commands used
   — the folder's own `README.md` states explicitly: *"not documentation...
   do not cite anything in a transcript as a finding... any real result
   derived from a session here has been extracted into `docs/`, `paper/`, or
-  `benchmark/results/` in polished, verified form."* Correctly excluded on
+  `results/` in polished, verified form."* Correctly excluded on
   the project's own authority.
 - **`docs/working_notes/` (7 files)** — `ARCHIVE_CALLER_SPEED_RAM.md`,
   `ARCHIVE_PATH_TO_72S.md` (self-marked SUPERSEDED by the former),

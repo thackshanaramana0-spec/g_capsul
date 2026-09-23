@@ -26,7 +26,7 @@ session.
 
 # CLAIM 1 — COMPACT
 
-## T1.1 — Archive size, all 19 datasets (MB). Status: RE-DERIVED (aggregate) + spot cross-checked (rows). Source: `benchmark/results/claim1_T1.1_T1.2.csv`.
+## T1.1 — Archive size, all 19 datasets (MB). Status: RE-DERIVED (aggregate) + spot cross-checked (rows). Source: `results/claim1/claim1_T1.1_T1.2.csv`.
 
 | Dataset | Raw MB | CAPSULE MB | SPRING MB | Genozip MB |
 |---|---|---|---|---|
@@ -88,7 +88,7 @@ agrees cell for cell.
 
 # CLAIM 2 — FAITHFUL
 
-## T2.1 — Het-SNV calling, full counts, 4 individuals. Status: CROSS-CHECKED against manuscript. Source: `benchmark/results/claim2_T2.1_snv.csv`.
+## T2.1 — Het-SNV calling, full counts, 4 individuals. Status: CROSS-CHECKED against manuscript. Source: `results/claim2/claim2_T2.1_snv.csv`.
 
 | Individual | Tool | TP | FP | FN | Precision | Recall | F1 |
 |---|---|---|---|---|---|---|---|
@@ -108,7 +108,7 @@ agrees cell for cell.
 **Mean F1: CAPSULE 0.876, DiscoSNP++ 0.853, Kmer2SNP 0.475.** CAPSULE wins
 3/4 individuals; DiscoSNP++ wins HG005.
 
-## T2.2 — Het-SNV F1 vs sequencing depth, HG002. Status: CROSS-CHECKED. Source: `benchmark/results/claim2_T2.2_coverage_sweep.csv`.
+## T2.2 — Het-SNV F1 vs sequencing depth, HG002. Status: CROSS-CHECKED. Source: `results/claim2/claim2_T2.2_coverage_sweep.csv`.
 
 | Depth | Reads | Archive bytes | TP | FP | FN | Precision | Recall | F1 |
 |---|---|---|---|---|---|---|---|---|
@@ -120,7 +120,7 @@ agrees cell for cell.
 30x row is identical to T2.1's HG002/CAPSULE row (carried, not re-run, per
 the manuscript's own stated methodology).
 
-## T2.3 — Het-indel calling, full counts, 4 individuals. Status: CROSS-CHECKED. Source: `benchmark/results/claim2_T2.3_indel.csv`.
+## T2.3 — Het-indel calling, full counts, 4 individuals. Status: CROSS-CHECKED. Source: `results/claim2/claim2_T2.3_indel.csv`.
 
 | Individual | Tool | TP | FP | FN | Precision | Recall | F1 |
 |---|---|---|---|---|---|---|---|
@@ -138,7 +138,7 @@ model, by construction. **Mean F1: CAPSULE 0.621, DiscoSNP++ 0.591.**
 CAPSULE wins 3/4; DiscoSNP++ wins HG005 (same individual as T2.1's
 exception).
 
-## T2.4 — Multi-allelic SNV sites, complete chr20 census. Status: CROSS-CHECKED. Source: `benchmark/results/claim2_T2.4_multiallelic.csv`.
+## T2.4 — Multi-allelic SNV sites, complete chr20 census. Status: CROSS-CHECKED. Source: `results/claim2/claim2_T2.4_multiallelic.csv`.
 
 | Individual | Scope | Sites | CAPSULE both alleles | CAPSULE rate | DiscoSNP++ multi-allelic records emitted | DiscoSNP++ total records |
 |---|---|---|---|---|---|---|
@@ -148,7 +148,7 @@ Status field in CSV: `CORRECTED_20260910`. DiscoSNP++ emitted zero
 multi-allelic records across its ENTIRE output on this individual, not
 just these 26 sites.
 
-## T2.5 — Tetraploid calling, HG003+HG004 real reads, chr20:3,000,000-3,400,000. Status: CROSS-CHECKED. Source: `benchmark/results/claim2_T2.5_tetraploid.csv`.
+## T2.5 — Tetraploid calling, HG003+HG004 real reads, chr20:3,000,000-3,400,000. Status: CROSS-CHECKED. Source: `results/claim2/claim2_T2.5_tetraploid.csv`.
 
 | Class | Tool | TP | FP | FN | Precision | Recall | F1 |
 |---|---|---|---|---|---|---|---|
@@ -163,7 +163,7 @@ Both classes: CAPSULE wins.
 
 # CLAIM 3 — ADDRESSABLE
 
-## T3.1 — Export speed, 6 datasets. Status: CITED. Source: `benchmark/results/claim3_T3.1_T3.2_T3.3.csv`.
+## T3.1 — Export speed, 6 datasets. Status: CITED. Source: `results/claim3/claim3_T3.1_T3.2_T3.3.csv`.
 
 | Dataset | CAPSULE (s) | SPAdes (s) | Speedup |
 |---|---|---|---|
@@ -186,7 +186,7 @@ Both classes: CAPSULE wins.
 | Unaligned length | 1,895,813 | 9,582 | SPAdes |
 | Misassemblies | 7 | 1 | SPAdes |
 
-## T3.2 — Coverage speed, same 6 datasets. Status: CITED. Source: `benchmark/results/claim3_T3.1_T3.2_T3.3.csv`.
+## T3.2 — Coverage speed, same 6 datasets. Status: CITED. Source: `results/claim3/claim3_T3.1_T3.2_T3.3.csv`.
 
 | Dataset | CAPSULE (s) | bwa+samtools+mosdepth (s) | Speedup |
 |---|---|---|---|
@@ -197,7 +197,7 @@ Both classes: CAPSULE wins.
 | DRR976266 | 1.49 | 23.98 | 16.1x |
 | HG002 | 3.04 | 164.90 | 54.2x |
 
-## T3.3 — Range query timing, all 19 datasets, no comparator. Status: CITED. Source: `benchmark/results/claim3_T3.1_T3.2_T3.3.csv`.
+## T3.3 — Range query timing, all 19 datasets, no comparator. Status: CITED. Source: `results/claim3/claim3_T3.1_T3.2_T3.3.csv`.
 
 | Dataset | Time (s) | Rows |
 |---|---|---|

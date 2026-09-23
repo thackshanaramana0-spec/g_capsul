@@ -40,7 +40,7 @@ against a specialized tool built to do only that one thing.
   been measured or is claimed. See `01_T3.4_EXACT_MATCH.md`.
 - **Not five independent mechanisms.** Architecturally there are four real
   code paths, not five (T3.3 and T3.4 are the *same* function in
-  `capsule_decode.cpp`, differing only in how one variable gets filled; T3.5
+  `decoder.cpp`, differing only in how one variable gets filled; T3.5
   is not a distinct C++ path at all, it is an orchestration pattern built by
   calling T3.4's primitive twice). See `code_mapping_claim3.md` and
   the architecture diagram at `docs/CLAIM3_ARCHITECTURE_DIAGRAM.md`.
@@ -111,13 +111,13 @@ Do not think of T3.1-T3.5 as five separate feature checkboxes. Think of it as:
   central insight; honest, verified (not guessed) comparison to PgRC2 and
   BEETL on whether they could replicate this with a small addition.
 - `code_mapping_claim3.md` — exact function/line references in
-  `stages/capsule_decode.cpp` for every operation above, and exactly which
+  `src/decoder.cpp` for every operation above, and exactly which
   benchmark/results files and docs contain the numbers cited throughout this
   folder.
 
 ## Source-of-truth rule for this whole folder
 
-Where any file in this folder disagrees with `benchmark/results/`, the
+Where any file in this folder disagrees with `results/`, the
 result file wins. Where it disagrees with `docs/T3.1_CORRECTNESS_FINAL_20260919.md`
 or `docs/T34_T35_MULTI_INDIVIDUAL_20260919.md`, those (dated, more recent,
 more thoroughly gated) win. This folder is a *navigation and synthesis*

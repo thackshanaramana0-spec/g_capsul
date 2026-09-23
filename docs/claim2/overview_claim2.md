@@ -52,7 +52,7 @@ FASTQ or building a second, independent representation.**
 ## Verification status of this overview and its 7 companion files
 
 Every number above and in the detail files was cross-checked this session
-directly against `benchmark/results/claim2_T2.*.csv` **and** the live
+directly against `results/claim2/claim2_T2.*.csv` **and** the live
 manuscript tables in `capsul_paper/capsul_manuscript.tex` (lines 499-660+),
 number by number, not sampled. Zero discrepancies found — Claim 2's
 manuscript tables are current and correct, unlike Claim 3's T3.1/T3.4
@@ -93,11 +93,11 @@ tables which needed correction this session (see `refer_paper_docs/claim3/`).
   Claim 3/T3.5), and what a fair-comparison honest reading of DiscoSNP++
   and Kmer2SNP's own capabilities actually supports.
 - `code_mapping_claim2.md` — exact function/line references in
-  `include/caps_caller.h` and `stages/capsule_decode.cpp` for every table,
+  `include/caps_caller.h` and `src/decoder.cpp` for every table,
   and the exact source file for every number cited.
 
 ## Source-of-truth rule for this whole folder
 
-Where any file here disagrees with `benchmark/results/`, the result file
+Where any file here disagrees with `results/`, the result file
 wins. This folder is navigation/synthesis, not a replacement source of
 truth.

@@ -24,7 +24,7 @@ differ between tables).
 
 ## The mechanism — the simplest of the query-family operations
 
-Inside `capsule_decode.cpp`'s `mode=="query"` handler, a variable `rr`
+Inside `decoder.cpp`'s `mode=="query"` handler, a variable `rr`
 (a vector of start/end pairs) gets filled, and everything downstream —
 loading the sidecar, applying deviations/strand/N, emitting FASTA — is
 shared with T3.4. For T3.3 specifically, `rr` is filled by **directly
@@ -46,7 +46,7 @@ Exact code path and how it diverges from T3.4: `code_mapping_claim3.md`.
 
 ## Why there is no baseline column — precise, not hand-waved
 
-The published note in `benchmark/results/claim3_T3.1_T3.2_T3.3.csv` says:
+The published note in `results/claim3/claim3_T3.1_T3.2_T3.3.csv` says:
 *"no competitor exists for coordinate-range retrieval."* The precise reason,
 worth stating carefully in the paper (this session verified it against real
 literature, see below): it is **not** that no other tool does range
@@ -64,7 +64,7 @@ this session's research), not an excuse invented for this paper.
 
 ## Results — locked, all 19 datasets, timing only
 
-Source: `benchmark/results/claim3_T3.1_T3.2_T3.3.csv`, table=T3.3 rows (19
+Source: `results/claim3/claim3_T3.1_T3.2_T3.3.csv`, table=T3.3 rows (19
 entries, `ours_s` column, `0.15s` to `118.48s`, no baseline columns
 populated by design).
 
@@ -75,7 +75,7 @@ pseudogenome to search through without the optional sidecar index).
 ## The critical code-level fact: T3.3 and T3.4 are NOT two mechanisms
 
 This is worth repeating precisely because it is easy to misstate: **T3.3 and
-T3.4 are the same `mode=="query"` code path in `capsule_decode.cpp`.** The
+T3.4 are the same `mode=="query"` code path in `decoder.cpp`.** The
 only difference is what populates `rr`:
 
 - T3.3: `rr` = literal parsed integers.

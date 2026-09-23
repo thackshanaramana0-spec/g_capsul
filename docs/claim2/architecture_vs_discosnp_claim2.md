@@ -79,7 +79,7 @@ walk), branching policy (stop at first junction), low-complexity filtering
 table used by the caller was "already built by the compressor."** This was
 checked against the actual code and found **false**: `kc_H_build` runs
 inside `run_variant_call` (`include/caps_caller.h`), and
-`stages/106_inprocess.cpp` (the encoder) builds no k-mer table at all — the
+`src/encoder.cpp` (the encoder) builds no k-mer table at all — the
 k-mer graph is paid for at call time, same as DiscoSNP++.
 
 **What IS genuinely free is the assembly.** The encoder builds contigs in

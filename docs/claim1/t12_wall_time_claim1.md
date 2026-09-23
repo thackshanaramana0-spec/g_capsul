@@ -23,7 +23,7 @@ verified present in the caption).
 ## Results — a real, disclosed loss, not a mixed result
 
 **Independently computed this session, directly from the raw CSV**
-(`benchmark/results/claim1_T1.1_T1.2.csv`), by comparing `compress_s` and
+(`results/claim1/claim1_T1.1_T1.2.csv`), by comparing `compress_s` and
 `decompress_s` per dataset across all three tools:
 
 | | CAPSULE fastest |
@@ -60,7 +60,7 @@ comparison — see `mechanism_insight_claim1.md`). T1.2 is the full-FASTQ,
 ## Precisely where the RAM cost comes from, verified file-and-line
 
 Verified against `docs/HEADROOM_ANALYSIS.md`. The dominant RAM item is a
-single structure: `stages/106_inprocess.cpp`'s duplicate-detection map
+single structure: `src/encoder.cpp`'s duplicate-detection map
 (`std::unordered_map<uint64_t, std::vector<uint32_t>>`) costs **~80 B per
 distinct read** (hash node + a separately heap-allocated inner vector).
 PgRC2's equivalent — a flat `vector<uint32_t>` of sorted read indices,
@@ -114,7 +114,7 @@ CPU on a full HG002 run recomputing an assembly already in hand, and because
 candidates ran concurrently at one thread each, the wasted work sat directly
 on the wall-clock critical path. Fixed by sharing the round-2 result across
 same-`MINOV` candidates rather than reforking per candidate. This is the
-origin of `106_inprocess.cpp`'s "candidates share a prefix" design
+origin of `encoder.cpp`'s "candidates share a prefix" design
 (`code_mapping_claim1.md`), not an incidental detail — it is a real,
 measured, non-trivial fraction of what makes T1.2's wall-time cost as low as
 it is, and belongs in Methods as evidence the speed trade-off was minimized,

@@ -20,7 +20,7 @@ poorly. **26 is stated as the total population of such sites under this
 scoring convention, not a sample** — verified against the manuscript
 caption and the CSV's own `scope` field: "chr20 COMPLETE CENSUS."
 
-## Results — verified against `benchmark/results/claim2_T2.4_multiallelic.csv`, exact match to manuscript
+## Results — verified against `results/claim2/claim2_T2.4_multiallelic.csv`, exact match to manuscript
 
 | Tool | Recovered | Fraction |
 |---|---|---|

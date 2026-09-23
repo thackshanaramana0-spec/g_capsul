@@ -21,7 +21,7 @@ compared to the conventional pipeline: align (bwa-mem) → sort/index
 ## The mechanism — genuinely exits before assembly, not just fast
 
 This is the cleanest of the five tables architecturally. `coverage` mode in
-`capsule_decode.cpp` **returns before the pseudogenome is even rebuilt**
+`decoder.cpp` **returns before the pseudogenome is even rebuilt**
 (lines 417-490; see `code_mapping_claim3.md` for the exact trace).
 It needs only three things from the archive:
 
@@ -63,7 +63,7 @@ to hide.
 
 ## Results — locked, dominant, no caveats
 
-Source: `benchmark/results/claim3_T3.1_T3.2_T3.3.csv`, table=T3.2 rows.
+Source: `results/claim3/claim3_T3.1_T3.2_T3.3.csv`, table=T3.2 rows.
 
 | Dataset | Ours (s) | bwa+samtools+mosdepth (s) | Speedup |
 |---|---|---|---|
