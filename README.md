@@ -465,21 +465,15 @@ SRM Institute of Science and Technology
 
 ## License
 
-**MIT** — see [`LICENSE`](LICENSE) for the full text, which also documents every
-vendored dependency's own terms.
+**MIT** — see [`LICENSE`](LICENSE) for the full text.
 
-Vendored third-party code keeps its own license, all of them MIT-compatible:
-
-| component | license | where |
-|---|---|---|
-| PPMd7 (LZMA SDK) | public domain | [`thirdparty/ppmd/LICENSE`](thirdparty/ppmd/LICENSE) |
-| FSE / Huff0 | BSD | [`thirdparty/fse/LICENSE`](thirdparty/fse/LICENSE) |
-| htscodecs / fqzcomp | BSD 3-clause | [`thirdparty/htscodecs/LICENSE.md`](thirdparty/htscodecs/LICENSE.md) |
-| liblzma | public domain | runtime dependency, linked with `-llzma` |
+Vendored third-party code keeps its own license, all of them MIT-compatible —
+full table and terms in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
 **PgRC2 (GPL-3) is deliberately NOT vendored.** It is used only as an external
-comparison binary, cloned separately; no PgRC2 source is included in or linked
+comparison binary, cloned separately. No PgRC2 source is included in or linked
 into this repository, so its GPL-3 terms do not attach here. That separation
-was a design decision, not an accident — see `docs/REIMPL_NOTES.md`, which
-records that PgRC2's assembler was reimplemented from the algorithm rather than
+was a design decision, not an accident — see
+[`docs/extras/REIMPL_NOTES.md`](docs/extras/REIMPL_NOTES.md), which records
+that PgRC2's assembler was reimplemented from the algorithm rather than
 copied, precisely so this stays true.
