@@ -293,6 +293,50 @@ sudo apt-get install build-essential liblzma-dev
 
 ---
 
+## Docker
+
+No local build needed — pull the published image straight from GitHub Container Registry
+(public, no login required; verified with `docker logout` + a clean pull before publishing this):
+
+```bash
+docker pull ghcr.io/thackshanaramana0-spec/g_capsul:1.1.0    # or :latest
+```
+
+Or build it yourself from source (same two-stage `Dockerfile` CI uses):
+
+```bash
+git clone https://github.com/thackshanaramana0-spec/g_capsul.git
+cd g_capsul
+docker build -t g_capsul .
+```
+
+Run — mount a host directory to `/data` and pass the same arguments the binaries take
+directly:
+
+```bash
+# Compress (full FASTQ: sequence + names + quality + line 3)
+docker run --rm -v "$PWD":/data -e CAPS_NAMES=1 -e CAPS_QUAL=1 -e ARCHIVE=/data/out.capsule \
+    ghcr.io/thackshanaramana0-spec/g_capsul:1.1.0 best106 /data/reads.fq
+
+# Decompress
+docker run --rm -v "$PWD":/data \
+    ghcr.io/thackshanaramana0-spec/g_capsul:1.1.0 \
+    capsule_decode /data/out.capsule /data/outdir /data/outdir/reads.fq
+```
+
+Any other mode (`export`/`coverage`/`query`/`call`/`index`) works the same way — swap the
+command after the image name, same as running the binaries natively. Full command reference:
+[Usage](#usage) below, or [`docs/PROJECT_SCOPE.md`](docs/PROJECT_SCOPE.md).
+
+**Why this is trustworthy, not just a Dockerfile that exists:** the image is rebuilt and a
+real compress→decompress→`cmp` round trip is re-verified on every push
+([`.github/workflows/ci.yml`](.github/workflows/ci.yml)'s `docker` job), and the exact same
+check re-runs against the **published** image itself after every release
+([`.github/workflows/publish-image.yml`](.github/workflows/publish-image.yml)) — so what you
+pull is proven to be what CI actually tested, not just what built locally.
+
+---
+
 ## Usage
 
 ```bash
@@ -450,6 +494,11 @@ If you use G_CAPSUL in your research, please cite:
 > Thackshanaramana B (2026). *G_CAPSUL: a unified pseudogenome for lossless FASTQ
 > compression, reference-free variant calling, and archive-native addressability.*
 > Manuscript in preparation.
+
+To cite the exact code version used, see [`CITATION.cff`](CITATION.cff) (GitHub's own "Cite
+this repository" button reads this automatically) or reference a tagged
+[release](https://github.com/thackshanaramana0-spec/g_capsul/releases) directly — current
+release: [v1.1.0](https://github.com/thackshanaramana0-spec/g_capsul/releases/tag/v1.1.0).
 
 ---
 
