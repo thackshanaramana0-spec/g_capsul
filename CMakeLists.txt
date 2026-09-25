@@ -7,6 +7,16 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
+# LTO changes nothing about program semantics (unlike e.g. -ffast-math, which
+# SPRING's CMakeLists uses and we deliberately don't: it would put floating-
+# point reordering near a tool whose whole second claim is byte-exact
+# lossless output). Free win, so enable it whenever the toolchain supports it.
+include(CheckIPOSupported)
+check_ipo_supported(RESULT CAPS_IPO_OK)
+if(CAPS_IPO_OK)
+  set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
+endif()
+
 # Mirrors scripts/build106.sh and scripts/build_decode.sh: default to a
 # portable baseline instruction set (SSE4.2/POPCNT, universal since ~2009) so
 # the binary isn't tied to the exact CPU it was built on. -DCAPS_BUILD_NATIVE=ON
