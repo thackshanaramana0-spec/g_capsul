@@ -30,6 +30,7 @@
 #include <unordered_set>
 #include <map>
 #include <vector>
+#include <atomic>
 #include <sys/mman.h>
 #ifdef _OPENMP
 #include <parallel/algorithm>
@@ -1706,8 +1707,15 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
     const bool  SPILL    = (SPILLDIR != nullptr);
     // 2^SPILL_BITS key-range partitions. 256 partitions keeps each one small
     // enough to sort in RAM while staying far under any open-file limit.
-    const int   SPILL_BITS = std::getenv("CAPS_KC_SPILLBITS")
-                           ? atoi(std::getenv("CAPS_KC_SPILLBITS")) : 8;
+    // Range-checked like CAPS_PLOIDY above: SPILL_BITS feeds `1u<<SPILL_BITS`
+    // (partition table size) and `62-SPILL_BITS` (a k-mer bit-shift) a few
+    // lines below and throughout this block -- unvalidated it was one bad
+    // env var away from an undefined-behavior shift (>=62) or an
+    // out-of-memory partition table (SPILL_BITS in the high 20s+).
+    int SPILL_BITS = 8;
+    if (const char* sb = std::getenv("CAPS_KC_SPILLBITS")) {
+        int v = atoi(sb); if (v >= 1 && v <= 20) SPILL_BITS = v;
+    }
     const size_t PBUF_MAX  = 1u << 16;      // entries buffered per partition per thread
     // Superkmer spill: minimizer-partitioned, 2-bit packed. Verified at
     // 1.161 bytes/k-mer vs 12 for records, k-mer multiset identical.
@@ -1802,6 +1810,14 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         // changes only WHICH run holds a key, never the summed count. The
         // (kmer,count) set is therefore identical to the serial version by
         // construction -- this is not an approximation.
+        // A full spill disk previously failed silently: every `if (f) {...}`
+        // below has no `else`, so a fopen("ab") failure (disk full, quota,
+        // permissions) just dropped that batch's k-mer occurrences with no
+        // diagnostic -- for the one input-shape (spill engaged) this project's
+        // own exactness claims most need to hold. Recorded here instead of
+        // aborting mid-parallel-region (which would need per-thread unwind
+        // logic for no benefit); checked once, right after the region joins.
+        std::atomic<bool> spill_write_ok{true};
         #pragma omp parallel
         {
             std::vector<uint64_t> batch; batch.reserve(BATCH_KMERS);
@@ -1859,6 +1875,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                                      SPILLDIR, part, omp_get_thread_num());
                             FILE* f = fopen(path, "ab");
                             if (f) { fwrite(pb.data(), sizeof(uint64_t), pb.size(), f); fclose(f); }
+                            else { spill_write_ok.store(false, std::memory_order_relaxed); }
                             pb.clear();
                         }
                     }
@@ -1904,6 +1921,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                              SPILLDIR, part, omp_get_thread_num());
                     FILE* f = fopen(path, "ab");
                     if (f) { fwrite(skbuf[part].data(), 1, skbuf[part].size(), f); fclose(f); }
+                    else { spill_write_ok.store(false, std::memory_order_relaxed); }
                     #pragma omp atomic
                     sk_bytes_total += skbuf[part].size();
                     skbuf[part].clear();
@@ -2006,11 +2024,20 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                              SPILLDIR, part, omp_get_thread_num());
                     FILE* f = fopen(path, "ab");
                     if (f) { fwrite(pbuf[part].data(), sizeof(uint64_t), pbuf[part].size(), f); fclose(f); }
+                    else { spill_write_ok.store(false, std::memory_order_relaxed); }
                     std::vector<uint64_t>().swap(pbuf[part]);
                 }
             }
             #pragma omp critical(kcruns)
             for (auto& r : myruns) kc_runs.push_back(std::move(r));
+        }
+        if (!spill_write_ok.load(std::memory_order_relaxed)) {
+            fprintf(stderr, "caps_caller: FATAL: a k-mer spill file write failed "
+                            "(disk full, quota, or permissions under %s) -- "
+                            "refusing to call variants against an incomplete "
+                            "k-mer set rather than silently under-counting\n",
+                            SPILLDIR);
+            return -1;
         }
     }
     // k-way merge: at each step pick the smallest head key across all runs
@@ -5279,9 +5306,15 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         // tried; the bubble extractor itself rejects pairs that do not
         // diverge-and-reconverge, so admitting more candidates costs
         // specificity only where the geometry genuinely looks like a bubble.
-        // MAXOCC is bounded to keep repeats from exploding the pair count.
+        // MAXOCC is bounded to keep repeats from exploding the pair count --
+        // that bound only holds if CAPS_MAXOCC itself is range-checked: the
+        // nested pair scan below is O(occ^2), so an unbounded override
+        // defeats the exact guard this comment describes. Same convention as
+        // CAPS_PLOIDY: an out-of-range override is ignored, default kept.
         int MAXOCC = 4;
-        if (const char* e = std::getenv("CAPS_MAXOCC")) MAXOCC = atoi(e);
+        if (const char* e = std::getenv("CAPS_MAXOCC")) {
+            int v = atoi(e); if (v >= 1 && v <= 64) MAXOCC = v;
+        }
         // ── PARALLELISE THE ANCHOR SCAN ─────────────────────────────────────
         // This loop and its nested O(occ^2) pair scan are the bulk of
         // indel_pass, which is 65% of the full CAPS_CALL run (1250 s of ~1900)

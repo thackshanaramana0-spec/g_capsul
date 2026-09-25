@@ -1229,6 +1229,32 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
             const char* d=strchr(modearg.c_str(),'-');
             if(!d){ fprintf(stderr,"query needs START-END or a DNA sequence\n"); return 2; }
             qa=strtoull(modearg.c_str(),nullptr,10); qb=strtoull(d+1,nullptr,10);
+            // A reversed/empty range (qa>=qb) previously fell through silently:
+            // the overlap test below (b>r.first && a<r.second) can never be true
+            // when r.first>=r.second, so this produced a query that always
+            // matched zero reads with no diagnostic -- indistinguishable from a
+            // valid range that legitimately has no coverage there. Reject it
+            // explicitly instead.
+            if(qa>=qb){
+                fprintf(stderr,"query range START-END must have START < END (got %llu-%llu)\n",
+                        (unsigned long long)qa,(unsigned long long)qb);
+                return 2;
+            }
+            // Same silent-empty-result class as the reversed-range case above,
+            // just the other axis: a range entirely past the real pseudogenome
+            // (e.g. a stale coordinate from an older/different archive) also
+            // fell through to "0 hits, no diagnostic" with no way to tell that
+            // apart from "valid range, genuinely no coverage there". SPRING's
+            // own --decompress-range validates the same way (spring.cpp,
+            // checks start/end against num_read_pairs) -- qb==pg.size() stays
+            // valid since ranges are half-open, matching every existing caller
+            // (e.g. scripts/test_claim3.sh's "0-$PGLEN").
+            if(qa>pg.size() || qb>pg.size()){
+                fprintf(stderr,"query range START-END must fall within the pseudogenome "
+                               "(0-%zu), got %llu-%llu\n",
+                        pg.size(),(unsigned long long)qa,(unsigned long long)qb);
+                return 2;
+            }
             ranges.push_back({qa,qb});
         }
         FILE* f=fopen(outdir.c_str(),"wb");
