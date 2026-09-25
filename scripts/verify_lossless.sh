@@ -22,7 +22,7 @@ cd "$W"
 CANDIDATES="${C1}:${M1},${C1}:${M2},${C2}:${M1},${C2}:${M2}" ARCHIVE="$W/out.arc" \
   DUMP_LIT=1 DUMP_PERM=1 DUMP_MM=1 VERIFY_DUMP=1 \
   "$BEST" "$IN" 3 16 16 22 16 16 1 24 64 1 >/dev/null 2>"$W/enc.log"
-grep -oP '\[a3\] chose \K.*' "$W/enc.log" || true
+sed -n 's/.*\[a3\] chose //p' "$W/enc.log" || true
 
 read -r PG MAIN < "$W/pg_params.txt"
 python3 "$HERE/scripts/decode_105.py" "$W" "$PG" "$MAIN" "$W/dec.seq" >"$W/dec.log" 2>&1

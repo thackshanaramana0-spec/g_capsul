@@ -136,7 +136,7 @@ CANDS="${C2}:${M1},${C2}:${M2}"
 CANDIDATES="$CANDS" ARCHIVE="$OUT" \
     DUMP_LIT=1 DUMP_PERM=1 DUMP_MM=1 "$BEST" "$IN" 3 16 16 22 16 16 1 24 64 1 \
     > /dev/null 2>"${OUT}.log"
-sz=$(grep -oP 'ARCHIVE_TOTAL=\K[0-9]+' "${OUT}.log" | tail -1)
+sz=$(grep -o 'ARCHIVE_TOTAL=[0-9][0-9]*' "${OUT}.log" | sed 's/ARCHIVE_TOTAL=//' | tail -1)
 [ -z "$sz" ] && { echo "[adaptive] all candidates failed" >&2; exit 1; }
-grep -oP '\[a3\] chose \K.*' "${OUT}.log" >&2
+sed -n 's/.*\[a3\] chose //p' "${OUT}.log" >&2
 echo "ARCHIVE_TOTAL=$sz"
