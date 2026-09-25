@@ -248,7 +248,7 @@ Both classes: CAPSULE wins.
 
 | Number | Value | Status | Source |
 |---|---|---|---|
-| PgRC2 sequence-only margin | +1.88%, 6 wins/1 loss | CITED | `DEVNOTES.md`, `docs/CLAIM1_FINAL_VERDICT.md` §42, `docs/FINAL_HEADROOM.md` |
+| PgRC2 sequence-only margin | +1.88%, 6 wins/1 loss | CITED | `BTR_NOTES.md`, `docs/CLAIM1_FINAL_VERDICT.md` §42, `docs/FINAL_HEADROOM.md` |
 | PgRC2 speed/RAM vs G_CAPSUL | ~1.7x slower, ~2.5x heavier | CITED | same |
 | Ablation: allele-split collapse effect | F1 0.431 → 0.888 | CITED, not re-run this session | manuscript Results, ~line 306 |
 | `contig_spans` archive cost | 0 bytes (18,282,397 B identical with/without) | RE-DERIVED this session | `docs/T3.1_CORRECTNESS_FINAL_20260919.md` |
