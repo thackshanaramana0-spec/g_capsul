@@ -58,7 +58,7 @@ line-by-line this pass).
 
 ## Losslessness verification discipline — the real history behind the "LOSSLESS" column
 
-Confirmed against `CLAUDE.md` §6.1/6.3 (read this session): this project
+Confirmed against `DEVNOTES.md` §6.1/6.3 (read this session): this project
 previously shipped an incomplete verification path (`verify_lossless.sh`
 decoded dumped intermediate streams, not the actual archive) that hid four
 real silent data-loss bugs — a mismatch-position byte overflow above 256bp
@@ -78,9 +78,9 @@ default one.
 |---|---|
 | T1.1 (archive size, all rows, aggregate) | `results/claim1/claim1_T1.1_T1.2.csv` |
 | T1.2 (wall time, all rows) | same CSV, `compress_s`/`decompress_s` columns |
-| 19/19, −6.03%, −43.26%, 57/57 LOSSLESS headline | `CLAUDE.md` (top section); independently re-derived this session from the CSV above |
-| PgRC2 sequence-only comparison (+1.88%, 6 wins/1 loss, ~1.7x/2.5x) | `CLAUDE.md` lines ~248-268, citing `refer_paper_docs/CLAIM1_FINAL_VERDICT.md` §42 and `refer_paper_docs/FINAL_HEADROOM.md` |
-| The four corrected silent data-loss bugs | `CLAUDE.md` §6.3 |
+| 19/19, −6.03%, −43.26%, 57/57 LOSSLESS headline | `DEVNOTES.md` (top section); independently re-derived this session from the CSV above |
+| PgRC2 sequence-only comparison (+1.88%, 6 wins/1 loss, ~1.7x/2.5x) | `DEVNOTES.md` lines ~248-268, citing `refer_paper_docs/CLAIM1_FINAL_VERDICT.md` §42 and `refer_paper_docs/FINAL_HEADROOM.md` |
+| The four corrected silent data-loss bugs | `DEVNOTES.md` §6.3 |
 | Full session-by-session Claim 1 development history | `refer_paper_docs/CLAIM1_FINAL_VERDICT.md`, `refer_paper_docs/COMPACT_HEADROOM.md`, `refer_paper_docs/PAPER_DRAFT_CLAIM1.md` |
 | `CAPS_SPANS` free-byproduct verification (zero archive-byte cost) | This session's Claim 3 work — see `refer_paper_docs/claim3/t31_export_claim3.md` and `PIPELINE.md`'s flags table |
 
@@ -88,7 +88,7 @@ default one.
 
 **Verified this session, directly, by re-deriving from raw data**: the full
 T1.1 aggregate (19/19, −6.03%, −43.26%, 57/57 LOSSLESS) was independently
-recomputed from the CSV, not just read from `CLAUDE.md`. T1.2's 0/19-both-
+recomputed from the CSV, not just read from `DEVNOTES.md`. T1.2's 0/19-both-
 axes result was computed the same way, discovered fresh this session (not
 previously stated anywhere this explicitly as "0/19" — the manuscript's own
 "bold marks fastest per row" phrasing is consistent with it but does not
@@ -96,7 +96,7 @@ state the aggregate count directly).
 
 **Not independently re-verified this session** (cited from prior,
 documented work): the PgRC2 sequence-only comparison numbers (+1.88%, 6/1,
-~1.7x/2.5x) — read from `CLAUDE.md`'s own citation of
+~1.7x/2.5x) — read from `DEVNOTES.md`'s own citation of
 `refer_paper_docs/CLAIM1_FINAL_VERDICT.md`/`refer_paper_docs/FINAL_HEADROOM.md`, not re-run this
-session. The four silent-data-loss bug descriptions — read from `CLAUDE.md`
+session. The four silent-data-loss bug descriptions — read from `DEVNOTES.md`
 §6.3, not independently re-confirmed by re-decoding archives this session.

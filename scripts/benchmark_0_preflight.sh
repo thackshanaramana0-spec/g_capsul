@@ -356,7 +356,7 @@ say "  Peak transient disk ~35 GB, peak RAM ~20 GB."
 # while a 6-9 h job crawls, and so a wrong number is visible early instead of
 # at the end.
 #
-# CLAUDE.md rule 6: projections are SANITY CHECKS ONLY. Fresh server numbers
+# DEVNOTES.md rule 6: projections are SANITY CHECKS ONLY. Fresh server numbers
 # are authoritative. Never reject a measured result because it disagrees here.
 #
 # BASIS -- all measured on THIS box, idle, one tool at a time, 2026-09-08,

@@ -72,7 +72,7 @@ fasterq-dump --split-files --threads "$(nproc)" \
 
 **For the two large datasets (C. elegans SRR065390 ~22GB, T. cacao
 SRR870667 ~15GB SRA), `prefetch` is too slow — use the S3 Open Data mirror
-instead**, exactly as documented in `CLAUDE.md`:
+instead**, exactly as documented in `DEVNOTES.md`:
 
 ```bash
 aws s3 cp --no-sign-request \
@@ -188,7 +188,7 @@ specifically.
 | **SPRING** | (no `--version` flag; boost-based build) | `git clone https://github.com/shubhamchandak94/SPRING.git` at `/root/SPRING`, built per its own README (CMake + boost). |
 | **Genozip** | 15.0.87 (`genozip --version`) | Source tarball `genozip-src.tar.gz` (7.6MB, present at `/root/genozip-src.tar.gz`) extracted to `/root/genozip-genozip-15.0.87/` and built there. Official source: `https://github.com/genozip/genozip` (download a release tarball, e.g. `https://github.com/genozip/genozip/archive/refs/tags/genozip-15.0.87.tar.gz`, then `make`). |
 | **PgRC2** | git clone, GPL-3, never vendored | `git clone https://github.com/kowallus/PgRC.git` at `/root/arcs-clean/method_c` (renamed on clone). Build per its own CMake instructions. |
-| **DiscoSNP++** | v2.6.2-12 (per `docs/HOW_DISCOSNP_WINS.md`) | `git clone https://github.com/GATB/DiscoSnp.git` at `/root/DiscoSnp`. Build with its own `./INSTALL` or CMake script; needs `-G <ref.fa>` at run time (mandatory, not optional — see `CLAUDE.md`'s command reference). |
+| **DiscoSNP++** | v2.6.2-12 (per `docs/HOW_DISCOSNP_WINS.md`) | `git clone https://github.com/GATB/DiscoSnp.git` at `/root/DiscoSnp`. Build with its own `./INSTALL` or CMake script; needs `-G <ref.fa>` at run time (mandatory, not optional — see `DEVNOTES.md`'s command reference). |
 | **Kmer2SNP** | — | `git clone https://github.com/yanboANU/Kmer2SNP.git` at `/root/Kmer2SNP`. **Real compatibility fixes required** for this 2020-era code on a modern Python (documented in full in `docs/KMER2SNP_BENCHMARK.md`): `time.clock()` → `time.perf_counter()` (Python 3.8 removed the former), `networkx.connected_component_subgraphs` → a documented generator-expression equivalent (removed in networkx 2.4+), and `findGSE` (an R package) bypassed via Kmer2SNP's own documented `--c1/--c2/--r` flags with data-derived values from a k-mer histogram, rather than installing R. |
 | **DSK** | v2.3.3 | `git clone https://github.com/GATB/dsk.git` at `/root/dsk`. Kmer2SNP's driver script hardcodes a `/path2dsk/` placeholder — must be pointed at the real built binary after cloning. |
 | **MEGAHIT** | 1.2.9-5 | `apt-get install megahit` — a real Ubuntu package, no manual build needed. |
@@ -208,7 +208,7 @@ specifically.
    cannot be lifted to genome coordinates for scoring — this is mandatory
    for every benchmark in this project, not an optional accuracy flag.
 4. **Do not skip `-g` on SPRING decompress.** `spring -d` without `-g`
-   produces the wrong output format — `CLAUDE.md`'s own command reference
+   produces the wrong output format — `DEVNOTES.md`'s own command reference
    flags this explicitly because it was a real, previously-hit mistake.
 5. **Do not download full WGS BAMs for GIAB individuals.** Stream chr20
    only via `samtools view -b <S3 BAM> chr20` (§3) — a full WGS BAM per

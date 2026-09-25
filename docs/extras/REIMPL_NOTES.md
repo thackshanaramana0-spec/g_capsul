@@ -1676,7 +1676,7 @@ Neither file is kept. Both were verified byte-identical (`PG_LITERAL 12,506,313`
 
 The first A/B run gave s36 4.56 s and s38 5.29 s, which looked like a clean
 refutation. It was not measurable at all: `ps` showed a concurrent `arcs` job at
-256% CPU from another session, violating CLAUDE.md rule 3 ("never run two timed
+256% CPU from another session, violating DEVNOTES.md rule 3 ("never run two timed
 benchmark jobs concurrently"). The same baseline binary then measured 4.56 s and
 6.17 s, and round 1 read 1.32 s in one run and 1.91 s in another.
 
@@ -2029,7 +2029,7 @@ standalone fqzcomp's output exactly (after fixing an ASCII-vs-offset alphabet
 issue found while wiring — see the commit) and beats it on one dataset by
 trying all 4 strategies per block. A complete 4-line FASTQ rebuilt from decoder
 output alone has been verified byte-identical (same MD5) to the original file.
-See `CLAUDE.md` section 6.3 for the fixes found alongside this work.
+See `DEVNOTES.md` section 6.3 for the fixes found alongside this work.
 
 Read stages 67/68/71/73/84/92 and measured stage 92 (current) on the 8
 non-human locked datasets, 500K reads each. Round trip VERIFIED 8/8.

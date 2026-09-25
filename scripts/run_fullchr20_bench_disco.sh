@@ -11,7 +11,7 @@
 # competitor is not accidentally tuned differently at full scale than it was
 # in the window results this is meant to be compared against:
 #     run_discoSnp++.sh -r fof.txt -k 31 -c 3 -D 100 -P 3 -b 0 -G <ref> -T
-# `-G` is mandatory per CLAUDE.md; `-T` maps the bubbles back to the reference
+# `-G` is mandatory per DEVNOTES.md; `-T` maps the bubbles back to the reference
 # so the output carries genome coordinates. The `$2-1` in the POS conversion
 # is DiscoSNP++'s documented off-by-one, corrected everywhere in this project.
 #

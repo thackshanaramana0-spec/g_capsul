@@ -46,7 +46,7 @@ categorical capability difference.
 
 ## Withdrawn numbers — three of them, and why each was wrong
 
-Per `CLAUDE.md` and `docs/CLAIM2_FINAL_VERDICT.md`, ALL of the following are
+Per `DEVNOTES.md` and `docs/CLAIM2_FINAL_VERDICT.md`, ALL of the following are
 withdrawn and must not be cited:
 
 - **"5/111"**: scored 104 indel-bearing sites with a single-base check that

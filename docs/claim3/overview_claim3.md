@@ -1,7 +1,7 @@
 ---
 Date: 2026-09-19
 Title: Claim 3 (ADDRESSABLE) — Overview, What It Is And Is Not
-Purpose: Entry point for anyone (human or Claude) needing to understand what
+Purpose: Entry point for anyone needing to understand what
   Claim 3 claims, what it does not claim, and how the five sub-tables relate
   to each other before reading any single table's detail file.
 When to refer to this file: Before writing/reviewing any Claim 3 paper

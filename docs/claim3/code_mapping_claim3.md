@@ -90,7 +90,7 @@ prose describing the mechanism should still hold even if a line shifts.
 - Tally built during `index`, `decoder.cpp` ~line 1474-1512
   (`tally[{a0+j, obs[off+m]}]++`). **Known strand bug, deliberately left
   unfixed** — documented as a comment at the tally site (see the commit
-  message and `CLAUDE.md`'s 2026-09-19 section for why it was not adopted).
+  message and `DEVNOTES.md`'s 2026-09-19 section for why it was not adopted).
 
 ---
 
@@ -107,7 +107,7 @@ prose describing the mechanism should still hold even if a line shifts.
 | Raw CSVs behind the HG002 real-data trail | `results/T34_REALDATA_20260915/` (BILATERAL.csv, BOTH_FULL.csv, QUERY_ALONE_FULL.csv, GENERALIZATION_FIXED.csv, etc.) |
 | PgRC2 comparison (confirmed vs inferred) | `docs/PGRC2_EXTENSION_ANALYSIS.md` |
 | Flags reference (`CAPS_SPANS`, `CAPSULE_EXPORT_CONTIGS`, `CAPS_QUERY_CONTAIN`, etc.) | `PIPELINE.md`, flags table |
-| Session-level findings summary, dated | `CLAUDE.md`, "2026-09-19 session" section |
+| Session-level findings summary, dated | `DEVNOTES.md`, "2026-09-19 session" section |
 | Architecture diagram source (Mermaid) | `docs/CLAIM3_ARCHITECTURE_DIAGRAM.md` |
 | Future work: BEETL speed/size comparison, not yet run | `docs/T34_SPEED_BENCHMARK_NEXT_STEPS.md` |
 
