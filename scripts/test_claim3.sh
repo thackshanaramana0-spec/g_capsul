@@ -95,7 +95,7 @@ BAD_POS=$(grep '^>' "$W/query_full.fa" | grep -o 'pos=[0-9][0-9]*' | sed 's/pos=
 check "$([ "$BAD_POS" -eq 0 ] && echo 1 || echo 0)" "no query record has a position >= PGLEN ($PGLEN)"
 
 # ── roundtrip: the archive is still lossless ─────────────────────────────────
-if bash "$HERE/scripts/verify_lossless.sh" "$W/synth.fq" "$W/vl" > "$W/vl.log" 2>&1; then
+if BEST="$BEST" bash "$HERE/scripts/verify_lossless.sh" "$W/synth.fq" "$W/vl" > "$W/vl.log" 2>&1; then
     check 1 "underlying archive round-trips LOSSLESS (scripts/verify_lossless.sh)"
 else
     check 0 "underlying archive round-trips LOSSLESS (scripts/verify_lossless.sh) -- see $W/vl.log"
