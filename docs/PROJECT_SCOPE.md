@@ -63,6 +63,18 @@ and without fully decompressing first.
 - Build and run on Linux (native) and macOS (via CMake, real Homebrew GCC
   rather than AppleClang) — verified in CI on both. Native Windows is not
   currently supported (see §5).
+- Run via Docker with no local build at all: `docker pull
+  ghcr.io/thackshanaramana0-spec/g_capsul:1.1.0`. Publicly pullable, no
+  login required (verified with a clean `docker logout` before publishing).
+  Rebuilt and round-trip-verified — a real compress/decompress/`cmp` check,
+  not just "it builds" — on every push and again against the published
+  image itself on every release (`.github/workflows/ci.yml`'s `docker` job
+  and `.github/workflows/publish-image.yml`).
+- Install a specific, citable version via a tagged GitHub Release
+  (<https://github.com/thackshanaramana0-spec/g_capsul/releases>), each one
+  tied to a `CAPS_VERSION`/`CITATION.cff` pair that are kept in sync (they
+  drifted independently once before this was fixed — see the release notes
+  for v1.1.0).
 
 ## 4. Input this tool requires and accepts
 
