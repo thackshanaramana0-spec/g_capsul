@@ -1,0 +1,8 @@
+local/
+.git/
+docs/
+Figures/
+results/
+scripts/
+*.md
+!THIRD_PARTY_NOTICES.md

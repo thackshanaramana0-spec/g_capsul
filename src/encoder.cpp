@@ -361,7 +361,7 @@ static void phase(const char* name){
 }
 
 #ifndef CAPS_VERSION
-#define CAPS_VERSION "1.0.0"
+#define CAPS_VERSION "1.1.0"
 #endif
 
 int main(int argc,char** argv){

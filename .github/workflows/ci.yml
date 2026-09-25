@@ -93,3 +93,49 @@ jobs:
           cp /tmp/best106 /tmp/ci_claim3/best106
           cp /tmp/capsule_decode /tmp/ci_claim3/capsule_decode
           bash scripts/test_claim3.sh /tmp/ci_claim3
+
+  docker:
+    # The single-command Docker workflow documented in the Dockerfile itself,
+    # rebuilt and round-trip-verified on every push so it can't silently rot.
+    # Caught a real bug this way once already: best106 run bare (without the
+    # DUMP_LIT/DUMP_PERM/DUMP_MM env vars scripts/encode_adaptive.sh always
+    # sets) skips the streams full reconstruction needs, with no warning --
+    # fixed by baking those in as ENV defaults in the image, verified here.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the image
+        run: docker build -t g_capsul:ci .
+
+      - name: Generate a test FASTQ
+        run: |
+          mkdir -p /tmp/docker_ci
+          python3 - <<'PY'
+          import random
+          random.seed(11)
+          ref = "".join(random.choice("ACGT") for _ in range(5000))
+          with open("/tmp/docker_ci/reads.fq", "w") as f:
+              for i in range(800):
+                  start = random.randint(0, len(ref) - 100)
+                  seq = ref[start:start + 100]
+                  f.write(f"@r{i}\n{seq}\n+\n{'I'*100}\n")
+          PY
+
+      - name: Compress (single command, full FASTQ mode)
+        run: |
+          docker run --rm -v /tmp/docker_ci:/data -e CAPS_NAMES=1 -e CAPS_QUAL=1 -e ARCHIVE=/data/out.capsule \
+            g_capsul:ci best106 /data/reads.fq
+
+      - name: Decompress (single command)
+        run: |
+          mkdir -p /tmp/docker_ci/outdir
+          docker run --rm -v /tmp/docker_ci:/data \
+            g_capsul:ci capsule_decode /data/out.capsule /data/outdir /data/outdir/reads_out.fq
+
+      - name: Verify byte-identical (same comparison scripts/benchmark_1_run.sh's losscmp uses)
+        run: |
+          cd /tmp/docker_ci
+          awk 'NR%4==1{n=substr($0,2)} NR%4==2{s=$0} NR%4==0{print n"\t"s"\t"$0}' reads.fq | sort > _a
+          paste outdir/reads_out.fq.names outdir/reads_out.fq outdir/reads_out.fq.qual | sort > _b
+          cmp -s _a _b && echo "LOSSLESS -- confirmed byte-identical" || { echo "LOSSY"; diff _a _b | head -10; exit 1; }
