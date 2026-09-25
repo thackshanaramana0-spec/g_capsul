@@ -4,10 +4,18 @@
 set -e
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="${1:-/tmp/capsule_decode}"
+# See build106.sh: default to a portable baseline, CAPS_BUILD_NATIVE=1 opts into
+# -march=native for a build meant to run only on this machine.
+ARCH_FLAGS=""
+case "$(uname -m)" in
+    x86_64|amd64) ARCH_FLAGS="-march=x86-64-v2" ;;
+esac
+[ -n "${CAPS_BUILD_NATIVE:-}" ] && ARCH_FLAGS="-march=native"
+
 HTSOBJ="$(mktemp -d)"
 gcc -O3 -I"$HERE/thirdparty/htscodecs" -c "$HERE/thirdparty/htscodecs/fqzcomp_qual.c" -o "$HTSOBJ/fqzcomp_qual.o"
 gcc -O3 -I"$HERE/thirdparty/htscodecs" -c "$HERE/thirdparty/htscodecs/utils.c"        -o "$HTSOBJ/utils.o"
-g++ -O3 -march=native -std=c++17 -pthread -fopenmp -o "$OUT" \
+g++ -O3 $ARCH_FLAGS -std=c++17 -pthread -fopenmp -o "$OUT" \
     "$HERE/src/decoder.cpp" \
     "$HERE/thirdparty/ppmd/Ppmd7.c" "$HERE/thirdparty/ppmd/Ppmd7Enc.c" \
     "$HERE/thirdparty/ppmd/Ppmd7Dec.c" "$HERE/thirdparty/ppmd/Alloc.c" \
