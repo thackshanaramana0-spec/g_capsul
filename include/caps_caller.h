@@ -553,10 +553,14 @@ inline void hp_hint(void* base, size_t len, const char* what) {
     if (len <= off) return;
     size_t l2 = (len - off) & ~(size_t)((2u<<20) - 1);
     if (!l2) return;
+#ifdef __linux__
     if (madvise((void*)a0, l2, MADV_HUGEPAGE) == 0)
         fprintf(stderr, "[HP] MADV_HUGEPAGE on %.2f GB of %s\n", (double)l2/1073741824.0, what);
     else
         fprintf(stderr, "[HP] madvise failed (errno %d) -- %s stays on 4K pages\n", errno, what);
+#else
+    (void)a0; (void)l2; (void)what;
+#endif
 }
 
 struct FlatKmerSet {
@@ -1570,10 +1574,14 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         if (len <= off) return;
         size_t l2 = (len - off) & ~(size_t)((2u<<20) - 1);
         if (!l2) return;
+#ifdef __linux__
         if (madvise((void*)a0, l2, MADV_HUGEPAGE) == 0)
             fprintf(stderr, "[KC-HP] MADV_HUGEPAGE on %.2f GB of kc\n", (double)l2/1073741824.0);
         else
             fprintf(stderr, "[KC-HP] madvise failed (errno %d) -- kc stays on 4K pages\n", errno);
+#else
+        (void)a0; (void)l2;
+#endif
     };
     // Reads arrive 2-bit packed in graph-only mode (see 106_inprocess.cpp
     // SEQ_PACK). Unpack on demand into a caller-supplied buffer so only one
