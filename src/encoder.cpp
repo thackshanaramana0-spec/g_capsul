@@ -558,7 +558,9 @@ int main(int argc,char** argv){
     // (not a novel guess) -- setting it here via mallopt() makes the fix
     // robust to however the binary gets invoked, not dependent on an
     // external environment variable at every call site.
+#if defined(__GLIBC__)
     mallopt(M_ARENA_MAX,1);
+#endif
     if(argc<2){ fprintf(stderr,"usage: scs5 <in.fq> [maxmm] [minov]\n"); return 1; }
     const int      MAXMM = argc>2?atoi(argv[2]):3;
     // MINOV default 40 -> 16. Re-swept on REAL full files with the current
