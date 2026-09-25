@@ -2149,7 +2149,7 @@ static int capsule_call_from_archive(const std::string& in, const std::string& o
 
 #ifndef CAPSULE_NO_MAIN
 #ifndef CAPS_VERSION
-#define CAPS_VERSION "1.0.0"
+#define CAPS_VERSION "1.1.0"
 #endif
 
 int main(int argc,char** argv){
