@@ -1,0 +1,77 @@
+name: Publish Docker image
+
+# Runs on every GitHub Release, so a published version tag always has a
+# matching container image -- no manual `docker push` step to remember or
+# forget. Uses the automatic GITHUB_TOKEN (scoped to packages:write below),
+# not a personal token, so nothing needs to be configured by hand.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:      # manual re-run, e.g. to backfill a release made
+                           # before this workflow existed
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # workflow_dispatch has no release tag context; default to the tag
+          # this run was manually triggered against, if any, else main.
+          ref: ${{ github.event.release.tag_name || github.ref }}
+
+      - name: Determine image tags
+        id: tags
+        run: |
+          RAW="${{ github.event.release.tag_name }}"
+          VER="${RAW#v}"
+          if [ -z "$VER" ]; then VER="$(grep -oP '(?<=CAPS_VERSION \")[^\"]+' src/encoder.cpp)"; fi
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ steps.tags.outputs.version }}
+            ghcr.io/${{ github.repository }}:latest
+
+      - name: Verify the round trip against the PUBLISHED image
+        # Same check as ci.yml's docker job, but pulling the image that was
+        # just pushed to the registry -- proves what a real user gets by
+        # pulling, not just what the local build produces.
+        run: |
+          docker pull ghcr.io/${{ github.repository }}:${{ steps.tags.outputs.version }}
+          mkdir -p /tmp/publish_ci
+          python3 - <<'PY'
+          import random
+          random.seed(11)
+          ref = "".join(random.choice("ACGT") for _ in range(5000))
+          with open("/tmp/publish_ci/reads.fq", "w") as f:
+              for i in range(800):
+                  start = random.randint(0, len(ref) - 100)
+                  seq = ref[start:start + 100]
+                  f.write(f"@r{i}\n{seq}\n+\n{'I'*100}\n")
+          PY
+          docker run --rm -v /tmp/publish_ci:/data -e CAPS_NAMES=1 -e CAPS_QUAL=1 -e ARCHIVE=/data/out.capsule \
+            ghcr.io/${{ github.repository }}:${{ steps.tags.outputs.version }} best106 /data/reads.fq
+          mkdir -p /tmp/publish_ci/outdir
+          docker run --rm -v /tmp/publish_ci:/data \
+            ghcr.io/${{ github.repository }}:${{ steps.tags.outputs.version }} \
+            capsule_decode /data/out.capsule /data/outdir /data/outdir/reads_out.fq
+          cd /tmp/publish_ci
+          awk 'NR%4==1{n=substr($0,2)} NR%4==2{s=$0} NR%4==0{print n"\t"s"\t"$0}' reads.fq | sort > _a
+          paste outdir/reads_out.fq.names outdir/reads_out.fq outdir/reads_out.fq.qual | sort > _b
+          cmp -s _a _b && echo "LOSSLESS -- published image confirmed byte-identical" || { echo "LOSSY"; exit 1; }
