@@ -7,7 +7,7 @@ on:
     branches: [c_star_pg_advance, main]
 
 jobs:
-  build-and-test:
+  build-and-test-linux:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -43,3 +43,53 @@ jobs:
 
       - name: ADDRESSABLE — decoder regression test (Claim 3)
         run: bash scripts/test_claim3.sh /tmp/ci_claim3
+
+  build-and-test-macos:
+    # Apple Silicon (arm64). Built via CMake, not scripts/build106.sh: that
+    # script hardcodes the literal `gcc`/`g++` binaries, which on macOS are
+    # Apple Clang aliases that lack -fopenmp support. Real GCC from Homebrew
+    # sidesteps that instead of fighting AppleClang + libomp.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: brew install gcc xz bwa bcftools htslib samtools
+
+      - name: Configure and build (CMake + Homebrew GCC)
+        run: |
+          GCC_BIN=$(brew --prefix gcc)/bin
+          CC="$(ls "$GCC_BIN"/gcc-* | head -1)"
+          CXX="$(ls "$GCC_BIN"/g++-* | head -1)"
+          cmake -S . -B build -DCMAKE_C_COMPILER="$CC" -DCMAKE_CXX_COMPILER="$CXX"
+          cmake --build build -j"$(sysctl -n hw.ncpu)"
+          cp build/best106 /tmp/best106
+          cp build/capsule_decode /tmp/capsule_decode
+
+      - name: Generate a small synthetic FASTQ for the lossless check
+        run: |
+          python3 - <<'PY'
+          import random
+          random.seed(1)
+          with open('/tmp/ci_reads.fq', 'w') as f:
+              for i in range(2000):
+                  seq = ''.join(random.choice('ACGT') for _ in range(100))
+                  qual = 'I' * 100
+                  f.write(f"@read{i}\n{seq}\n+\n{qual}\n")
+          PY
+
+      - name: COMPACT — lossless round-trip (Claim 1)
+        run: BEST=/tmp/best106 bash scripts/verify_lossless.sh /tmp/ci_reads.fq /tmp/ci_verify
+
+      - name: FAITHFUL — caller regression test (Claim 2)
+        run: |
+          mkdir -p /tmp/ci_claim2
+          cp /tmp/best106 /tmp/ci_claim2/best106
+          bash scripts/test_claim2.sh /tmp/ci_claim2
+
+      - name: ADDRESSABLE — decoder regression test (Claim 3)
+        run: |
+          mkdir -p /tmp/ci_claim3
+          cp /tmp/best106 /tmp/ci_claim3/best106
+          cp /tmp/capsule_decode /tmp/ci_claim3/capsule_decode
+          bash scripts/test_claim3.sh /tmp/ci_claim3

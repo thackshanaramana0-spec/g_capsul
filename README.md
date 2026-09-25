@@ -1,17 +1,10 @@
 # G_CAPSUL: Genomic, Compact, Addressable, Pseudogenome-Structured, Unified Lossless
 
-> **Status:** results verified and current as of 2026-09-22.
-> Authoritative numbers live in [`results/`](results/), and the full cross-verified reference
-> tree is in [`docs/`](docs/) — start at [`docs/REPO_MAP.md`](docs/REPO_MAP.md). Where this
-> file and a result CSV disagree, the CSV wins.
-
 [![CI](https://github.com/thackshanaramana0-spec/g_capsul/actions/workflows/ci.yml/badge.svg)](https://github.com/thackshanaramana0-spec/g_capsul/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux-lightgrey.svg)](#build)
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://en.cppreference.com/w/cpp/17)
 [![Lossless](https://img.shields.io/badge/lossless-byte--exact-brightgreen.svg)](#results)
-
-> Compress Illumina short reads to a smaller-than-SPRING-and-Genozip lossless archive, call heterozygous SNVs, indels and multi-allelic sites with no reference genome, and export the assembly, per-base depth, or a coordinate range straight from the archive — one pseudogenome, three capabilities.
 
 ---
 
