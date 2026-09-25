@@ -143,7 +143,7 @@ own centerpiece related-work comparison.
 ## Content-retrieval / exact-match comparators — Claim 3, T3.4
 
 - **BEETL-fastq (2014), CIndex (2022), sFASTQ (2022)**: **confirmed** (via
-  literature survey, `DEVNOTES.md`'s "Novelty, corrected after a literature
+  literature survey, `BTR_NOTES.md`'s "Novelty, corrected after a literature
   survey 2026-09-16" section) to already do content retrieval from
   compressed reads via BWT/FM-index, natively, no auxiliary index needed —
   content retrieval itself is **not novel**. What is distinct: retrieval by
@@ -154,7 +154,7 @@ own centerpiece related-work comparison.
   session, not asserted from the technique's name.
 - **No speed or index-size benchmark against any of the three has been
   run.** Stated as the single most valuable missing experiment
-  (`DEVNOTES.md`, `claim3/t34_exact_match_claim3.md`).
+  (`BTR_NOTES.md`, `claim3/t34_exact_match_claim3.md`).
 - **Could BEETL add position retrieval with a small addition?** **Confirmed
   structurally, by tracing what each compression method actually
   computes**: this project's the completion index addition was cheap because placement

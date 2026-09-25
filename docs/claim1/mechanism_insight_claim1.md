@@ -69,7 +69,7 @@ Verified against `paper/METHODS.md` and `docs/VARIABLE_LENGTH_DESIGN.md`:
 
 **Why this was hard to get right — the 4 bugs, already documented in this
 project's bug history, now connected to their actual trigger**: per
-`docs/FAILURES_AND_REFUTED_IDEAS.md` Part A (also cited in `DEVNOTES.md` §6.3
+`docs/FAILURES_AND_REFUTED_IDEAS.md` Part A (also cited in `BTR_NOTES.md` §6.3
 and `code_mapping_claim1.md`), at least two of the four silent data-loss
 bugs found in this project's pre-session history were **specifically
 triggered by variable-length input**: the mismatch-position byte clamp
@@ -172,7 +172,7 @@ incomplete — `refc::encode` stored a reference's source but not its
 destination gap/length/RC flag, found only because `verify_lossless.sh`'s
 own limitation was itself questioned; margin corrected from a
 previously-claimed +4.65% to the real +1.90%. (2) Four further silent
-data-loss bugs (`DEVNOTES.md` §6.3, `docs/FAILURES_AND_REFUTED_IDEAS.md` Part
+data-loss bugs (`BTR_NOTES.md` §6.3, `docs/FAILURES_AND_REFUTED_IDEAS.md` Part
 A) — two of them specifically triggered by variable-length input, as
 detailed above. **All five were found by actually decoding archives and
 diffing against the original file, never by trusting a passing size
@@ -225,7 +225,7 @@ order/permutation, (3) MEM self-match references, (4) positions + strand,
 N-containing reads — which, at the time this scope was locked, had been
 **silently dropped with no storage anywhere** by every earlier stage in
 the project's history, a real undisclosed data-loss bug distinct from the
-four cataloged in `DEVNOTES.md` §6.3. All six are required for a decoder to
+four cataloged in `BTR_NOTES.md` §6.3. All six are required for a decoder to
 reconstruct every read's sequence and original file position; any subset
 is an incomplete, misleadingly favorable number.
 

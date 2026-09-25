@@ -57,7 +57,7 @@ as sufficient). Disposition is one of five kinds, stated per row:
 | `EBWT_LITERATURE_CORRECTION.md` | SYNTHESIZED | `novelty_and_prior_art.md` (eBWT2SNP precision self-correction) |
 | `ENCODER_HOTPATH_INVESTIGATION.md` | PROCESS | Read in full (104 lines); conclusion (memory-bandwidth bound, FM-index rewrite is post-paper work) already implied by speed disclosure |
 | `ENCODER_SPEEDUP_REVIEW.md` | PROCESS | Read in full (88 lines); thread-safety code review, not mechanism content |
-| `FAILURES_AND_REFUTED_IDEAS.md` | SUPERSEDED | Source for `DEVNOTES.md` §6.3's 4 bugs, already cited throughout `claim1/*.md` |
+| `FAILURES_AND_REFUTED_IDEAS.md` | SUPERSEDED | Source for `BTR_NOTES.md` §6.3's 4 bugs, already cited throughout `claim1/*.md` |
 | `FINAL_ALGORITHMIC_SCAN.md` | SYNTHESIZED | `claim1/names_and_quality_claim1.md` (candidate-fork chdir bug, found and fixed) |
 | `FINAL_HEADROOM.md` | SYNTHESIZED | `claim1/t12_wall_time_claim1.md` (decompress-is-80%-Python finding) |
 | `FORMAT.md` | SYNTHESIZED | `technical_architecture.md` (container format) |
@@ -101,7 +101,7 @@ as sufficient). Disposition is one of five kinds, stated per row:
 | `PGRC2_DISK_ARCHITECTURE.md` | SYNTHESIZED | `extras/LAYER_BY_LAYER_ANALYSIS.md` (disk-staging dead-code finding, kept as-is) |
 | `PGRC2_EXTENSION_ANALYSIS.md` | SYNTHESIZED | `novelty_and_prior_art.md` ("could PgRC2 add locus retrieval" section) |
 | `PGRC2_STREAM_COMPARISON.md` | SYNTHESIZED | `claim1/mechanism_insight_claim1.md` (references cost 3.6x theirs, full breakdown) |
-| `PHASE2B_RESULT.md` | SUPERSEDED | Read in full; VOID-for-4-datasets note already in `DEVNOTES.md` and cross-checked |
+| `PHASE2B_RESULT.md` | SUPERSEDED | Read in full; VOID-for-4-datasets note already in `BTR_NOTES.md` and cross-checked |
 | `PIPELINE_LEDGER.md` | PROCESS | Early (2026-08-29) engineering status ledger, fully superseded |
 | `PLACEMENTS_AS_LINKS_REFUTED.md` | SYNTHESIZED | `claim2/architecture_vs_discosnp_claim2.md` (free-read-threading refutation, exact numbers matched) |
 | `POLYPLOID_BENCHMARK.md` | SUPERSEDED | Multi-allelic/polyploid distinction cross-checked against `novelty_and_prior_art.md` and `claim2/t25_tetraploid_claim2.md` |
@@ -113,7 +113,7 @@ as sufficient). Disposition is one of five kinds, stated per row:
 | `RESEARCH_CHECKLIST_CLAIM2.md` | PROCESS | Read in full; statistical-methodology-N/A justification synthesized into `honest_limitations_and_scope.md` |
 | `RESEARCH_CHECKLIST_CLAIM3.md` | PROCESS | Read in full; same |
 | `RESEARCH_CHECKLIST_OVERALL.md` | PROCESS | Read in full; same |
-| `SECOND_REGION_SELF_MATCH.md` | SYNTHESIZED | `extras/SOTA_COMPARISON.md` (kept as-is); also in `DEVNOTES.md`'s own "what is open" section |
+| `SECOND_REGION_SELF_MATCH.md` | SYNTHESIZED | `extras/SOTA_COMPARISON.md` (kept as-is); also in `BTR_NOTES.md`'s own "what is open" section |
 | `SERVER_SETUP_AND_DOWNLOADS.md` | KEPT AS-IS | `extras/SERVER_SETUP_AND_DOWNLOADS.md`, verified byte-identical |
 | `SOTA_COMPARISON.md` | KEPT AS-IS | `extras/SOTA_COMPARISON.md`, verified byte-identical |
 | `SPEED_PLAN.md` | PROCESS | Measurement-methodology discipline (measure-twice rule); process, not mechanism |
@@ -173,12 +173,12 @@ in this session excluded by construction, since the counting commands used
   `ARCHIVE_PATH_TO_72S.md` (self-marked SUPERSEDED by the former),
   `CLAIM1_STREAM_ANALYSIS.md`, `FINAL_VERDICT.md`, `HANDOVER.md`,
   `RUNBOOK.md`, `SHIPPING_READINESS.md` — 4 of 7 carry an explicit "START
-  HERE INSTEAD" banner pointing to `README.md`/`DEVNOTES.md`/`RESULT_CODE.md`/
+  HERE INSTEAD" banner pointing to `README.md`/`BTR_NOTES.md`/`RESULT_CODE.md`/
   `REPRODUCE_EVERYTHING.md` and state they predate the final 2026-09-09
   sweep. `CLAIM1_STREAM_ANALYSIS.md`'s one real finding (an 18× entropy gap
   inside `pos_abs` from mixing main/second-region positions, measured
   −6.18% to −0.52% across 4 datasets) is superseded by later work already
-  reflected in `DEVNOTES.md`'s refuted-ideas table ("splitting positions by
+  reflected in `BTR_NOTES.md`'s refuted-ideas table ("splitting positions by
   region: we already code BELOW the region-split bound").
 
 ## Root-level files (8, outside `docs/` entirely) — read this pass
@@ -186,7 +186,7 @@ in this session excluded by construction, since the counting commands used
 | File | Disposition |
 |---|---|
 | `README.md` | Read substantially earlier this session (structure, doc links) |
-| `DEVNOTES.md` | Read extensively throughout — the project's own ground-truth reference, source for most of `refer_paper_docs/` |
+| `BTR_NOTES.md` | Read extensively throughout — the project's own ground-truth reference, source for most of `refer_paper_docs/` |
 | `PIPELINE.md` | Read substantially (flags table, `CAPS_SPANS`/`CAPS_CALL` distinction) |
 | `AUDIT.md` | Read in full this pass — the project's forensic audit; substantial new content added to `numbers_and_verification_index.md` (tier-1/tier-2 verification, 4 real defects found, self-assessed detection rate) |
 | `NEW_DATASET_LOCKED.md` | Kept as-is in `extras/`, verified byte-identical |

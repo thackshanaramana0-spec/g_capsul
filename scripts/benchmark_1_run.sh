@@ -4,7 +4,7 @@
 #
 #  Design rules this script obeys:
 #   * ONE TIMED JOB AT A TIME. Concurrency corrupts wall time and peak RAM,
-#     which are published numbers (DEVNOTES.md rule 3). Nothing here runs in
+#     which are published numbers (BTR_NOTES.md rule 3). Nothing here runs in
 #     parallel with anything else that is being measured.
 #   * SPEED AND RAM come from /usr/bin/time -v (wall clock + VmHWM). Never
 #     estimated, never derived from a log timestamp.
@@ -14,7 +14,7 @@
 #   * RESULTS ARE WRITTEN AS THEY HAPPEN. A crash at dataset 15 keeps 1-14.
 #   * FAILURE OF ONE DATASET IS NOT FAILURE OF THE RUN: retry once, then
 #     record FAILED and continue. The single exception is a LOSSY archive,
-#     which halts everything (DEVNOTES.md rule 5) -- that is a correctness bug,
+#     which halts everything (BTR_NOTES.md rule 5) -- that is a correctness bug,
 #     not a flaky run.
 #
 #  usage:
@@ -120,7 +120,7 @@ trap 'stop_heartbeat' EXIT INT TERM
 # ── CSVs, written incrementally ───────────────────────────────────────────
 # ── projection from benchmark_0, so a wrong number is visible at minute 19
 # and not at hour 9. Absent file = projections simply not shown; never fatal,
-# and never used to judge a result (DEVNOTES.md rule 6: measured wins).
+# and never used to judge a result (BTR_NOTES.md rule 6: measured wins).
 PROJ_F="${PROJ_FILE:-$HERE/results/BENCHMARK_0_PROJECTION.tsv}"
 proj_ds(){   # $1=accession -> "ours_c ours_d spring_c geno_c", empty if unknown
     [ -s "$PROJ_F" ] || return 0
@@ -222,7 +222,7 @@ phase1_one(){                      # $1 = dataset name ; returns 1 on failure
         "$(awk -v a=$ARCH -v r=$RAW 'BEGIN{print 100*a/r}')" "$CW" "$DW" "$CR" "$LL" >> "$CSV1"
     rm -rf "$OUTDIR" "$TF" "$TF2"          # decode scratch is the big transient
     if [ "$LL" != "LOSSLESS" ]; then
-        err "$DS: ARCHIVE IS LOSSY — halting the entire run (DEVNOTES.md rule 5)"
+        err "$DS: ARCHIVE IS LOSSY — halting the entire run (BTR_NOTES.md rule 5)"
         err "This is a correctness bug, not a flaky run. Do not continue."
         stop_heartbeat; exit 2
     fi
@@ -280,7 +280,7 @@ phase1_one(){                      # $1 = dataset name ; returns 1 on failure
 losscmp_plain(){
     # THE '+' LINE IS NORMALISED ON BOTH SIDES. SPRING drops the optional ID
     # after '+', which the FASTQ spec makes redundant (it must repeat line 1),
-    # so a raw comparison reports LOSSY for a tool that lost no data. DEVNOTES.md
+    # so a raw comparison reports LOSSY for a tool that lost no data. BTR_NOTES.md
     # specifies this normalisation so the SPRING comparison is fair on DATA
     # recovery. Verified on SRR29296997: raw compare differs only in that
     # field; normalised, it is byte-identical.

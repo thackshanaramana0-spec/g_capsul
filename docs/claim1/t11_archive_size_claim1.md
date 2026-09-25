@@ -32,7 +32,7 @@ directly)**:
 | Aggregate margin | **−6.03%** | **−43.26%** |
 | Losslessness | **57 / 57** archives (19 datasets × 3 tools) verified LOSSLESS |
 
-Exact match to `DEVNOTES.md`'s headline figure — confirmed independently, not
+Exact match to `BTR_NOTES.md`'s headline figure — confirmed independently, not
 assumed correct because it was previously stated.
 
 **Sample row, cross-checked byte-for-byte against the manuscript table**
@@ -53,7 +53,7 @@ datasets × 3 tools), meaning **every single archive**, including SPRING's
 and Genozip's own outputs, was actually decoded and diffed against the
 original — not assumed correct because the tool claims lossless
 compression. This matters because Claim 1's own project history (see
-`code_mapping_claim1.md` and `DEVNOTES.md` §6.1/6.3) records that this
+`code_mapping_claim1.md` and `BTR_NOTES.md` §6.1/6.3) records that this
 project once shipped incomplete archive-decode verification and had to
 correct four silent data-loss bugs found only by actually decoding
 archives rather than trusting dump-level checks — the discipline behind

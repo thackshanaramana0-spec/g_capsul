@@ -63,9 +63,9 @@ itself evidence worth citing.
 
 The T1.1 aggregate figures above were **independently recomputed from the
 raw CSV this session** (`results/claim1/claim1_T1.1_T1.2.csv`), not just
-cited from `DEVNOTES.md` — summed all 19 datasets' archive bytes for each
+cited from `BTR_NOTES.md` — summed all 19 datasets' archive bytes for each
 tool and derived the percentage margins from scratch. Result: exact match
-to `DEVNOTES.md`'s stated headline (19/19 vs SPRING −6.03%, 19/19 vs Genozip
+to `BTR_NOTES.md`'s stated headline (19/19 vs SPRING −6.03%, 19/19 vs Genozip
 −43.26%, 57/57 LOSSLESS). One individual row (ERR5181310) additionally
 cross-checked byte-for-byte against the manuscript table. This is the
 strongest verification standard applied across any of the three claim

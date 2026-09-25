@@ -1513,7 +1513,7 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
             // and the export stays byte-identical -- but it CHANGES .sites,
             // which feeds the native-pileup fast path whose published numbers
             // (400/400 het at >=2 reads, 25 homozygous false positives, 19.6x
-            // faster than the read path) are recorded in DEVNOTES.md. Adopting it
+            // faster than the read path) are recorded in BTR_NOTES.md. Adopting it
             // therefore requires re-running and re-gating those numbers, not a
             // drive-by edit. Reverted pending that.
             //

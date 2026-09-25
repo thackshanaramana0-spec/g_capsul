@@ -186,7 +186,7 @@ not claimed as done.
 
 ## Honest comparison to BEETL/CIndex/sFASTQ
 
-Full novelty trail: `DEVNOTES.md`'s "Novelty, corrected after a literature
+Full novelty trail: `BTR_NOTES.md`'s "Novelty, corrected after a literature
 survey 2026-09-16" section and `docs/CLAIM3_LOCUS_ADDRESSABILITY.md`.
 
 **Confirmed**: content retrieval from a compressed archive is not novel —
@@ -219,7 +219,7 @@ method actually computes, not assumed from which one "feels" more capable.
 
 **What is not claimed**: no speed or index-size benchmark against
 BEETL/CIndex/sFASTQ has been run. Stated as the single most valuable
-missing experiment in `DEVNOTES.md`, not silently omitted.
+missing experiment in `BTR_NOTES.md`, not silently omitted.
 
 ## The native-pileup fast path — an unexploited layer, found by audit
 
