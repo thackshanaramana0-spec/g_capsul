@@ -38,6 +38,7 @@
 #include <sys/mman.h>
 #include <map>
 #include <dirent.h>
+#include <cerrno>
 #if defined(__GLIBC__)
 #include <malloc.h>
 #endif
@@ -370,7 +371,15 @@ int main(int argc,char** argv){
         printf("g_capsul encoder %s (archive format v2)\n", CAPS_VERSION);
         return 0; }
     phase_init();
-    if(argc>1) g_input_path = argv[1];
+    // Must precede every other use of argv[1] below (the SCOPE CHECK block's
+    // std::ifstream pf(argv[1]) a few lines down dereferenced it unconditionally,
+    // so `scs5` with zero arguments was an out-of-bounds argv[] read, not just a
+    // missing usage message). Exit code 2 to match every other pre-flight fatal
+    // check in this function (oversize read, malformed header, zero usable
+    // records) -- the old check further down returned 1, which was the one
+    // exit code that didn't match this function's own convention.
+    if(argc<2){ fprintf(stderr,"usage: scs5 <in.fq> [maxmm] [minov]\n"); return 2; }
+    g_input_path = argv[1];
     // Resolve to absolute IMMEDIATELY, before any candidate/GSEARCH fork can
     // chdir() into a per-candidate scratch directory. CALL_VCF and
     // CAPS_DUMP_CONTIGS already get this treatment for exactly this reason
@@ -419,6 +428,8 @@ int main(int argc,char** argv){
         std::string a1,b1,c1,d1;
         size_t tot=0, dup=0, toolong=0; uint32_t longest=0; std::string longest_hdr;
         size_t malformed_lines=0;
+        size_t qmismatch=0; std::string qmismatch_hdr;
+        uint32_t qmismatch_seq_len=0, qmismatch_qual_len=0;
         // Names, independently of read length: `nmc`'s tokenizer indexes
         // per-token-index model arrays by a running token count, guarded at
         // `token_ctr>=MAXTOK-1` (include/names_coder.h) so it cannot overrun
@@ -446,6 +457,10 @@ int main(int argc,char** argv){
                 longest_hdr_len=(uint32_t)a1.size(); longest_hdr_line=a1;
             }
             if(b1.size()>MAX_READ_LEN){ ++toolong; continue; }
+            if(d1.size()!=b1.size()){
+                if(!qmismatch){ qmismatch_hdr=a1; qmismatch_seq_len=(uint32_t)b1.size(); qmismatch_qual_len=(uint32_t)d1.size(); }
+                ++qmismatch; continue;
+            }
             if(!getenv("NODEDUP")){
                 if(b1.find('N')!=std::string::npos) continue;
                 uint64_t h=1469598103934665603ULL;
@@ -476,13 +491,38 @@ int main(int argc,char** argv){
                 "empty one that reports success.\n", argv[1], malformed_lines);
             return 2;
         }
+        // READ-COUNT CEILING. Found by direct comparison against SPRING's own
+        // pre-flight validation (preprocess.cpp), which checks its analogous
+        // MAX_NUM_READS explicitly and loudly rather than leaving it implicit.
+        // Ours comes from the MEM redundancy-removal stage's packed match
+        // record: MRID (src/encoder.cpp) masks a read id into 29 bits
+        // (0x1FFFFFFF = 536,870,911), so any read id at or past that value
+        // silently truncates/collides with a different read's id rather than
+        // erroring -- a WRONG but non-crashing archive, the worst class of
+        // failure for a tool whose entire premise is exactness. Checked here,
+        // at the same pre-flight point as every other structural limit,
+        // rather than left as an unstated assumption.
+        static const uint64_t MAX_READS = 0x1FFFFFFFULL;
+        if((uint64_t)tot > MAX_READS){
+            fprintf(stderr,
+                "FATAL: %zu usable records found in '%s', exceeding this "
+                "format's %llu-read structural limit.\n"
+                "  This is not a policy threshold -- the MEM redundancy-removal "
+                "stage packs each read's id into a 29-bit field (MRID, src/"
+                "encoder.cpp); a read count at or past 2^29 silently truncates "
+                "and collides read ids instead of erroring. Refusing rather "
+                "than writing an archive that would silently misattribute "
+                "matches between unrelated reads.\n",
+                tot, argv[1], (unsigned long long)MAX_READS);
+            return 2;
+        }
         if(toolong>0){
             fprintf(stderr,
                 "FATAL: %zu of %zu records (%.1f%%) exceed this format's %u-base "
                 "structural limit; longest observed is %u bases (record '%s').\n"
                 "  This is not a policy threshold -- every per-read decode buffer "
-                "in this encoder is a fixed %u-byte stack array (see stages/"
-                "106_inprocess.cpp, MAX_READ_LEN), and reads at this length come "
+                "in this encoder is a fixed %u-byte stack array (see src/"
+                "encoder.cpp, MAX_READ_LEN), and reads at this length come "
                 "from long-read sequencing (Oxford Nanopore, PacBio), a technology "
                 "this archive format does not currently support: its assembly, "
                 "mismatch and position coders are all built and validated against "
@@ -493,11 +533,31 @@ int main(int argc,char** argv){
                 "success.\n"
                 "  Supported input: short-read FASTQ, any read length up to %u "
                 "bases, fixed or variable length, forward/reverse-complement "
-                "strands, ACGTN alphabet. See industry/check_input_scope.py for "
+                "strands, ACGTN alphabet. See scripts/check_input_scope.py for "
                 "a standalone pre-flight report on any input file.\n",
                 toolong, tot, 100.0*toolong/tot, (unsigned)MAX_READ_LEN,
                 (unsigned)longest, longest_hdr.c_str(),
                 (unsigned)MAX_READ_LEN, (unsigned)MAX_READ_LEN, (unsigned)MAX_READ_LEN);
+            return 2;
+        }
+        // SEQ/QUALITY LENGTH PARITY. Found by direct comparison against
+        // SPRING's own pre-flight validation (preprocess.cpp), which checks
+        // exactly this. The quality coder (include/quality_coder.h, wrapping
+        // fqzcomp) assumes per-record seq/qual length parity by construction;
+        // a truncated download or disk-corrupted FASTQ with a short/long
+        // quality line for its sequence would previously pass this pre-flight
+        // silently and reach the quality coder unguarded, risking a
+        // corrupted or desynchronized quality stream rather than a refusal.
+        if(qmismatch>0){
+            fprintf(stderr,
+                "FATAL: %zu of %zu records have a quality line whose length "
+                "does not match their sequence line's length (record '%s': "
+                "seq=%u qual=%u bases). This is a malformed FASTQ file, not a "
+                "policy threshold -- refusing rather than feeding a length "
+                "mismatch to the quality coder, which assumes parity by "
+                "construction.\n",
+                qmismatch, tot, qmismatch_hdr.c_str(),
+                (unsigned)qmismatch_seq_len, (unsigned)qmismatch_qual_len);
             return 2;
         }
         if(!getenv("NODEDUP")){
@@ -561,7 +621,6 @@ int main(int argc,char** argv){
 #if defined(__GLIBC__)
     mallopt(M_ARENA_MAX,1);
 #endif
-    if(argc<2){ fprintf(stderr,"usage: scs5 <in.fq> [maxmm] [minov]\n"); return 1; }
     const int      MAXMM = argc>2?atoi(argv[2]):3;
     // MINOV default 40 -> 16. Re-swept on REAL full files with the current
     // coders: lowering it collapses more of the pseudogenome, and with the
@@ -1792,10 +1851,23 @@ int main(int argc,char** argv){
                 char cwdbuf[4096]; if(!getcwd(cwdbuf,sizeof cwdbuf)) cwdbuf[0]='\0';
                 const std::string ab = (!base.empty()&&base[0]=='/')?base:(std::string(cwdbuf)+"/"+base);
                 const std::string dd = ab+".cand"+std::to_string(probe)+".d";
-                mkdir(dd.c_str(),0755);
+                // A failed mkdir/chdir here previously only perror()'d and
+                // continued -- this candidate would then run in whatever
+                // directory the process was already in, silently writing its
+                // dump/archive files into another candidate's directory (or
+                // the caller's cwd) instead of failing. Found by comparison
+                // against PgRC2's pgrc-encoder.cpp, which treats an
+                // equivalent mkdir failure as fatal. The parent already
+                // tolerates a failed candidate (waitpid/WEXITSTATUS, excludes
+                // it from the size comparison) -- exiting this child cleanly
+                // routes into that existing, already-correct handling instead
+                // of silently corrupting where output lands.
+                if(mkdir(dd.c_str(),0755)!=0 && errno!=EEXIST){
+                    perror("mkdir"); return 1;
+                }
                 setenv("MAXMAP", std::to_string(probe).c_str(), 1);
                 setenv("ARCHIVE",(ab+".cand"+std::to_string(probe)).c_str(),1);
-                if(chdir(dd.c_str())!=0) perror("chdir");
+                if(chdir(dd.c_str())!=0){ perror("chdir"); return 1; }
                 gs_child=true;
             }
             // ── CANDIDATES RUN CONCURRENTLY, BOUNDED BY MEASURED RAM ──────
@@ -3028,7 +3100,11 @@ int main(int argc,char** argv){
         // nothing is written to the cwd between the two fork points.
         const size_t ci = g_l2_members[mine2];
         const std::string ddir = g_l2_base + ".cand" + std::to_string(ci) + ".d";
-        mkdir(ddir.c_str(), 0755);
+        // See the level-1 fork's identical mkdir/chdir hardening above for why
+        // this must be fatal, not just perror()'d.
+        if(mkdir(ddir.c_str(),0755)!=0 && errno!=EEXIST){
+            perror("mkdir"); return 1;
+        }
         setenv("MAXMAP",  std::to_string(g_l2_maxmaps[mine2]).c_str(), 1);
         setenv("ARCHIVE", (g_l2_base + ".cand" + std::to_string(ci)).c_str(), 1);
         // CAPS_CALL outputs have the SAME hazard the dump files had: every
@@ -3051,7 +3127,7 @@ int main(int argc,char** argv){
             if(const char* dc = getenv("CAPS_DUMP_CONTIGS"))
                 setenv("CAPS_DUMP_CONTIGS", (abso(dc) + ".cand" + std::to_string(ci)).c_str(), 1);
         }
-        if(chdir(ddir.c_str())!=0) perror("chdir");
+        if(chdir(ddir.c_str())!=0){ perror("chdir"); return 1; }
 
         // APPLY THIS CANDIDATE'S CEILING to the shared search. The search ran at
         // the group's maximum, so a read placed with more mismatches than this

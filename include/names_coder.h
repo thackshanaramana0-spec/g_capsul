@@ -279,7 +279,20 @@ struct Layout {
 // Streams the FASTQ ID column; one header materialized at a time.
 static void dict_pass(const char* fq_path, std::array<GlobalDict,MAXTOK>& gdict,
                       uint64_t* n_names_out, Layout* lay=nullptr){
-    FILE* f=fopen(fq_path,"r"); if(!f) return;
+    FILE* f=fopen(fq_path,"r");
+    if(!f){
+        // Not reachable today: encoder.cpp's own pre-flight std::ifstream check
+        // on argv[1] already refuses before this runs. Kept as a loud diagnostic
+        // rather than a silent no-op anyway, since encode_from_fastq() would
+        // otherwise return a normally-shaped Encoded{n_names=0} here with
+        // nothing to tell a caller "the file couldn't be opened" apart from
+        // "there happened to be zero names" -- the same class of silent-success
+        // failure this project's own encoder.cpp SCOPE CHECK block exists to
+        // eliminate for the oversize-read/malformed-header cases.
+        fprintf(stderr,"WARNING: names_coder::dict_pass could not open '%s' -- "
+                       "names stream will be silently empty\n", fq_path);
+        return;
+    }
     std::string prev_id;
     std::array<uint32_t,MAXTOK> prev_tok_ptr{}; prev_tok_ptr.fill(0);
     std::vector<uint32_t> hit(MAXTOK,0), seen(MAXTOK,0);

@@ -29,15 +29,15 @@ ARGS="${ENC_ARGS:-3 16 16 22 16 16 1 24 64 1}"
 # SCOPE CHECK -- runs before the (expensive, multi-candidate) encode below, so
 # out-of-scope input is refused in seconds with a full explanation instead of
 # after however long the sweep takes. This is a friendly pre-flight report,
-# not the safety mechanism: the encoder itself (stages/106_inprocess.cpp)
-# refuses unconditionally and cannot be bypassed by skipping this script and
-# calling the binary directly. Set CAPS_SKIP_SCOPE_CHECK=1 to bypass this
-# report only (e.g. re-running a file already known to be in scope) -- the
-# encoder's own gate still applies regardless.
+# not the safety mechanism: the encoder itself (src/encoder.cpp) refuses
+# unconditionally and cannot be bypassed by skipping this script and calling
+# the binary directly. Set CAPS_SKIP_SCOPE_CHECK=1 to bypass this report only
+# (e.g. re-running a file already known to be in scope) -- the encoder's own
+# gate still applies regardless.
 HERE_SCA="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 if [ -z "${CAPS_SKIP_SCOPE_CHECK:-}" ] && [ -x "$(command -v python3)" ] \
-   && [ -f "$HERE_SCA/industry/check_input_scope.py" ]; then
-    python3 "$HERE_SCA/industry/check_input_scope.py" "$IN"
+   && [ -f "$HERE_SCA/scripts/check_input_scope.py" ]; then
+    python3 "$HERE_SCA/scripts/check_input_scope.py" "$IN"
     SCOPE_RC=$?
     if [ "$SCOPE_RC" -ge 2 ]; then
         echo "encode_adaptive.sh: refusing -- see the OUT OF SCOPE finding(s) above." >&2
