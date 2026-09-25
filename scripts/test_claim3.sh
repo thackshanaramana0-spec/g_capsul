@@ -67,7 +67,7 @@ INPUT="$W/synth.fq" ARCHIVE="$ARC" BEST="$BEST" bash "$HERE/scripts/encode_adapt
 # encode_adaptive.sh's own stdout only has ARCHIVE_TOTAL; the per-candidate
 # "unique=" line is in the archive's own .log sibling file (see the
 # DUMP_LIT/DUMP_PERM/DUMP_MM invocation inside encode_adaptive.sh).
-UNIQUE=$(grep -oP 'unique=\K[0-9]+' "${ARC}.log" | tail -1)
+UNIQUE=$(grep -o 'unique=[0-9][0-9]*' "${ARC}.log" | sed 's/unique=//' | tail -1)
 echo "-> encoder reports unique=$UNIQUE"
 
 # ── export: non-empty, pure ACGT ─────────────────────────────────────────────
@@ -91,7 +91,7 @@ check "$([ "$N_QUERY" = "$UNIQUE" ] && echo 1 || echo 0)" \
     "full-range query returned $N_QUERY records == encoder's unique count $UNIQUE (dedup semantics correct)"
 
 # every returned read's stated position must fall inside [0,PGLEN)
-BAD_POS=$(grep '^>' "$W/query_full.fa" | grep -oP 'pos=\K[0-9]+' | awk -v p="$PGLEN" '$1>=p{c++} END{print c+0}')
+BAD_POS=$(grep '^>' "$W/query_full.fa" | grep -o 'pos=[0-9][0-9]*' | sed 's/pos=//' | awk -v p="$PGLEN" '$1>=p{c++} END{print c+0}')
 check "$([ "$BAD_POS" -eq 0 ] && echo 1 || echo 0)" "no query record has a position >= PGLEN ($PGLEN)"
 
 # ── roundtrip: the archive is still lossless ─────────────────────────────────
