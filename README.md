@@ -51,6 +51,8 @@ purposes instead of discarding it after compression:
 - [Results](#results)
 - [Quick test](#quick-test)
 - [Build](#build)
+- [Docker](#docker)
+- [Bioconda](#bioconda)
 - [Usage](#usage)
 - [Design](#design)
 - [Repository layout](#repository-layout)
@@ -334,6 +336,21 @@ real compress→decompress→`cmp` round trip is re-verified on every push
 check re-runs against the **published** image itself after every release
 ([`.github/workflows/publish-image.yml`](.github/workflows/publish-image.yml)) — so what you
 pull is proven to be what CI actually tested, not just what built locally.
+
+---
+
+## Bioconda
+
+A recipe is submitted and under review:
+[bioconda/bioconda-recipes#69631](https://github.com/bioconda/bioconda-recipes/pull/69631).
+All of bioconda's own CI checks pass (lint, Linux build+test, macOS build+test, ARM
+build+test) — it's waiting on a maintainer merge, not on anything still broken. Once merged:
+
+```bash
+conda install -c bioconda g_capsul
+```
+
+Until then, use one of the three methods above — they already give the exact same binaries.
 
 ---
 
