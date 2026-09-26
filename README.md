@@ -472,6 +472,13 @@ the released repository. **For all reported numerical results, the raw CSV files
   consensus-only search can miss. These structures are built after compression and are not
   part of the reported archive size. The completion index can also increase matches at
   homozygous negative-control sites.
+- **The sequence coder assumes an ACGTN alphabet and does not gate on it.** Input outside
+  that alphabet (lowercase bases, IUPAC ambiguity codes, protein or RNA sequence, corrupted
+  data) is not refused the way an oversize read or a quality-length mismatch is. It is
+  silently miscoded at the base level rather than producing a clean error, so an archive
+  built from such input should not be trusted without decoding it and diffing against the
+  source. [`scripts/check_input_scope.py`](scripts/check_input_scope.py) reports this as a
+  named caveat on any input file before you compress it.
 
 Full, current status for each claim: [`docs/claim1/overview_claim1.md`](docs/claim1/overview_claim1.md),
 [`docs/claim2/overview_claim2.md`](docs/claim2/overview_claim2.md),
