@@ -1,6 +1,6 @@
 # Third-party notices
 
-This repository's own code is MIT licensed (see [`LICENSE`](LICENSE)). It
+This repository's own code is Apache License 2.0 licensed (see [`LICENSE`](LICENSE)). It
 vendors three third-party components under `thirdparty/`. Their licences
 govern those directories and are reproduced there.
 

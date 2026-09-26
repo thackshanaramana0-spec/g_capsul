@@ -1,7 +1,7 @@
 # G_CAPSUL: Genomic, Compact, Addressable, Pseudogenome-Structured, Unified Lossless
 
 [![CI](https://github.com/thackshanaramana0-spec/g_capsul/actions/workflows/ci.yml/badge.svg)](https://github.com/thackshanaramana0-spec/g_capsul/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Docker-lightgrey.svg)](#installation)
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://en.cppreference.com/w/cpp/17)
 [![Lossless](https://img.shields.io/badge/lossless-byte--exact-brightgreen.svg)](#results)
@@ -310,8 +310,8 @@ ships the full benchmark harness behind every locked-dataset number. See
 **Docker**: no local build needed, pull the published image:
 
 ```bash
-docker pull ghcr.io/thackshanaramana0-spec/g_capsul:1.1.0    # or :latest
-docker run --rm -v "$PWD":/data ghcr.io/thackshanaramana0-spec/g_capsul:1.1.0 \
+docker pull ghcr.io/thackshanaramana0-spec/g_capsul:1.1.1    # or :latest
+docker run --rm -v "$PWD":/data ghcr.io/thackshanaramana0-spec/g_capsul:1.1.1 \
     capsule_decode /data/out.capsule /data/outdir /data/outdir/reads.fq
 ```
 
@@ -490,7 +490,7 @@ If you use G_CAPSUL in your research, please cite:
 To cite the exact code version used, see [`CITATION.cff`](CITATION.cff) (GitHub's own "Cite
 this repository" button reads this automatically) or reference a tagged
 [release](https://github.com/thackshanaramana0-spec/g_capsul/releases) directly. Current
-release: [v1.1.0](https://github.com/thackshanaramana0-spec/g_capsul/releases/tag/v1.1.0).
+release: [v1.1.1](https://github.com/thackshanaramana0-spec/g_capsul/releases/tag/v1.1.1).
 
 **Author:** Thackshanaramana B, SRM Institute of Science and Technology.
 
@@ -498,7 +498,7 @@ release: [v1.1.0](https://github.com/thackshanaramana0-spec/g_capsul/releases/ta
 
 ## License
 
-**MIT**: see [`LICENSE`](LICENSE) for the full text.
+**Apache License 2.0**: see [`LICENSE`](LICENSE) for the full text.
 
-Vendored third-party code keeps its own license, all of them MIT-compatible.
+Vendored third-party code keeps its own license, all of them Apache-2.0-compatible.
 Full table and terms in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
