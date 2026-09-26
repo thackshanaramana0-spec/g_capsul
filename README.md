@@ -10,18 +10,16 @@
 
 ## Overview
 
-G_CAPSUL is a from-scratch, reference-free FASTQ compressor built around a single retained
-data structure: a pseudogenome assembled from the reads during compression and kept inside
-the archive rather than discarded once the file is written. That one structure is reused for
-three separate claims. It is entropy-coded into the smallest lossless archive among the
-tools compared (COMPACT), reused to call heterozygous SNVs, indels, and multi-allelic sites
-directly from the archive without a reference genome or a second assembly (FAITHFUL), and
-kept addressable so that sequence export, per-base coverage, and locus retrieval can all be
-served from the archive itself instead of being recomputed from the original FASTQ
-(ADDRESSABLE). All three claims are measured on real data (19 real datasets for COMPACT, real
-GIAB individuals for FAITHFUL and ADDRESSABLE), and every number below traces to a script and
-a raw CSV in this repository. The sections that follow explain the gap this fills, how the
-architecture works, and the measured evidence for each of the three claims in turn.
+G_CAPSUL is a **lossless, reference-free FASTQ compressor** designed to keep the structure
+discovered during compression useful after the archive is written. Following the **ARCH
+design principle, Assemble, Retain, Compress, and Harness**, it builds a pseudogenome from
+the reads and retains their placements, orientations, lengths, and local sequence
+differences as a reusable representation. When compression separates allelic evidence
+across pseudogenomic regions, G_CAPSUL reconciles those relationships during analysis so
+reads can again be interpreted at their shared biological locus. The resulting archive
+supports exact FASTQ reconstruction, reference-free variant discovery, coverage, and locus
+retrieval, extending the compressed representation from a storage endpoint into a substrate
+for downstream genomic analysis.
 
 ---
 
