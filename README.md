@@ -388,78 +388,90 @@ important point that the default is sequence-only, not a FASTQ:
 
 ![G_CAPSUL architecture: FASTQ in, one encoder assembling and compressing a pseudogenome archive, five read paths served from that same archive](Figures/Fig1.png)
 
-The encoder follows **ARCH: Assemble** a pseudogenome from the reads by greedy suffix-prefix
-chaining and pigeonhole placement, **Retain** that structure instead of discarding it after
-compression, **Compress** it into a self-identifying binary archive via MEM self-match and
-per-stream entropy coding, and **Harness** the same retained structure for every read path:
-decompress, call variants (FAITHFUL), and export/coverage/query (ADDRESSABLE), all served
-from the one archive with no second assembly.
+G_CAPSUL follows the **ARCH design principle: Assemble, Retain, Compress, and Harness**.
+Reads are organized once into a reference-free pseudogenome. Their placements, orientations,
+lengths, and local sequence differences are retained in the archive rather than discarded
+after compression. The same representation is then reused for exact reconstruction,
+reference-free variant discovery, coverage, and locus-aware retrieval. When compression
+separates biologically related allelic structures, G_CAPSUL reconciles them during
+downstream analysis rather than constructing a second assembly.
 
 ### Algorithmic contributions
 
-- **Multi-region pseudogenome assembly.** Greedy exact suffix-prefix chaining builds a main
-  region from well-tiling reads. Leftovers are pigeonhole-mapped or assembled into a second
-  region, and both regions are self-matched to remove residual redundancy.
-- **Dual-substrate variant calling.** The same contig set is rebuilt at two collapse
-  aggressiveness levels: one tuned for reliable minor-allele-fraction estimation in SNV
-  pileup, one left closer to its pre-collapse form to preserve the two-path bubble structure
-  indel calling needs.
-- **Positional-clustering indel channel.** An eBWT2SNP-inspired channel clusters reads by a
-  right-context anchor unique across the contig set, catching indels neither pileup nor
-  bubble extraction reaches alone.
-- **Hoisted, index-only coverage.** `coverage` needs only the pseudogenome's length and every
-  read's placement, not its content, so it runs entirely before the pseudogenome is
-  rebuilt, skipping the cost export and query both pay.
-- **Adversarial correctness discipline.** Every silent data-loss bug this project has found
-  (mismatch positions above 256bp, orphaned unique-read desync, reverse-complement
-  contained-read indexing, an FSE-RLE decode defect, a broken default export path) was
-  found by actually decoding archives and diffing against the original file, or by scoring
-  export against a real reference, not by trusting a passing size table. Full trail:
-  [`docs/claim1/mechanism_insight_claim1.md`](docs/claim1/mechanism_insight_claim1.md),
-  [`docs/claim3/t31_export_claim3.md`](docs/claim3/t31_export_claim3.md).
+- **Multi-region pseudogenome construction.** Exact suffix-prefix chaining builds the primary
+  pseudogenomic region. Reads that cannot be incorporated are placed against existing
+  sequence when possible, while the remaining reads form a secondary pseudogenomic region.
+  Repeated sequence within the resulting representation is subsequently reduced through
+  maximal exact matching.
+- **Heterozygous structure reconciliation and read re-placement.** Related pseudogenomic
+  regions are identified from sequence overlap and local duplication, then brought into a
+  shared analytical frame. Reads are placed again against the reconciled structure so
+  evidence originally separated across pseudogenomic regions can contribute to the same
+  biological locus.
+- **Dual-substrate variant calling.** Two reconciled representations are maintained at
+  different collapse levels. The more aggressive representation supports SNV pileup, while
+  the milder representation preserves alternative sequence structure needed for indel
+  discovery.
+- **Multi-channel indel discovery.** Bubble traversal, gapped sequence comparison,
+  cross-contig analysis, and an eBWT2SNP-inspired positional-clustering channel expose indel
+  candidates that no single local representation captures reliably.
+- **Placement-derived coverage.** Per-base coverage is calculated directly from retained read
+  positions and lengths without decoding individual read sequences or performing a new
+  alignment.
+- **Biological locus retrieval across pseudogenomic addresses.** Queries can recover reads
+  belonging to the same biological locus even when alternative alleles were placed at
+  different pseudogenomic coordinates during compression. Bilateral flanking queries and
+  retained placement information reconnect these separated representations.
 
 ---
 
 ## Reproducibility
 
-Every number in [`results/`](results/) traces to a script and a raw CSV. The full map from
-claim to figure to code to result to doc is [`docs/REPO_MAP.md`](docs/REPO_MAP.md), and
-`docs/` itself (`claim1/`, `claim2/`, `claim3/`) holds the per-claim writeups. Full datasets
-are not stored in this repository: exact, verified download commands for every dataset and
-comparison tool are in
-[`docs/extras/SERVER_SETUP_AND_DOWNLOADS.md`](docs/extras/SERVER_SETUP_AND_DOWNLOADS.md), and
-the benchmark harness that drives the DiscoSNP++/Kmer2SNP/SPAdes/bwa+mosdepth comparisons
-ships in `scripts/` alongside the core build/test scripts, needing only the locked dataset
-manifests ([`docs/extras/NEW_DATASET_LOCKED.md`](docs/extras/NEW_DATASET_LOCKED.md)) and the
-external comparison tools to run. Development history (experimental stages, machine setup,
-dated reproduction logs) is intentionally not published in this repository. `docs/REPO_MAP.md`
-explains that split. **Where a document and a result CSV disagree, the CSV wins.**
+All results reported for G_CAPSUL are reproducible from the material provided in this
+repository. The benchmark scripts are available in `scripts/`, and the corresponding raw
+results are stored in [`results/`](results/). [`docs/REPO_MAP.md`](docs/REPO_MAP.md) links
+each claim to its benchmark, result files, implementation, figures, and supporting
+documentation.
+
+The benchmark datasets and external comparison tools are not included in the repository.
+[`docs/extras/SERVER_SETUP_AND_DOWNLOADS.md`](docs/extras/SERVER_SETUP_AND_DOWNLOADS.md)
+provides the commands required to obtain and configure them, while
+[`docs/extras/NEW_DATASET_LOCKED.md`](docs/extras/NEW_DATASET_LOCKED.md) defines the exact
+dataset set used for the reported experiments.
+
+Detailed evidence is organized by claim under `docs/claim1/`, `docs/claim2/`, and
+`docs/claim3/`. Development history and machine-specific experimental logs are not part of
+the released repository. **For all reported numerical results, the raw CSV files in
+`results/` are the authoritative source.**
 
 ---
 
 ## Limitations
 
-- **Human validation is chr20 only, at 30×.** Claims 2 and 3 are measured on four GIAB
-  individuals across the whole chromosome, not on windows, but it is one chromosome,
-  because the archives are chr20. Nothing here is evidence about whole-genome behaviour.
-- **No non-human diploid variant validation.** The 15 non-human datasets carry Claim 1
-  only, and there is no comparable truth set for them.
-- **HG005 loses, and we publish the loss.** It is the only variable-length dataset in the
-  calling set, and a controlled truncation experiment identified read-length distribution
-  as the cause without changing anything in the caller itself
-  ([`docs/claim2/t21_snv_claim2.md`](docs/claim2/t21_snv_claim2.md)).
-- **Compression is slower than SPRING and Genozip**, and heavier on peak memory. Genozip
-  is fastest on 18 of 19 compressions and all 19 decompressions. Assembly costs time and
-  memory, and that cost is what Claims 2 and 3 spend for free afterward.
-- **`query` is not a speed win** against `genocat --head` without an index, and Table 3
-  says so rather than leading with the indexed ≈0.03 s.
-- **The completion index is not a free win.** It closes real gaps in both exact-match
-  recall and locus retrieval, but it measurably raises the false-positive rate on
-  homozygous negative controls everywhere it is applied. Reported alongside the
-  completeness result, not omitted.
-- **PgRC2's own pseudogenome has not been tested for the same allele-splitting behaviour.**
-  The argument that it would exhibit it is structural, from its confirmed architecture, not
-  an empirical finding from running PgRC2 itself on heterozygous data.
+- **Current scope is short-read sequencing.** The evaluation uses unpaired read sets and
+  does not retain paired-end mate relationships. Long reads, large structural variants,
+  population-scale inference, and general naturally polyploid analysis remain outside the
+  current claims.
+- **Downstream biological validation is not yet whole-genome.** Variant calling and locus
+  retrieval are evaluated on chromosome 20 from four GIAB individuals at approximately 30×
+  coverage. Performance should therefore not be extrapolated to complete human genomes or
+  to non-human variant calling.
+- **The current implementation trades computation for reusable structure.** Pseudogenome
+  construction performs substantially more structural work than conventional FASTQ
+  compression, making compression slower and, on larger datasets, more memory-intensive.
+  Several construction stages are still serial or only partly parallelized.
+- **Whole-genome calling is limited by the present implementation.** The current k-mer spill
+  representation creates large intermediate-storage requirements at larger scales, making
+  whole-genome variant calling impractical in its present form.
+- **Variant calling remains sensitive to read geometry and candidate generation.** HG005
+  shows that heterogeneous read lengths can reduce calling accuracy, while some indels
+  remain inaccessible when the required alternative sequence structure is not exposed
+  during candidate generation.
+- **Some query modes use optional downstream structures.** A sidecar can accelerate
+  repeated queries, while a separate completion index recovers deviation-based matches that
+  consensus-only search can miss. These structures are built after compression and are not
+  part of the reported archive size. The completion index can also increase matches at
+  homozygous negative-control sites.
 
 Full, current status for each claim: [`docs/claim1/overview_claim1.md`](docs/claim1/overview_claim1.md),
 [`docs/claim2/overview_claim2.md`](docs/claim2/overview_claim2.md),
