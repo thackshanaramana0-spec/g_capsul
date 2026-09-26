@@ -5,11 +5,11 @@ title: "G_CAPSUL / CAPSULE: a retained assembly for unified lossless FASTQ compr
 authors:
   - family-names: "Balashanmugam"
     given-names: "Thackshanaramana"
-version: 1.1.0
-date-released: "2026-09-25"
+version: 1.1.1
+date-released: "2026-09-26"
 url: "https://github.com/thackshanaramana0-spec/g_capsul"
 repository-code: "https://github.com/thackshanaramana0-spec/g_capsul"
-license: MIT
+license: Apache-2.0
 keywords:
   - FASTQ compression
   - reference-free variant calling
