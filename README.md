@@ -369,6 +369,15 @@ important point that the default is sequence-only, not a FASTQ:
 
 ## Design
 
+![G_CAPSUL architecture: FASTQ in, one encoder assembling and compressing a pseudogenome archive, five read paths served from that same archive](Figures/Fig1.png)
+
+The encoder follows **ARCH: Assemble** a pseudogenome from the reads by greedy suffix-prefix
+chaining and pigeonhole placement, **Retain** that structure instead of discarding it after
+compression, **Compress** it into a self-identifying binary archive via MEM self-match and
+per-stream entropy coding, and **Harness** the same retained structure for every read path:
+decompress, call variants (FAITHFUL), and export/coverage/query (ADDRESSABLE), all served
+from the one archive with no second assembly.
+
 ### Algorithmic contributions
 
 - **Multi-region pseudogenome assembly.** Greedy exact suffix-prefix chaining builds a main
