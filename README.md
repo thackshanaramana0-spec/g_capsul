@@ -27,17 +27,17 @@ overlap chaining, pigeonhole mapping for the remaining reads, and self-matching 
 residual redundancy. The resulting structure is retained inside the archive and reused for
 three purposes:
 
-1. **COMPACT**: the pseudogenome, together with per-read placements, mismatches, and
-   original read order, is entropy-coded into the smallest lossless archive among the three
-   tools compared.
-2. **FAITHFUL**: the retained read organization is reused for variant analysis through
-   aggressive collapse for SNV pileup and milder collapse for bubble and indel extraction,
-   allowing heterozygous SNV, indel, and multi-allelic calling without constructing a second
-   assembly.
-3. **ADDRESSABLE**: the pseudogenome and retained placement information support `export`,
-   `coverage`, and `query`, allowing sequence export, depth calculation, and coordinate-range
-   read retrieval to begin from the archive rather than rebuilding the genomic organization
-   from the original FASTQ.
+1. **Compression (COMPACT)**: the pseudogenome, together with per-read placements, mismatches,
+   and original read order, is entropy-coded into the smallest lossless archive among the
+   three tools compared.
+2. **Reference-free variant calling (FAITHFUL)**: the retained read organization is reused
+   for variant analysis through aggressive collapse for SNV pileup and milder collapse for
+   bubble and indel extraction, allowing heterozygous SNV, indel, and multi-allelic calling
+   without constructing a second assembly.
+3. **Archive-native addressability (ADDRESSABLE)**: the pseudogenome and retained placement
+   information support `export`, `coverage`, and `query`, allowing sequence export, depth
+   calculation, and coordinate-range read retrieval to begin from the archive rather than
+   rebuilding the genomic organization from the original FASTQ.
 
 ## Key Features
 
