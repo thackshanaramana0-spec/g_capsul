@@ -51,7 +51,7 @@ three purposes:
 
 ## Contents
 
-- [Where everything is](#where-everything-is)
+- [Repository layout](#repository-layout)
 - [Results](#results)
 - [Quick Start](#quick-start)
 - [Installation](#installation)
@@ -65,13 +65,23 @@ three purposes:
 
 ---
 
-## Where everything is
+## Repository layout
+
+```
+src/, include/    the shipped encoder and decoder: assembly, mapping, stream coding,
+                  the FAITHFUL variant caller, and export/coverage/query
+scripts/          build/test scripts, plus the full benchmark harness behind every
+                  number in results/
+thirdparty/       vendored PPMd7, FSE/Huf0, htscodecs/fqzcomp, each under its own license
+results/          ** THE CITABLE NUMBERS **: per-claim CSVs plus generated plots
+docs/             the curated, cross-verified reference tree: claim1/, claim2/, claim3/,
+                  plus mechanism/novelty/limitations synthesis docs
+Figures/          the manuscript figures
+```
 
 | you want | go to |
 |---|---|
 | **the master cross-reference: claim → figure → code → result → doc** | **[`docs/REPO_MAP.md`](docs/REPO_MAP.md)** |
-| the results, as executed | [`results/`](results/): per-claim CSVs plus generated plots |
-| the curated, verified reference tree | [`docs/`](docs/): `claim1/`, `claim2/`, `claim3/`, plus mechanism/novelty/limitations synthesis docs |
 | what's *not* claimed, explicitly | [`docs/honest_limitations_and_scope.md`](docs/honest_limitations_and_scope.md) |
 | what's novel vs. prior art | [`docs/novelty_and_prior_art.md`](docs/novelty_and_prior_art.md) |
 | the single canonical source for every locked number | [`docs/numbers_and_verification_index.md`](docs/numbers_and_verification_index.md) |
