@@ -8,6 +8,23 @@
 
 ---
 
+## Overview
+
+G_CAPSUL is a from-scratch, reference-free FASTQ compressor built around a single retained
+data structure: a pseudogenome assembled from the reads during compression and kept inside
+the archive rather than discarded once the file is written. That one structure is reused for
+three separate claims. It is entropy-coded into the smallest lossless archive among the
+tools compared (COMPACT), reused to call heterozygous SNVs, indels, and multi-allelic sites
+directly from the archive without a reference genome or a second assembly (FAITHFUL), and
+kept addressable so that sequence export, per-base coverage, and locus retrieval can all be
+served from the archive itself instead of being recomputed from the original FASTQ
+(ADDRESSABLE). All three claims are measured on real data (19 real datasets for COMPACT, real
+GIAB individuals for FAITHFUL and ADDRESSABLE), and every number below traces to a script and
+a raw CSV in this repository. The sections that follow explain the gap this fills, how the
+architecture works, and the measured evidence for each of the three claims in turn.
+
+---
+
 ## The Problem
 
 Lossless FASTQ compressors such as SPRING and Genozip focus on compact storage and exact
@@ -99,7 +116,7 @@ explains that split in full. **Where a document and a result CSV disagree, the C
 **Table 1.** Whole-file lossless archive (sequence + names + quality + line 3) on the 19
 locked datasets, 55.0 GB of FASTQ spanning bacteria, archaea, viruses, fungi, protists,
 plants, animals and human. Every archive decoded back to byte-identical input **before**
-being counted; all 57/57 archives across the three tools verified LOSSLESS.
+being counted. All 57/57 archives across the three tools verified LOSSLESS.
 
 Percentage is how much smaller G\_CAPSUL's archive is than the competitor's, per row
 (negative = smaller). All sizes in MB.
@@ -149,7 +166,7 @@ variable-length reads are an ordinary case throughout, not a special path. Full 
 against GIAB v4.2.1 inside the confident regions. **Every G_CAPSUL number here is called
 from the compressed archive**: `capsule_decode call archive out.vcf`, with no FASTQ, no
 reference and no separate assembly graph. Competitors get the identical reads, truth,
-regions, normalisation and scorer; only the caller differs.
+regions, normalisation and scorer, only the caller differs.
 
 | comparison | G_CAPSUL | DiscoSNP++ | Kmer2SNP |
 |---|---:|---:|---:|
@@ -285,7 +302,7 @@ Self-contained: needs nothing but this checkout, a C++17 compiler, and `liblzma-
 (`sudo apt-get install build-essential liblzma-dev` on Ubuntu/Debian). `verify_lossless.sh`
 diffs the decoded output against your original FASTQ byte for byte: the same check every
 number in [`results/`](results/) was required to pass before being counted. `scripts/` also
-ships the full benchmark harness behind every locked-dataset number; see
+ships the full benchmark harness behind every locked-dataset number. See
 [Reproducibility](#reproducibility) below for what running that needs beyond this checkout.
 
 ---
@@ -381,8 +398,8 @@ from the one archive with no second assembly.
 ### Algorithmic contributions
 
 - **Multi-region pseudogenome assembly.** Greedy exact suffix-prefix chaining builds a main
-  region from well-tiling reads; leftovers are pigeonhole-mapped or assembled into a second
-  region; both regions are self-matched to remove residual redundancy.
+  region from well-tiling reads. Leftovers are pigeonhole-mapped or assembled into a second
+  region, and both regions are self-matched to remove residual redundancy.
 - **Dual-substrate variant calling.** The same contig set is rebuilt at two collapse
   aggressiveness levels: one tuned for reliable minor-allele-fraction estimation in SNV
   pileup, one left closer to its pre-collapse form to preserve the two-path bubble structure
@@ -405,7 +422,7 @@ from the one archive with no second assembly.
 
 ## Reproducibility
 
-Every number in [`results/`](results/) traces to a script and a raw CSV; the full map from
+Every number in [`results/`](results/) traces to a script and a raw CSV. The full map from
 claim to figure to code to result to doc is [`docs/REPO_MAP.md`](docs/REPO_MAP.md), and
 `docs/` itself (`claim1/`, `claim2/`, `claim3/`) holds the per-claim writeups. Full datasets
 are not stored in this repository: exact, verified download commands for every dataset and
@@ -415,7 +432,7 @@ the benchmark harness that drives the DiscoSNP++/Kmer2SNP/SPAdes/bwa+mosdepth co
 ships in `scripts/` alongside the core build/test scripts, needing only the locked dataset
 manifests ([`docs/extras/NEW_DATASET_LOCKED.md`](docs/extras/NEW_DATASET_LOCKED.md)) and the
 external comparison tools to run. Development history (experimental stages, machine setup,
-dated reproduction logs) is intentionally not published in this repository; `docs/REPO_MAP.md`
+dated reproduction logs) is intentionally not published in this repository. `docs/REPO_MAP.md`
 explains that split. **Where a document and a result CSV disagree, the CSV wins.**
 
 ---
@@ -426,7 +443,7 @@ explains that split. **Where a document and a result CSV disagree, the CSV wins.
   individuals across the whole chromosome, not on windows, but it is one chromosome,
   because the archives are chr20. Nothing here is evidence about whole-genome behaviour.
 - **No non-human diploid variant validation.** The 15 non-human datasets carry Claim 1
-  only; there is no comparable truth set for them.
+  only, and there is no comparable truth set for them.
 - **HG005 loses, and we publish the loss.** It is the only variable-length dataset in the
   calling set, and a controlled truncation experiment identified read-length distribution
   as the cause without changing anything in the caller itself
@@ -473,13 +490,5 @@ release: [v1.1.0](https://github.com/thackshanaramana0-spec/g_capsul/releases/ta
 
 **MIT**: see [`LICENSE`](LICENSE) for the full text.
 
-Vendored third-party code keeps its own license, all of them MIT-compatible;
-full table and terms in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
-
-**PgRC2 (GPL-3) is deliberately NOT vendored.** It is used only as an external
-comparison binary, cloned separately. No PgRC2 source is included in or linked
-into this repository, so its GPL-3 terms do not attach here. That separation
-was a design decision, not an accident: see
-[`docs/extras/REIMPL_NOTES.md`](docs/extras/REIMPL_NOTES.md), which records
-that PgRC2's assembler was reimplemented from the algorithm rather than
-copied, precisely so this stays true.
+Vendored third-party code keeps its own license, all of them MIT-compatible.
+Full table and terms in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
