@@ -316,9 +316,11 @@ docker run --rm -v "$PWD":/data ghcr.io/thackshanaramana0-spec/g_capsul:1.1.1 \
 ```
 
 Or build the image yourself from source (same two-stage `Dockerfile` CI uses):
-`docker build -t g_capsul .`. Every mode (`best106`/`export`/`coverage`/`query`/`call`/
-`index`) works the same way: swap the command after the image name. This is re-verified on
-every push and every release, not just built once
+`docker build -t g_capsul .`. The image ships two binaries, `best106` (compress) and
+`capsule_decode` (decompress, plus its `export`/`coverage`/`query`/`call`/`index`
+subcommands): swap the command (and subcommand) after the image name, same as running the
+binaries natively, for example `capsule_decode export /data/out.capsule /data/contigs.fa`.
+This is re-verified on every push and every release, not just built once
 ([`.github/workflows/ci.yml`](.github/workflows/ci.yml),
 [`.github/workflows/publish-image.yml`](.github/workflows/publish-image.yml)).
 
