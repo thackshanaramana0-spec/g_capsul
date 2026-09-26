@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/thackshanaramana0-spec/g_capsul/actions/workflows/ci.yml/badge.svg)](https://github.com/thackshanaramana0-spec/g_capsul/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Docker-lightgrey.svg)](#build)
+[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Docker-lightgrey.svg)](#installation)
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://en.cppreference.com/w/cpp/17)
 [![Lossless](https://img.shields.io/badge/lossless-byte--exact-brightgreen.svg)](#results)
 
@@ -51,34 +51,19 @@ three purposes:
 
 ## Contents
 
-- [Start here if you are a new reviewer: run this first](#start-here-if-you-are-a-new-reviewer-run-this-first)
 - [Where everything is](#where-everything-is)
 - [Results](#results)
-- [Quick test](#quick-test)
-- [Build](#build)
-- [Docker](#docker)
-- [Bioconda](#bioconda)
+- [Quick Start](#quick-start)
+- [Installation](#installation)
 - [Usage](#usage)
+- [Configuration](#configuration)
 - [Design](#design)
-- [Repository layout](#repository-layout)
-- [Reproducing benchmarks](#reproducing-benchmarks)
-- [What's open, honestly](#whats-open-honestly)
+- [Reproducibility](#reproducibility)
+- [Limitations](#limitations)
 - [Citation](#citation)
-- [Author](#author)
 - [License](#license)
 
 ---
-
-## Start here if you are a new reviewer: run this first
-
-    scripts/build106.sh /tmp/best106
-    scripts/verify_lossless.sh path/to/any.fastq
-
-Self-contained: needs nothing but this checkout, a C++17 compiler, and `liblzma-dev`.
-`build106.sh` builds the real encoder (see the script's own header comment for why
-`-fopenmp` is load-bearing). `verify_lossless.sh` then encodes and decodes your own
-FASTQ and diffs the result against the original, byte for byte: the same check every
-number in [`results/`](results/) was required to pass before being counted.
 
 ## Where everything is
 
@@ -176,20 +161,27 @@ The multi-allelic row is a **complete census of chr20**, not a sample: 26 is eve
 SNV-only multi-allelic site there is. DiscoSNP++'s 0 is structural: across its entire
 3,989-record output it emits no record with more than one ALT allele.
 
-**Why this works at all**: the finding the project is built on. *The representation that
-compresses a heterozygous site best is the one that conceals it.* Optimal compression puts
-each allele on its own internally-consistent contig, so ref and alt reads never share a
-coordinate and the variant is **not in the data structure**. Ablation, full chr20:
+**Why reconciliation is necessary.** Lossless reconstruction alone does not guarantee that
+the organization created for compression remains suitable for biological analysis. At a
+heterozygous locus, reads supporting different alleles can be placed in separate,
+internally-consistent pseudogenomic regions. Every read is still preserved exactly, but the
+relationship identifying those reads as alternative forms of the same biological locus is no
+longer explicit. G_CAPSUL therefore reconciles the separated regions before interpreting
+their variant evidence. The full chr20 ablation isolates this effect:
 
-    neither             F1 0.431   P 0.967   R 0.278
-    re-placement only      0.426     0.962     0.274   <- worse than neither
-    collapse only          0.648     0.963     0.488
-    both                   0.888     0.956     0.830
+| | F1 | Precision | Recall |
+|---|---:|---:|---:|
+| neither | 0.431 | 0.967 | 0.278 |
+| re-placement only | 0.426 | 0.962 | 0.274 |
+| collapse only | 0.648 | 0.963 | 0.488 |
+| **both** | **0.888** | 0.956 | **0.830** |
 
-Synergy, not additivity, and the error *shape* confirms it: without collapse, precision
-holds at 0.96 while recall collapses to 0.27. The caller is not mistaken, it is **blind**,
-exactly what "the alt reads are on another contig" predicts. **And the correction costs
-nothing in compression ratio.**
+The effect is synergistic, not additive: without collapse, precision remains above 0.96
+while recall falls to about 0.27, consistent with variant evidence being separated rather
+than incorrectly interpreted. Combining collapse with re-placement restores much of that
+missing evidence, raising recall to 0.830 and F1 to 0.888. The correction operates during
+analysis and does not alter the stored compressed representation, so it introduces **no
+archive-size penalty**.
 
 Raw CSVs: [`results/claim2/`](results/claim2/). Survey of why these two competitors
 are the applicable ones, and the full mechanism behind the ablation:
@@ -198,14 +190,15 @@ are the applicable ones, and the full mechanism behind the ablation:
 
 ### Archive-native addressability (ADDRESSABLE)
 
-**Table 3.** `export`/`coverage`/`query` served directly from the archive, against the
-conventional pipeline that would otherwise compute the same thing.
+**Table 3.** G_CAPSUL reuses the representation already retained in the archive for sequence
+export, per-base coverage, and locus retrieval rather than rebuilding the same organization
+for each downstream task.
 
-| operation | vs | speedup |
+| operation | comparison | result |
 |---|---|---:|
-| export (pseudogenome as FASTA) | SPAdes v4.0.0 | **129–784×** |
-| coverage (per-base depth) | bwa + samtools + mosdepth, timed as one pipeline | **16–54×** |
-| query (reads at a locus) | n/a | see below; **not a speed claim** |
+| export (pseudogenome as FASTA) | SPAdes v4.0.0 | **129–784× faster** |
+| coverage (per-base depth) | bwa + samtools + mosdepth, timed as one pipeline | **16–54× faster** |
+| query (reads at a locus) | no equivalent speed comparison | **locus-retrieval claim** |
 
 **Read the export ratio with its correctness caveat.** Exported per-contig (using the
 `contig_spans` stream, free at encode time), our export reaches **98.7% genome fraction**
@@ -220,7 +213,15 @@ exact, not estimated.
 **`query` is not a speed claim, and we say so.** `genocat --head=100` extracts in 0.19 s
 against our 0.46 s without an index, dropping to ≈0.03 s once an optional sidecar caches
 the decoded pseudogenome and placements. What `query` does that nothing else can is resolve
-a **locus**, not just a coordinate or a matching string:
+a **locus**, not just a coordinate or a matching string.
+
+#### Locus retrieval
+
+A biological locus is not necessarily one coordinate in a compression-derived pseudogenome.
+At heterozygous sites, reads carrying different alleles can be placed on disconnected
+pseudogenomic regions, so querying a single stored coordinate can recover only part of the
+biological evidence. G_CAPSUL reconciles these separated regions and retrieves the read sets
+belonging to the same locus:
 
 | individual | locus | sites | archive alone | with completion index |
 |---|---|---:|---:|---:|
@@ -249,112 +250,63 @@ was 1.0000 on HG002 but only 0.86–0.96 on the other three individuals, confirm
 completeness there is not free either without the same completion index, which restores it
 to 1.0000 on all four.
 
+This is distinct from exact-sequence search: finding a matching sequence does not
+necessarily identify other disconnected pseudogenomic regions representing the same
+biological locus. The ADDRESSABLE claim is therefore about **biological locus retrieval
+from the retained archive**, not query speed.
+
 Full traceability: [`docs/claim3/`](docs/claim3/): `t31_export_claim3.md` through
 `t35_locus_retrieval_claim3.md`, plus `mechanism_insight_claim3.md` for the full argument
 and `code_mapping_claim3.md` for exact function and line references.
 
 ---
 
-## Quick test
-
-```bash
-scripts/build106.sh /tmp/best106                 # build the encoder
-scripts/build_decode.sh /tmp/capsule_decode      # build the decoder
-INPUT=your.fastq ARCHIVE=/tmp/out.capsule BEST=/tmp/best106 \
-    bash scripts/encode_adaptive.sh              # encode
-scripts/verify_lossless.sh your.fastq            # encode, decode, and diff against the original
-```
-
-The four commands above are the entire buildable closure for compressing and verifying your
-own FASTQ: no locked dataset paths, no external tool dependencies beyond a C++17 compiler and
-`liblzma-dev`. `scripts/` also ships the real benchmark harness that produced every number in
-[`results/`](results/) for the 19 locked datasets, plus the FAITHFUL/ADDRESSABLE benchmarks
-against DiscoSNP++, Kmer2SNP, SPAdes, and bwa+mosdepth, but running those needs the locked
-dataset manifests and external comparison tools, not just this checkout. See
-[`docs/REPO_MAP.md`](docs/REPO_MAP.md) for exactly what that requires, and
-[Reproducing benchmarks](#reproducing-benchmarks) below for the setup steps.
-
----
-
-## Build
+## Quick Start
 
 ```bash
 git clone https://github.com/thackshanaramana0-spec/g_capsul.git
 cd g_capsul
-scripts/build106.sh /tmp/best106            # encoder (must link -fopenmp, see the script's own note)
-scripts/build_decode.sh /tmp/capsule_decode # decoder + all three Claim 3 operations
+scripts/build106.sh /tmp/best106            # build the encoder (must link -fopenmp, see the script's own note)
+scripts/build_decode.sh /tmp/capsule_decode # build the decoder + all three Claim 3 operations
+scripts/verify_lossless.sh path/to/any.fastq # encode, decode, and diff against the original
 ```
 
-**Dependencies:** C++17 compiler, `liblzma-dev`. PPMd7, FSE/Huf0, and htscodecs/fqzcomp are
-vendored under `thirdparty/`, each with its own license included, nothing else to install
-for the core binaries. Benchmark/comparison tools (SPRING, Genozip, PgRC2, DiscoSNP++,
-Kmer2SNP, MEGAHIT, SPAdes, bwa, samtools, mosdepth, rtg-tools) are separate, with exact,
-verified install commands in
-[`docs/extras/SERVER_SETUP_AND_DOWNLOADS.md`](docs/extras/SERVER_SETUP_AND_DOWNLOADS.md).
-
-```bash
-# Ubuntu / Debian
-sudo apt-get install build-essential liblzma-dev
-```
+Self-contained: needs nothing but this checkout, a C++17 compiler, and `liblzma-dev`
+(`sudo apt-get install build-essential liblzma-dev` on Ubuntu/Debian). `verify_lossless.sh`
+diffs the decoded output against your original FASTQ byte for byte: the same check every
+number in [`results/`](results/) was required to pass before being counted. `scripts/` also
+ships the full benchmark harness behind every locked-dataset number; see
+[Reproducibility](#reproducibility) below for what running that needs beyond this checkout.
 
 ---
 
-## Docker
+## Installation
 
-No local build needed: pull the published image straight from GitHub Container Registry
-(public, no login required; verified with `docker logout` + a clean pull before publishing this):
+**Docker**: no local build needed, pull the published image:
 
 ```bash
 docker pull ghcr.io/thackshanaramana0-spec/g_capsul:1.1.0    # or :latest
-```
-
-Or build it yourself from source (same two-stage `Dockerfile` CI uses):
-
-```bash
-git clone https://github.com/thackshanaramana0-spec/g_capsul.git
-cd g_capsul
-docker build -t g_capsul .
-```
-
-Run: mount a host directory to `/data` and pass the same arguments the binaries take
-directly:
-
-```bash
-# Compress (full FASTQ: sequence + names + quality + line 3)
-docker run --rm -v "$PWD":/data -e CAPS_NAMES=1 -e CAPS_QUAL=1 -e ARCHIVE=/data/out.capsule \
-    ghcr.io/thackshanaramana0-spec/g_capsul:1.1.0 best106 /data/reads.fq
-
-# Decompress
-docker run --rm -v "$PWD":/data \
-    ghcr.io/thackshanaramana0-spec/g_capsul:1.1.0 \
+docker run --rm -v "$PWD":/data ghcr.io/thackshanaramana0-spec/g_capsul:1.1.0 \
     capsule_decode /data/out.capsule /data/outdir /data/outdir/reads.fq
 ```
 
-Any other mode (`export`/`coverage`/`query`/`call`/`index`) works the same way: swap the
-command after the image name, same as running the binaries natively. Full command reference:
-[Usage](#usage) below, or [`docs/PROJECT_SCOPE.md`](docs/PROJECT_SCOPE.md).
+Or build the image yourself from source (same two-stage `Dockerfile` CI uses):
+`docker build -t g_capsul .`. Every mode (`best106`/`export`/`coverage`/`query`/`call`/
+`index`) works the same way: swap the command after the image name. This is re-verified on
+every push and every release, not just built once
+([`.github/workflows/ci.yml`](.github/workflows/ci.yml),
+[`.github/workflows/publish-image.yml`](.github/workflows/publish-image.yml)).
 
-**Why this is trustworthy, not just a Dockerfile that exists:** the image is rebuilt and a
-real compress→decompress→`cmp` round trip is re-verified on every push
-([`.github/workflows/ci.yml`](.github/workflows/ci.yml)'s `docker` job), and the exact same
-check re-runs against the **published** image itself after every release
-([`.github/workflows/publish-image.yml`](.github/workflows/publish-image.yml)), so what you
-pull is proven to be what CI actually tested, not just what built locally.
+**Source build**: see [Quick Start](#quick-start) above for the exact commands.
+Benchmark/comparison tools (SPRING, Genozip, PgRC2, DiscoSNP++, Kmer2SNP, MEGAHIT, SPAdes,
+bwa, samtools, mosdepth, rtg-tools) are separate, with exact, verified install commands in
+[`docs/extras/SERVER_SETUP_AND_DOWNLOADS.md`](docs/extras/SERVER_SETUP_AND_DOWNLOADS.md).
 
----
-
-## Bioconda
-
-A recipe is submitted and under review:
-[bioconda/bioconda-recipes#69631](https://github.com/bioconda/bioconda-recipes/pull/69631).
-All of bioconda's own CI checks pass (lint, Linux build+test, macOS build+test, ARM
-build+test): it's waiting on a maintainer merge, not on anything still broken. Once merged:
-
-```bash
-conda install -c bioconda g_capsul
-```
-
-Until then, use one of the three methods above: they already give the exact same binaries.
+**Bioconda**: a recipe is submitted and under review:
+[bioconda/bioconda-recipes#69631](https://github.com/bioconda/bioconda-recipes/pull/69631),
+all CI checks passing (lint, Linux, macOS, ARM), waiting on a maintainer merge. Once merged:
+`conda install -c bioconda g_capsul`. Until then, use Docker or a source build above: they
+already give the exact same binaries.
 
 ---
 
@@ -383,15 +335,17 @@ CAPS_CALL=1 CAPS_PLOIDY=4 CALL_VCF=calls.vcf /tmp/best106 reads.fq 3 16 16 22 16
 /tmp/capsule_decode query    out.capsule region.fa 0-100000
 ```
 
-Exactly what each configuration puts in the archive and gives back on decode, including
-the important point that the default is sequence-only, not a FASTQ, is spelled out in
-full in [What you get, by configuration](#what-you-get-by-configuration) below. Exact
-function and line references for every operation, organized by claim:
+Exact function and line references for every operation, organized by claim:
 [`docs/claim1/code_mapping_claim1.md`](docs/claim1/code_mapping_claim1.md),
 [`docs/claim2/code_mapping_claim2.md`](docs/claim2/code_mapping_claim2.md),
 [`docs/claim3/code_mapping_claim3.md`](docs/claim3/code_mapping_claim3.md).
 
-### What you get, by configuration
+---
+
+## Configuration
+
+Exactly what each configuration puts in the archive and gives back on decode, including the
+important point that the default is sequence-only, not a FASTQ:
 
 | you set | what's IN the archive | what decoding gives you |
 |---|---|---|
@@ -430,56 +384,24 @@ function and line references for every operation, organized by claim:
 
 ---
 
-## Repository layout
+## Reproducibility
 
-```
-src/encoder.cpp               the shipped encoder: assembly, mapping, stream coding,
-                               and (gated on env vars) names/quality/calling
-src/decoder.cpp                the shipped decoder: full round trip plus export/coverage/query
-src/include/                   the same 7 headers, also duplicated at include/ for #include paths
-include/caps_caller.h         the FAITHFUL variant caller: reconciliation, candidate
-                               generation, coverage-adaptive thresholds
-include/*_coder.h             stream-specific coders (names, quality, sequence, generic)
-scripts/                      build106.sh, build_decode.sh, encode_adaptive.sh,
-                               verify_lossless.sh, decode_105.py (the minimal build/test
-                               closure), plus the full benchmark harness used to produce
-                               every number in results/
-thirdparty/                    PPMd7 (public domain), FSE/Huf0 (BSD), htscodecs/fqzcomp (BSD)
-results/                       ** THE CITABLE NUMBERS **: per-claim CSVs plus generated plots
-docs/                          the curated, cross-verified reference tree: claim1/ (6 files),
-                               claim2/ (9), claim3/ (8), 7 synthesis docs, extras/ (5).
-                               Start at docs/REPO_MAP.md
-Figures/                       Fig1.tif-Fig4.tif, the manuscript figures
-```
-
-Development history (`stages/`, the full 96-file experimental progression, one file per
-decision; `server/`, machine setup; dated reproduction logs; and superseded intermediate
-docs) is intentionally not published in this repository. `docs/REPO_MAP.md` explains that
-split and gives the exact path for anything cited here.
+Every number in [`results/`](results/) traces to a script and a raw CSV; the full map from
+claim to figure to code to result to doc is [`docs/REPO_MAP.md`](docs/REPO_MAP.md), and
+`docs/` itself (`claim1/`, `claim2/`, `claim3/`) holds the per-claim writeups. Full datasets
+are not stored in this repository: exact, verified download commands for every dataset and
+comparison tool are in
+[`docs/extras/SERVER_SETUP_AND_DOWNLOADS.md`](docs/extras/SERVER_SETUP_AND_DOWNLOADS.md), and
+the benchmark harness that drives the DiscoSNP++/Kmer2SNP/SPAdes/bwa+mosdepth comparisons
+ships in `scripts/` alongside the core build/test scripts, needing only the locked dataset
+manifests ([`docs/extras/NEW_DATASET_LOCKED.md`](docs/extras/NEW_DATASET_LOCKED.md)) and the
+external comparison tools to run. Development history (experimental stages, machine setup,
+dated reproduction logs) is intentionally not published in this repository; `docs/REPO_MAP.md`
+explains that split. **Where a document and a result CSV disagree, the CSV wins.**
 
 ---
 
-## Reproducing benchmarks
-
-Full datasets are not stored in this repository. Exact, verified download commands for
-every dataset and every comparison tool, including the S3-mirror trick for large SRA
-accessions and the chr20-only streaming method for GIAB BAMs, are in
-[`docs/extras/SERVER_SETUP_AND_DOWNLOADS.md`](docs/extras/SERVER_SETUP_AND_DOWNLOADS.md).
-The locked 19-dataset set itself, and the one swap made to it and why, is in
-[`docs/extras/NEW_DATASET_LOCKED.md`](docs/extras/NEW_DATASET_LOCKED.md). The benchmark
-harness that drives the full DiscoSNP++/Kmer2SNP/SPAdes/bwa+mosdepth comparisons ships in
-`scripts/`; it still needs the locked dataset manifests and the external comparison tools
-themselves, which are not vendored here. See
-[`docs/REPO_MAP.md`](docs/REPO_MAP.md) for exactly what that setup requires.
-
----
-
-## What's open, honestly
-
-The four items that used to sit here (the unrun 15th dataset, Claim 2 on windows rather
-than a full individual, no CI, no license) are all closed. `SRR10676752` is in the sweep,
-Claim 2 runs on full chr20 at 30× for four individuals, and both `LICENSE` and
-`.github/workflows/ci.yml` exist. These are what is genuinely open:
+## Limitations
 
 - **Human validation is chr20 only, at 30×.** Claims 2 and 3 are measured on four GIAB
   individuals across the whole chromosome, not on windows, but it is one chromosome,
@@ -524,12 +446,7 @@ this repository" button reads this automatically) or reference a tagged
 [release](https://github.com/thackshanaramana0-spec/g_capsul/releases) directly. Current
 release: [v1.1.0](https://github.com/thackshanaramana0-spec/g_capsul/releases/tag/v1.1.0).
 
----
-
-## Author
-
-**Thackshanaramana B**
-SRM Institute of Science and Technology
+**Author:** Thackshanaramana B, SRM Institute of Science and Technology.
 
 ---
 
