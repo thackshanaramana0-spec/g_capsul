@@ -329,12 +329,6 @@ Benchmark/comparison tools (SPRING, Genozip, PgRC2, DiscoSNP++, Kmer2SNP, MEGAHI
 bwa, samtools, mosdepth, rtg-tools) are separate, with exact, verified install commands in
 [`docs/extras/SERVER_SETUP_AND_DOWNLOADS.md`](docs/extras/SERVER_SETUP_AND_DOWNLOADS.md).
 
-**Bioconda**: a recipe is submitted and under review:
-[bioconda/bioconda-recipes#69631](https://github.com/bioconda/bioconda-recipes/pull/69631),
-all CI checks passing (lint, Linux, macOS, ARM), waiting on a maintainer merge. Once merged:
-`conda install -c bioconda g_capsul`. Until then, use Docker or a source build above: they
-already give the exact same binaries.
-
 ---
 
 ## Usage
