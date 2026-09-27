@@ -18,9 +18,9 @@
 #     not a flaky run.
 #
 #  usage:
-#    bash scripts/benchmark_1_run.sh                 # everything, ~9-12 h
-#    SANITY_ONLY=1 bash scripts/benchmark_1_run.sh   # 1 dataset, measured rate
-#    PHASES=1,3    bash scripts/benchmark_1_run.sh   # selected phases
+#    bash scripts/setup_scripts/benchmark_1_run.sh                 # everything, ~9-12 h
+#    SANITY_ONLY=1 bash scripts/setup_scripts/benchmark_1_run.sh   # 1 dataset, measured rate
+#    PHASES=1,3    bash scripts/setup_scripts/benchmark_1_run.sh   # selected phases
 #
 #  env:
 #    OUT_DIR       results dir              [results/benchmark_1_<timestamp>]
@@ -30,7 +30,7 @@
 # ═══════════════════════════════════════════════════════════════════════════
 set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; cd "$HERE"
-source "$HERE/scripts/capsule_config.sh" 2>/dev/null || true
+source "$HERE/scripts/setup_scripts/capsule_config.sh" 2>/dev/null || true
 
 STAMP=$(date +%Y%m%d_%H%M%S)
 OUT_DIR="${OUT_DIR:-$HERE/results/benchmark_1_$STAMP}"
@@ -202,7 +202,7 @@ phase1_one(){                      # $1 = dataset name ; returns 1 on failure
     # compression (~20x heavier). Measured: 38.64 s / 2.45 GB vs 8.97 s /
     # 1.00 GB on the same input, for a byte-identical archive.
     /usr/bin/time -v env CAPS_SPANS=1 CAPS_NAMES=1 CAPS_QUAL=1 INPUT="$IN" ARCHIVE="$A" BEST="$BEST" \
-        bash "$HERE/scripts/encode_adaptive.sh" >/dev/null 2>"$TF"
+        bash "$HERE/scripts/core_test_scripts/encode_adaptive.sh" >/dev/null 2>"$TF"
     read -r CW CR <<< "$(parse_time_v "$TF")"
     if [ ! -s "$A" ]; then err "$DS: CAPSULE produced no archive"; debug_dump "$DS encode" "${A}.log"; rm -f "$IN" "$TF"; return 1; fi
     ARCH=$(stat -c%s "$A")
@@ -354,7 +354,7 @@ run_phase2(){
         for _i in $C2_SETS; do [ -s "$ARCH_DIR/$_i.capsule" ] && have="$have $_i"; done
         if [ -z "$have" ]; then
             err "SANITY_ONLY: no GIAB archive from phase 1 -- the Claim 2 path is NOT rehearsed."
-            err "  To rehearse it end to end:  SANITY_ONLY=1 SANITY_DS=HG002 bash scripts/benchmark_1_run.sh"
+            err "  To rehearse it end to end:  SANITY_ONLY=1 SANITY_DS=HG002 bash scripts/setup_scripts/benchmark_1_run.sh"
             return 0
         fi
         C2_SETS="$(echo $have | cut -d' ' -f1)"
@@ -388,7 +388,7 @@ run_phase2(){
             printf "%s,CAPSULE,,,,,,,,,NO_ARCHIVE\n" "$IND" >> "$CSV2"
             continue
         fi
-        bash "$HERE/scripts/run_fullchr20_archive_capsule.sh" \
+        bash "$HERE/scripts/claim3_scripts/run_fullchr20_archive_capsule.sh" \
                "$DEC" "$HERE/scripts" "$REFS/chr20.fa" "$c2arc" "$IND" "$d" > "$d.log" 2>&1
         SL=$(grep -aE '^SNV ' "$d.log" | tail -1)
         f1=$(echo "$SL" | grep -oP 'F1=\K[0-9.]+'); p=$(echo "$SL" | grep -oP ' P=\K[0-9.]+')
@@ -418,11 +418,11 @@ run_phase2(){
 
         mark "P2 $IND: DiscoSNP++"
         step "DiscoSNP++ (same reads, same truth, same scoring)"
-        if [ -x "$HERE/scripts/run_fullchr20_bench_disco.sh" ] || [ -f "$HERE/scripts/run_fullchr20_bench_disco.sh" ]; then
+        if [ -x "$HERE/scripts/claim3_scripts/run_fullchr20_bench_disco.sh" ] || [ -f "$HERE/scripts/claim3_scripts/run_fullchr20_bench_disco.sh" ]; then
             # signature: <ref.fa> <reads.fq> [individual] [outdir]  -- verified
             # against the script header, not assumed. A wrong argument order
             # here silently benchmarks the competitor on the wrong input.
-            /usr/bin/time -v bash "$HERE/scripts/run_fullchr20_bench_disco.sh" \
+            /usr/bin/time -v bash "$HERE/scripts/claim3_scripts/run_fullchr20_bench_disco.sh" \
                  "$REFS/chr20.fa" "$fq" "$IND" "$OUT_DIR/c2_${IND}_disco" \
                  > "$OUT_DIR/c2_${IND}_disco.log" 2>&1
             SL=$(grep -aE '^SNV ' "$OUT_DIR/c2_${IND}_disco.log" | tail -1)
@@ -452,7 +452,7 @@ run_phase2(){
 
         mark "P2 $IND: Kmer2SNP"
         step "Kmer2SNP"
-        # RUNNER EXISTS AND IS VALIDATED as of 2026-09-08 (scripts/run_kmer2snp.sh).
+        # RUNNER EXISTS AND IS VALIDATED as of 2026-09-08 (scripts/claim2_scripts/run_kmer2snp.sh).
         # Kmer2SNP's own DSK/findGSE wrappers hardcode paths that do not exist
         # here; the runner bypasses them by passing --t1/--c1/--c2/--r directly,
         # counting k-mers with KMC and deriving the coverage band from the
@@ -462,8 +462,8 @@ run_phase2(){
         # this project has been quoting (0.4636) at 111x the scale.
         # The branch below stays conditional: if the runner is ever absent the
         # arm records NOT_AVAILABLE rather than silently leaving T3 two-armed.
-        if [ -f "$HERE/scripts/run_kmer2snp.sh" ]; then
-            /usr/bin/time -v bash "$HERE/scripts/run_kmer2snp.sh" "$fq" "$IND" "$OUT_DIR/c2_${IND}_k2s" \
+        if [ -f "$HERE/scripts/claim2_scripts/run_kmer2snp.sh" ]; then
+            /usr/bin/time -v bash "$HERE/scripts/claim2_scripts/run_kmer2snp.sh" "$fq" "$IND" "$OUT_DIR/c2_${IND}_k2s" \
                  > "$OUT_DIR/c2_${IND}_k2s.log" 2>&1
             SL=$(grep -aE '^SNV ' "$OUT_DIR/c2_${IND}_k2s.log" | tail -1)
             f1=$(echo "$SL" | grep -oP 'F1=\K[0-9.]+'); p=$(echo "$SL" | grep -oP ' P=\K[0-9.]+')
@@ -522,13 +522,13 @@ run_phase2(){
                 || { err "T2.2 ${DEPTH}x: seqtk failed"; printf "%s,%s,,,,,,,,,,,SUBSAMPLE_FAILED\n" "$T4_IND" "$DEPTH" >> "$CSV4"; continue; }
             local NR4; NR4=$(( $(wc -l < "$sub") / 4 ))
             /usr/bin/time -v env CAPS_SPANS=1 CAPS_NAMES=1 CAPS_QUAL=1 INPUT="$sub" ARCHIVE="$arc4" BEST="$BEST" \
-                bash "$HERE/scripts/encode_adaptive.sh" >/dev/null 2>"$WD/t4c.txt"
+                bash "$HERE/scripts/core_test_scripts/encode_adaptive.sh" >/dev/null 2>"$WD/t4c.txt"
             if [ ! -s "$arc4" ]; then
                 err "T2.2 ${DEPTH}x: no archive"; debug_dump "T2.2 ${DEPTH}x encode" "${arc4}.log"
                 printf "%s,%s,%s,,,,,,,,,,ENCODE_FAILED\n" "$T4_IND" "$DEPTH" "$NR4" >> "$CSV4"
                 rm -f "$sub"; continue; fi
             d4="$OUT_DIR/c2_${T4_IND}_${DEPTH}x"
-            bash "$HERE/scripts/run_fullchr20_archive_capsule.sh" \
+            bash "$HERE/scripts/claim3_scripts/run_fullchr20_archive_capsule.sh" \
                  "$DEC" "$HERE/scripts" "$REFS/chr20.fa" "$arc4" "$T4_IND" "$d4" > "$d4.log" 2>&1
             local SL4; SL4=$(grep -aE '^SNV ' "$d4.log" | tail -1)
             local tv4 w4 h4; tv4=$(parse_time_v "$d4.log"); w4=${tv4% *}; h4=${tv4#* }
@@ -568,7 +568,7 @@ run_phase2(){
         banner "T2.4 — multi-allelic sites recovered"
         local MA_IND="${T24_IND:-HG002}" MA_REG="${T24_REGION:-20:1000000-6000000}" mad
         mad="$OUT_DIR/c2_T2.4_${MA_IND}"
-        if /usr/bin/time -v bash "$HERE/scripts/run_multiallelic_bench_capsule.sh" \
+        if /usr/bin/time -v bash "$HERE/scripts/claim2_scripts/run_multiallelic_bench_capsule.sh" \
               "$BEST" "$HERE/scripts" "$REFS/chr20.fa" "$MA_IND" "$MA_REG" "$mad" \
               > "$mad.log" 2>&1; then
             local NT CH DH tvm wm hm
@@ -602,7 +602,7 @@ run_phase2(){
         local TA="${T25_A:-HG003}" TB="${T25_B:-HG004}" TP4="${T25_PLOIDY:-4}"
         local TREG="${T25_REGION:-20:3000000-3400000}" ted
         ted="$OUT_DIR/c2_T2.5_${TA}_${TB}"
-        if /usr/bin/time -v bash "$HERE/scripts/run_tetraploid_bench_capsule.sh" \
+        if /usr/bin/time -v bash "$HERE/scripts/claim2_scripts/run_tetraploid_bench_capsule.sh" \
               "$BEST" "$HERE/scripts" "$REFS/chr20.fa" "$TA" "$TB" "$TP4" "$TREG" "$ted" \
               > "$ted.log" 2>&1; then
             # P= and R= MUST be anchored. The score line is
@@ -774,7 +774,7 @@ run_phase3(){
         mark "T3.4 locus fidelity"
         banner "T3.4 — locus retrieval fidelity (coordinate vs content)"
         local t34d="$OUT_DIR/c3_T3.4"
-        if bash "$HERE/scripts/run_locus_fidelity.sh" "$DEC" "$ARCH_DIR/HG002.capsule" \
+        if bash "$HERE/scripts/claim3_scripts/run_locus_fidelity.sh" "$DEC" "$ARCH_DIR/HG002.capsule" \
               "$REFS/chr20.fa" HG002 "$t34d" "${T34_N:-100}" > "$t34d.log" 2>&1; then
             local row; row=$(grep -a '^T34,' "$t34d.log" | tail -1)
             if [ -n "${row:-}" ]; then

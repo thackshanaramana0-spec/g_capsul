@@ -9,7 +9,7 @@
 #  The status file is emptied and rewritten on every run, so what you are
 #  reading is always the current state -- never a stale mix of two runs.
 #
-#  usage: bash scripts/benchmark_0_preflight.sh [OUT_FILE]
+#  usage: bash scripts/setup_scripts/benchmark_0_preflight.sh [OUT_FILE]
 #         default OUT_FILE: results/BENCHMARK_0_STATUS.txt
 #
 #  Exit: 0 = GO, 1 = NO-GO (a required item is missing/broken)
@@ -109,13 +109,13 @@ if [ -x "$HOME/miniconda3/envs/kmer2snp_r/bin/python" ]; then
     else fail "Kmer2SNP env has no networkx" "kmer2snp.py cannot import"; fi
 else warn "Kmer2SNP (conda env)" "MISSING — T3 loses its 3rd arm"; fi
 chk_path "Kmer2SNP tool"   "/root/Kmer2SNP/kmer2snp.py" req
-chk_path "Kmer2SNP runner" "$HERE/scripts/run_kmer2snp.sh" req
-chk_path "kmer2snp->VCF"   "$HERE/scripts/kmer2snp_sam_to_vcf.py" req
+chk_path "Kmer2SNP runner" "$HERE/scripts/claim2_scripts/run_kmer2snp.sh" req
+chk_path "kmer2snp->VCF"   "$HERE/scripts/claim2_scripts/kmer2snp_sam_to_vcf.py" req
 # T2.4 / T2.5 runners. Both existed and were never called by benchmark_1, so a
 # full sweep produced 6 of 8 tables and still printed COMPLETE.
-chk_path "T2.4 multi-allelic runner" "$HERE/scripts/run_multiallelic_bench_capsule.sh" req
-chk_path "T2.5 tetraploid runner"    "$HERE/scripts/run_tetraploid_bench_capsule.sh" req
-chk_path "T2.5 truth builder"        "$HERE/scripts/build_tetraploid_truth.py" req
+chk_path "T2.4 multi-allelic runner" "$HERE/scripts/claim2_scripts/run_multiallelic_bench_capsule.sh" req
+chk_path "T2.5 tetraploid runner"    "$HERE/scripts/claim2_scripts/run_tetraploid_bench_capsule.sh" req
+chk_path "T2.5 truth builder"        "$HERE/scripts/claim2_scripts/build_tetraploid_truth.py" req
 chk_cmd  "seqtk (T2.2 subsampling)"  seqtk req
 chk_cmd  "bcftools"                  bcftools req
 chk_cmd  "tabix"                     tabix req
@@ -130,17 +130,17 @@ chk_cmd "/usr/bin/time"   /usr/bin/time req
 
 # ── 3. BINARIES ───────────────────────────────────────────────────────────
 hdr "3. OUR BINARIES"
-source "$HERE/scripts/capsule_config.sh" 2>/dev/null || true
+source "$HERE/scripts/setup_scripts/capsule_config.sh" 2>/dev/null || true
 BIN_DIR="${CAPSULE_BIN_DIR:-/tmp/capsule_bin}"; mkdir -p "$BIN_DIR"
 BEST="$BIN_DIR/best106"; DEC="$BIN_DIR/capsule_decode"
 hb "CAPSULE_BIN_DIR" "$BIN_DIR"
 say ""
 say "  building encoder (best106) ..."
-if bash "$HERE/scripts/build106.sh" "$BEST" >/tmp/_b0_enc.log 2>&1 && [ -x "$BEST" ]; then
+if bash "$HERE/scripts/core_test_scripts/build106.sh" "$BEST" >/tmp/_b0_enc.log 2>&1 && [ -x "$BEST" ]; then
     pass "encoder builds"   "$BEST ($(stat -c%s "$BEST" | awk '{printf "%.1f MB", $1/1048576}'))"
 else fail "encoder build"   "see /tmp/_b0_enc.log"; tail -5 /tmp/_b0_enc.log | sed 's/^/         /' | tee -a "$OUT"; fi
 say "  building decoder (capsule_decode) ..."
-if bash "$HERE/scripts/build_decode.sh" "$DEC" >/tmp/_b0_dec.log 2>&1 && [ -x "$DEC" ]; then
+if bash "$HERE/scripts/core_test_scripts/build_decode.sh" "$DEC" >/tmp/_b0_dec.log 2>&1 && [ -x "$DEC" ]; then
     pass "decoder builds"   "$DEC ($(stat -c%s "$DEC" | awk '{printf "%.1f MB", $1/1048576}'))"
 else fail "decoder build"   "see /tmp/_b0_dec.log"; tail -5 /tmp/_b0_dec.log | sed 's/^/         /' | tee -a "$OUT"; fi
 
@@ -217,7 +217,7 @@ if [ -x "$BEST" ] && [ -s "$REFS/chr20.fa" ]; then
     say "  running sanity window (HG002 r2, ~1 min) ..."
     T0=$(date +%s)
     env CAPS_DBG=1 CAPS_DBG_ONLY=1 \
-        bash "$HERE/scripts/run_window_bench_capsule.sh" "$BEST" "$HERE/scripts" \
+        bash "$HERE/scripts/claim3_scripts/run_window_bench_capsule.sh" "$BEST" "$HERE/scripts" \
              "$REFS/chr20.fa" HG002 r2 "$SAN_DIR" > "$SAN_DIR/run.log" 2>&1
     T1=$(date +%s)
     KC_GOT=$(grep -oP 'kc nodes=\K[0-9]+' "$SAN_DIR/capsule.log" 2>/dev/null | head -1)
@@ -452,7 +452,7 @@ if [ "$FAIL" -eq 0 ]; then
     say "  ╚════════════════════════════════════════════════════════════════════╝"
     [ "$WARN" -gt 0 ] && { say ""; say "  $WARN warning(s) above — the run proceeds, with that scope reduced."; }
     say ""
-    say "  START WITH:  bash scripts/benchmark_1_run.sh"
+    say "  START WITH:  bash scripts/setup_scripts/benchmark_1_run.sh"
     say "  (add SANITY_ONLY=1 to run just the first dataset and get a measured rate)"
     RC=0
 else

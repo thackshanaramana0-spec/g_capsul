@@ -51,11 +51,11 @@ and without fully decompressing first.
   false-positive rate for complete recall.
 - Adaptively select its own compression parameters by sweeping candidate
   settings and keeping the smallest resulting archive
-  (`scripts/encode_adaptive.sh`), rather than requiring the caller to tune
+  (`scripts/core_test_scripts/encode_adaptive.sh`), rather than requiring the caller to tune
   them.
 - Assess a FASTQ file's fitness for this pipeline before committing to a
   full encode, via a standalone pre-flight report
-  (`scripts/check_input_scope.py`) that derives its numbers from the live
+  (`scripts/setup_scripts/check_input_scope.py`) that derives its numbers from the live
   encoder source rather than a hardcoded copy.
 - Refuse cleanly and loudly on out-of-scope or malformed input (see §5),
   with a specific, actionable message rather than a crash or a silently

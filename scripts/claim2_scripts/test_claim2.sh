@@ -18,9 +18,9 @@
 # caller stopped finding anything" regressions cheaply, on every change,
 # without needing real data on hand.
 #
-# Usage: bash scripts/test_claim2.sh [workdir]
+# Usage: bash scripts/claim2_scripts/test_claim2.sh [workdir]
 set -euo pipefail
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 W="${1:-$(mktemp -d)}"; mkdir -p "$W"
 PASS=0; FAIL=0
 check() { if [ "$1" = "1" ]; then echo "  [PASS] $2"; PASS=$((PASS+1)); else echo "  [FAIL] $2"; FAIL=$((FAIL+1)); fi; }
@@ -102,7 +102,7 @@ N_READS=$(( $(wc -l < "$W/synth.fq") / 4 ))
 echo "-> $N_READS reads simulated from both haplotypes"
 
 # ── Build + run the caller (same invocation as run_giab_indel_capsule.sh) ──
-BEST="$W/best106"; [ -x "$BEST" ] || bash "$HERE/scripts/build106.sh" "$BEST" >/dev/null
+BEST="$W/best106"; [ -x "$BEST" ] || bash "$HERE/scripts/core_test_scripts/build106.sh" "$BEST" >/dev/null
 cd "$W"
 export CAPS_CALL=1 CALL_VCF="$W/calls.vcf" CAPS_DUMP_CONTIGS="$W/contigs.tsv"
 "$BEST" "$W/synth.fq" 3 16 16 22 16 16 1 24 64 1 > /dev/null 2> "$W/capsule_call.log"
@@ -113,7 +113,7 @@ check "$([ -s "$W/calls.vcf" ] && echo 1 || echo 0)" "caller produced a non-empt
 # ── Lift contig-coordinate calls to genome coordinates ──────────────────────
 bwa index "$W/ref.fa" >/dev/null 2>&1
 bwa mem -t2 "$W/ref.fa" "$W/contigs.fa" 2>/dev/null > "$W/c2r.sam"
-python3 "$HERE/scripts/lift_vcf.py" "$W/calls.vcf" "$W/c2r.sam" "$W/ref.fa" synth "$W/lifted.vcf" "$W/contigs.fa" 2>"$W/lift.log" || true
+python3 "$HERE/scripts/setup_scripts/lift_vcf.py" "$W/calls.vcf" "$W/c2r.sam" "$W/ref.fa" synth "$W/lifted.vcf" "$W/contigs.fa" 2>"$W/lift.log" || true
 
 check "$([ -s "$W/lifted.vcf" ] && echo 1 || echo 0)" "lift_vcf.py produced a non-empty genome-coordinate VCF"
 

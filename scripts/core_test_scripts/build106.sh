@@ -1,11 +1,22 @@
 #!/bin/bash
-# Build the archive decoder. Mirrors build106.sh, including the gcc/g++ split
-# for the vendored htscodecs C sources.
+# Build the in-process encoder (stage 106).
+#
+# Recorded as a script because it had only ever existed as a shell-history
+# one-liner -- which is exactly how -fopenmp went missing. Without that flag the
+# single `#pragma omp parallel for` in the sweep is silently discarded and the
+# largest stage runs serial; linking it correctly was worth -45% wall time.
 set -e
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OUT="${1:-/tmp/capsule_decode}"
-# See build106.sh: default to a portable baseline, CAPS_BUILD_NATIVE=1 opts into
-# -march=native for a build meant to run only on this machine.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+OUT="${1:-/tmp/best106}"
+# The vendored htscodecs sources are C, not C++, and must be compiled by gcc:
+# g++ rejects their implicit void* conversions. Built to objects first, then
+# linked, rather than added to the g++ line.
+# -march=native ties the binary to the exact CPU it's built on and crashes with
+# "illegal instruction" elsewhere. Default to a portable baseline (x86-64-v2:
+# SSE4.2/POPCNT, universal since ~2009); set CAPS_BUILD_NATIVE=1 to build for
+# this machine only (matches SPRING's spring_optimize_for_portability pattern).
+# -march=x86-64-v2 is x86-only -- arm64 (e.g. Apple Silicon) has no such
+# fragmentation problem, so no arch flag is needed there.
 ARCH_FLAGS=""
 case "$(uname -m)" in
     x86_64|amd64) ARCH_FLAGS="-march=x86-64-v2" ;;
@@ -15,8 +26,9 @@ esac
 HTSOBJ="$(mktemp -d)"
 gcc -O3 -I"$HERE/thirdparty/htscodecs" -c "$HERE/thirdparty/htscodecs/fqzcomp_qual.c" -o "$HTSOBJ/fqzcomp_qual.o"
 gcc -O3 -I"$HERE/thirdparty/htscodecs" -c "$HERE/thirdparty/htscodecs/utils.c"        -o "$HTSOBJ/utils.o"
+
 g++ -O3 $ARCH_FLAGS -std=c++17 -pthread -fopenmp -o "$OUT" \
-    "$HERE/src/decoder.cpp" \
+    "$HERE/src/encoder.cpp" \
     "$HERE/thirdparty/ppmd/Ppmd7.c" "$HERE/thirdparty/ppmd/Ppmd7Enc.c" \
     "$HERE/thirdparty/ppmd/Ppmd7Dec.c" "$HERE/thirdparty/ppmd/Alloc.c" \
     "$HERE/thirdparty/ppmd/CpuArch.c" \

@@ -3,15 +3,15 @@
 # file's sequence column. This is a real round trip, not a coder-level check:
 # the reference is the input file itself.
 #
-#   scripts/verify_lossless.sh reads.fq [workdir]
+#   scripts/core_test_scripts/verify_lossless.sh reads.fq [workdir]
 set -euo pipefail
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 IN="${1:?usage: verify_lossless.sh reads.fq [workdir]}"
 W="${2:-$(mktemp -d)}"; mkdir -p "$W"
 # Always build from THIS tree unless the caller pins BEST explicitly. Reusing
 # whatever /tmp/best106 happens to be silently verified a stale binary once.
 BEST="${BEST:-$W/best106}"
-[ -x "$BEST" ] || bash "$HERE/scripts/build106.sh" "$BEST" >/dev/null
+[ -x "$BEST" ] || bash "$HERE/scripts/core_test_scripts/build106.sh" "$BEST" >/dev/null
 
 LMAX=$(awk 'NR%4==2{if(length($0)>m)m=length($0)} NR>400000{exit} END{print m}' "$IN")
 C1=$(( LMAX / 13 )); [ "$C1" -lt 6 ] && C1=6
@@ -25,7 +25,7 @@ CANDIDATES="${C1}:${M1},${C1}:${M2},${C2}:${M1},${C2}:${M2}" ARCHIVE="$W/out.arc
 sed -n 's/.*\[a3\] chose //p' "$W/enc.log" || true
 
 read -r PG MAIN < "$W/pg_params.txt"
-python3 "$HERE/scripts/decode_105.py" "$W" "$PG" "$MAIN" "$W/dec.seq" >"$W/dec.log" 2>&1
+python3 "$HERE/scripts/core_test_scripts/decode_105.py" "$W" "$PG" "$MAIN" "$W/dec.seq" >"$W/dec.log" 2>&1
 
 awk 'NR%4==2' "$IN" > "$W/orig.seq"
 if cmp -s "$W/orig.seq" "$W/dec.seq"; then

@@ -84,7 +84,7 @@ log "[2/5] done -- $(du -h c2r.sam | cut -f1) c2r.sam"
 
 # ── 3. Lift contig-coordinate calls to genome coordinates ──────────────────
 log "[3/5] lifting contig-coordinate calls to genome coordinates..."
-python3 "$SC/lift_vcf.py" calls.vcf c2r.sam "$REF" $CHROM lifted.vcf contigs.fa
+python3 "$SC/setup_scripts/lift_vcf.py" calls.vcf c2r.sam "$REF" $CHROM lifted.vcf contigs.fa
 log "[3/5] done"
 
 # ── 4. Truth: whole chr20, het-only, inside GIAB confident regions ─────────

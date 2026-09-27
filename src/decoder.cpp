@@ -1248,7 +1248,7 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
             // own --decompress-range validates the same way (spring.cpp,
             // checks start/end against num_read_pairs) -- qb==pg.size() stays
             // valid since ranges are half-open, matching every existing caller
-            // (e.g. scripts/test_claim3.sh's "0-$PGLEN").
+            // (e.g. scripts/claim3_scripts/test_claim3.sh's "0-$PGLEN").
             if(qa>pg.size() || qb>pg.size()){
                 fprintf(stderr,"query range START-END must fall within the pseudogenome "
                                "(0-%zu), got %llu-%llu\n",

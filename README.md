@@ -291,9 +291,9 @@ and `code_mapping_claim3.md` for exact function and line references.
 ```bash
 git clone https://github.com/thackshanaramana0-spec/g_capsul.git
 cd g_capsul
-scripts/build106.sh /tmp/best106            # build the encoder (must link -fopenmp, see the script's own note)
-scripts/build_decode.sh /tmp/capsule_decode # build the decoder + all three Claim 3 operations
-scripts/verify_lossless.sh path/to/any.fastq # encode, decode, and diff against the original
+scripts/core_test_scripts/build106.sh /tmp/best106            # build the encoder (must link -fopenmp, see the script's own note)
+scripts/core_test_scripts/build_decode.sh /tmp/capsule_decode # build the decoder + all three Claim 3 operations
+scripts/core_test_scripts/verify_lossless.sh path/to/any.fastq # encode, decode, and diff against the original
 ```
 
 Self-contained: needs nothing but this checkout, a C++17 compiler, and `liblzma-dev`
@@ -341,11 +341,11 @@ already give the exact same binaries.
 
 ```bash
 # Compress (sequence + read order only: the default, NOT a full FASTQ)
-INPUT=reads.fq ARCHIVE=out.capsule BEST=/tmp/best106 bash scripts/encode_adaptive.sh
+INPUT=reads.fq ARCHIVE=out.capsule BEST=/tmp/best106 bash scripts/core_test_scripts/encode_adaptive.sh
 
 # Compress the FULL FASTQ (sequence + names + quality + line 3)
 CAPS_NAMES=1 CAPS_QUAL=1 INPUT=reads.fq ARCHIVE=out.capsule BEST=/tmp/best106 \
-    bash scripts/encode_adaptive.sh
+    bash scripts/core_test_scripts/encode_adaptive.sh
 
 # Decompress (byte-exact round trip)
 /tmp/capsule_decode out.capsule outdir outdir/reads.fq
@@ -477,7 +477,7 @@ the released repository. **For all reported numerical results, the raw CSV files
   data) is not refused the way an oversize read or a quality-length mismatch is. It is
   silently miscoded at the base level rather than producing a clean error, so an archive
   built from such input should not be trusted without decoding it and diffing against the
-  source. [`scripts/check_input_scope.py`](scripts/check_input_scope.py) reports this as a
+  source. [`scripts/setup_scripts/check_input_scope.py`](scripts/setup_scripts/check_input_scope.py) reports this as a
   named caveat on any input file before you compress it.
 
 Full, current status for each claim: [`docs/claim1/overview_claim1.md`](docs/claim1/overview_claim1.md),

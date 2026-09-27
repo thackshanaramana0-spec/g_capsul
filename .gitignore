@@ -3,7 +3,7 @@
 # view; everything else this project produced during development lives here.
 local/
 
-# Compiled encoders (regenerate: scripts/build106.sh)
+# Compiled encoders (regenerate: scripts/core_test_scripts/build106.sh)
 best*
 *.o
 *.so

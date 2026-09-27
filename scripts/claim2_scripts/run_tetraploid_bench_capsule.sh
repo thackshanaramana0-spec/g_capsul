@@ -75,7 +75,7 @@ log "[3/7] done -- $(awk '{n+=$3-$2}END{print n+0}' regions.bed) confident bp in
 
 # ── 4. Build the tetraploid union truth (v2: normalise first, drop nothing) ──
 log "[4/7] building unbiased tetraploid union truth (v2, drops nothing)..."
-python3 "$SC/build_tetraploid_truth_v2.py" "truth_${INDA}_norm.vcf.gz" "truth_${INDB}_norm.vcf.gz" tetra_truth_v2.vcf
+python3 "$SC/claim2_scripts/build_tetraploid_truth_v2.py" "truth_${INDA}_norm.vcf.gz" "truth_${INDB}_norm.vcf.gz" tetra_truth_v2.vcf
 awk -v lo="$LO" -v hi="$HI" '/^#/{print;next} $2>lo && $2<hi' tetra_truth_v2.vcf > tetra_truth_v2_win.vcf
 log "[4/7] done -- $(grep -vc '^#' tetra_truth_v2_win.vcf) truth sites in window"
 
@@ -106,7 +106,7 @@ else
     log "[call] compressing to an archive, then calling FROM it (no FASTQ read)"
     env CAPS_SPANS=1 CAPS_NAMES=1 CAPS_QUAL=1 \
         INPUT="$OUT/reads.fq" ARCHIVE="$OUT/reads.capsule" BEST="$CAPS" \
-        bash "$SC/encode_adaptive.sh" >/dev/null 2>encode.log \
+        bash "$SC/core_test_scripts/encode_adaptive.sh" >/dev/null 2>encode.log \
       || { echo "FATAL: encode failed -- see $OUT/encode.log" >&2; tail -15 encode.log >&2; exit 1; }
     [ -s "$OUT/reads.capsule" ] || { echo "FATAL: no archive produced" >&2; exit 1; }
     log "[call] archive $(stat -c%s "$OUT/reads.capsule") B -- calling from it"
@@ -124,7 +124,7 @@ cp contigs.tsv contigs.fa
 log "[5/7]   caller done -- $(grep -c '^>' contigs.fa) contigs, aligning + lifting..."
 [ -s "$REF.bwt" ] || bwa index "$REF" 2>/dev/null
 bwa mem -t"$(nproc)" "$REF" contigs.fa 2>/dev/null > c2r.sam
-python3 "$SC/lift_vcf.py" calls.vcf c2r.sam "$REF" "$CHROM" lifted.vcf contigs.fa
+python3 "$SC/setup_scripts/lift_vcf.py" calls.vcf c2r.sam "$REF" "$CHROM" lifted.vcf contigs.fa
 log "[5/7] done"
 
 # ── 6. DiscoSNP++ on the identical mixed reads ───────────────────────────────

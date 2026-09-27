@@ -27,8 +27,8 @@ that is IN scope but marginal, which the encoder's hard gate has no way to
 express (a gate is binary; this report is not).
 
 USAGE
-    python3 scripts/check_input_scope.py reads.fq [reads_2.fq ...]
-    python3 scripts/check_input_scope.py --json reads.fq   # machine-readable
+    python3 scripts/setup_scripts/check_input_scope.py reads.fq [reads_2.fq ...]
+    python3 scripts/setup_scripts/check_input_scope.py --json reads.fq   # machine-readable
 
 EXIT CODES
     0  in scope, no concerns

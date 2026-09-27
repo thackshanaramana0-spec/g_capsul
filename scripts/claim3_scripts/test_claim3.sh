@@ -18,12 +18,12 @@
 #              actually happens, and that every read's placement overlaps
 #              the range it was returned for (no off-by-one leakage).
 #   roundtrip: the underlying archive is still lossless (delegates to the
-#              existing scripts/verify_lossless.sh so this test cannot regress
+#              existing scripts/core_test_scripts/verify_lossless.sh so this test cannot regress
 #              silently if compression correctness breaks first).
 #
-# Usage: bash scripts/test_claim3.sh [workdir]
+# Usage: bash scripts/claim3_scripts/test_claim3.sh [workdir]
 set -euo pipefail
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 W="${1:-$(mktemp -d)}"; mkdir -p "$W"
 PASS=0; FAIL=0
 check() { if [ "$1" = "1" ]; then echo "  [PASS] $2"; PASS=$((PASS+1)); else echo "  [FAIL] $2"; FAIL=$((FAIL+1)); fi; }
@@ -60,10 +60,10 @@ SUM_LEN=$(awk 'NR%4==2{s+=length($0)} END{print s}' "$W/synth.fq")
 echo "-> $N_READS reads, total bases $SUM_LEN"
 
 # ── Build + encode + decode ──────────────────────────────────────────────────
-BEST="$W/best106"; [ -x "$BEST" ] || bash "$HERE/scripts/build106.sh" "$BEST" >/dev/null
-DEC="$W/capsule_decode"; [ -x "$DEC" ] || bash "$HERE/scripts/build_decode.sh" "$DEC" >/dev/null
+BEST="$W/best106"; [ -x "$BEST" ] || bash "$HERE/scripts/core_test_scripts/build106.sh" "$BEST" >/dev/null
+DEC="$W/capsule_decode"; [ -x "$DEC" ] || bash "$HERE/scripts/core_test_scripts/build_decode.sh" "$DEC" >/dev/null
 ARC="$W/synth.capsule"
-INPUT="$W/synth.fq" ARCHIVE="$ARC" BEST="$BEST" bash "$HERE/scripts/encode_adaptive.sh" >"$W/encode.log" 2>&1
+INPUT="$W/synth.fq" ARCHIVE="$ARC" BEST="$BEST" bash "$HERE/scripts/core_test_scripts/encode_adaptive.sh" >"$W/encode.log" 2>&1
 # encode_adaptive.sh's own stdout only has ARCHIVE_TOTAL; the per-candidate
 # "unique=" line is in the archive's own .log sibling file (see the
 # DUMP_LIT/DUMP_PERM/DUMP_MM invocation inside encode_adaptive.sh).
@@ -95,10 +95,10 @@ BAD_POS=$(grep '^>' "$W/query_full.fa" | grep -o 'pos=[0-9][0-9]*' | sed 's/pos=
 check "$([ "$BAD_POS" -eq 0 ] && echo 1 || echo 0)" "no query record has a position >= PGLEN ($PGLEN)"
 
 # ── roundtrip: the archive is still lossless ─────────────────────────────────
-if BEST="$BEST" bash "$HERE/scripts/verify_lossless.sh" "$W/synth.fq" "$W/vl" > "$W/vl.log" 2>&1; then
-    check 1 "underlying archive round-trips LOSSLESS (scripts/verify_lossless.sh)"
+if BEST="$BEST" bash "$HERE/scripts/core_test_scripts/verify_lossless.sh" "$W/synth.fq" "$W/vl" > "$W/vl.log" 2>&1; then
+    check 1 "underlying archive round-trips LOSSLESS (scripts/core_test_scripts/verify_lossless.sh)"
 else
-    check 0 "underlying archive round-trips LOSSLESS (scripts/verify_lossless.sh) -- see $W/vl.log"
+    check 0 "underlying archive round-trips LOSSLESS (scripts/core_test_scripts/verify_lossless.sh) -- see $W/vl.log"
 fi
 
 echo ""
