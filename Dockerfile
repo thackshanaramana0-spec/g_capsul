@@ -26,7 +26,7 @@
 # on every push -- see .github/workflows/ci.yml's docker job): compressed and
 # decompressed a real FASTQ through these two commands, reconstructed the
 # 4-line records from the separate seq/names/qual outputs the same way
-# scripts/setup_scripts/benchmark_1_run.sh's own losscmp does, and confirmed byte-identical.
+# scripts/benchmark_scripts/benchmark_1_run.sh's own losscmp does, and confirmed byte-identical.
 
 FROM ubuntu:24.04 AS build
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -48,7 +48,7 @@ COPY --from=build /src/build/best106 /usr/local/bin/best106
 COPY --from=build /src/build/capsule_decode /usr/local/bin/capsule_decode
 COPY THIRD_PARTY_NOTICES.md /usr/local/share/g_capsul/THIRD_PARTY_NOTICES.md
 COPY LICENSE /usr/local/share/g_capsul/LICENSE
-# These three are set by scripts/core_test_scripts/encode_adaptive.sh (the documented entry
+# These three are set by scripts/build_scripts/encode_adaptive.sh (the documented entry
 # point) on every real invocation, including every one behind the published
 # results -- without them, best106 silently skips the streams the decoder's
 # plain-reconstruction path needs (orig2uid, read_lengths), producing a

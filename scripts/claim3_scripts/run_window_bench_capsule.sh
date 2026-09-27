@@ -95,7 +95,7 @@ log "[3/6] done -- c2r.sam written"
 
 # ── 4. Lift contig-coordinate calls to genome coordinates ──────────────────
 log "[4/6] lifting contig-coordinate calls to genome coordinates..."
-python3 "$SC/setup_scripts/lift_vcf.py" calls.vcf c2r.sam "$REF" $CHROM lifted.vcf contigs.fa
+python3 "$SC/benchmark_scripts/lift_vcf.py" calls.vcf c2r.sam "$REF" $CHROM lifted.vcf contigs.fa
 log "[4/6] done"
 
 # ── 5. Truth for this window: het-only (reference-free sees only het), inside

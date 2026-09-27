@@ -17,7 +17,7 @@ if(CAPS_IPO_OK)
   set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
 endif()
 
-# Mirrors scripts/core_test_scripts/build106.sh and scripts/core_test_scripts/build_decode.sh: default to a
+# Mirrors scripts/build_scripts/build106.sh and scripts/build_scripts/build_decode.sh: default to a
 # portable baseline instruction set (SSE4.2/POPCNT, universal since ~2009) so
 # the binary isn't tied to the exact CPU it was built on. -DCAPS_BUILD_NATIVE=ON
 # opts into -march=native for a build meant to run only on this machine.

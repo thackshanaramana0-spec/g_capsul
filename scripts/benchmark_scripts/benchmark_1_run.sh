@@ -18,9 +18,9 @@
 #     not a flaky run.
 #
 #  usage:
-#    bash scripts/setup_scripts/benchmark_1_run.sh                 # everything, ~9-12 h
-#    SANITY_ONLY=1 bash scripts/setup_scripts/benchmark_1_run.sh   # 1 dataset, measured rate
-#    PHASES=1,3    bash scripts/setup_scripts/benchmark_1_run.sh   # selected phases
+#    bash scripts/benchmark_scripts/benchmark_1_run.sh                 # everything, ~9-12 h
+#    SANITY_ONLY=1 bash scripts/benchmark_scripts/benchmark_1_run.sh   # 1 dataset, measured rate
+#    PHASES=1,3    bash scripts/benchmark_scripts/benchmark_1_run.sh   # selected phases
 #
 #  env:
 #    OUT_DIR       results dir              [results/benchmark_1_<timestamp>]
@@ -30,7 +30,7 @@
 # ═══════════════════════════════════════════════════════════════════════════
 set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; cd "$HERE"
-source "$HERE/scripts/setup_scripts/capsule_config.sh" 2>/dev/null || true
+source "$HERE/scripts/benchmark_scripts/capsule_config.sh" 2>/dev/null || true
 
 STAMP=$(date +%Y%m%d_%H%M%S)
 OUT_DIR="${OUT_DIR:-$HERE/results/benchmark_1_$STAMP}"
@@ -202,7 +202,7 @@ phase1_one(){                      # $1 = dataset name ; returns 1 on failure
     # compression (~20x heavier). Measured: 38.64 s / 2.45 GB vs 8.97 s /
     # 1.00 GB on the same input, for a byte-identical archive.
     /usr/bin/time -v env CAPS_SPANS=1 CAPS_NAMES=1 CAPS_QUAL=1 INPUT="$IN" ARCHIVE="$A" BEST="$BEST" \
-        bash "$HERE/scripts/core_test_scripts/encode_adaptive.sh" >/dev/null 2>"$TF"
+        bash "$HERE/scripts/build_scripts/encode_adaptive.sh" >/dev/null 2>"$TF"
     read -r CW CR <<< "$(parse_time_v "$TF")"
     if [ ! -s "$A" ]; then err "$DS: CAPSULE produced no archive"; debug_dump "$DS encode" "${A}.log"; rm -f "$IN" "$TF"; return 1; fi
     ARCH=$(stat -c%s "$A")
@@ -354,7 +354,7 @@ run_phase2(){
         for _i in $C2_SETS; do [ -s "$ARCH_DIR/$_i.capsule" ] && have="$have $_i"; done
         if [ -z "$have" ]; then
             err "SANITY_ONLY: no GIAB archive from phase 1 -- the Claim 2 path is NOT rehearsed."
-            err "  To rehearse it end to end:  SANITY_ONLY=1 SANITY_DS=HG002 bash scripts/setup_scripts/benchmark_1_run.sh"
+            err "  To rehearse it end to end:  SANITY_ONLY=1 SANITY_DS=HG002 bash scripts/benchmark_scripts/benchmark_1_run.sh"
             return 0
         fi
         C2_SETS="$(echo $have | cut -d' ' -f1)"
@@ -522,7 +522,7 @@ run_phase2(){
                 || { err "T2.2 ${DEPTH}x: seqtk failed"; printf "%s,%s,,,,,,,,,,,SUBSAMPLE_FAILED\n" "$T4_IND" "$DEPTH" >> "$CSV4"; continue; }
             local NR4; NR4=$(( $(wc -l < "$sub") / 4 ))
             /usr/bin/time -v env CAPS_SPANS=1 CAPS_NAMES=1 CAPS_QUAL=1 INPUT="$sub" ARCHIVE="$arc4" BEST="$BEST" \
-                bash "$HERE/scripts/core_test_scripts/encode_adaptive.sh" >/dev/null 2>"$WD/t4c.txt"
+                bash "$HERE/scripts/build_scripts/encode_adaptive.sh" >/dev/null 2>"$WD/t4c.txt"
             if [ ! -s "$arc4" ]; then
                 err "T2.2 ${DEPTH}x: no archive"; debug_dump "T2.2 ${DEPTH}x encode" "${arc4}.log"
                 printf "%s,%s,%s,,,,,,,,,,ENCODE_FAILED\n" "$T4_IND" "$DEPTH" "$NR4" >> "$CSV4"

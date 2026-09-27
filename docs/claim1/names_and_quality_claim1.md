@@ -155,7 +155,7 @@ fork can occur — the one change that covers both the `CANDIDATES` and
 output pre-fix vs post-fix for every path that does not exercise the
 sweep-plus-names/quality combination — meaning **no currently-published
 number in this project was ever affected**, since no published result uses
-names/quality through a candidate sweep — and `scripts/core_test_scripts/verify_lossless.sh`
+names/quality through a candidate sweep — and `scripts/build_scripts/verify_lossless.sh`
 on a real locked dataset with the fixed binary reproduces the exact
 previously-measured archive size byte for byte.
 

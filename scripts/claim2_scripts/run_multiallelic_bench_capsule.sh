@@ -92,7 +92,7 @@ else
     log "[call] compressing to an archive, then calling FROM it (no FASTQ read)"
     env CAPS_SPANS=1 CAPS_NAMES=1 CAPS_QUAL=1 \
         INPUT="$OUT/reads.fq" ARCHIVE="$OUT/reads.capsule" BEST="$CAPS" \
-        bash "$SC/core_test_scripts/encode_adaptive.sh" >/dev/null 2>encode.log \
+        bash "$SC/build_scripts/encode_adaptive.sh" >/dev/null 2>encode.log \
       || { echo "FATAL: encode failed -- see $OUT/encode.log" >&2; tail -15 encode.log >&2; exit 1; }
     [ -s "$OUT/reads.capsule" ] || { echo "FATAL: no archive produced" >&2; exit 1; }
     log "[call] archive $(stat -c%s "$OUT/reads.capsule") B -- calling from it"
@@ -108,7 +108,7 @@ cp contigs.tsv contigs.fa
 log "[3/5]   caller done -- $(grep -c '^>' contigs.fa) contigs, aligning + lifting..."
 [ -s "$REF.bwt" ] || bwa index "$REF" 2>/dev/null
 bwa mem -t"$(nproc)" "$REF" contigs.fa 2>/dev/null > c2r.sam
-python3 "$SC/setup_scripts/lift_vcf.py" calls.vcf c2r.sam "$REF" "$CHROM" lifted.vcf contigs.fa
+python3 "$SC/benchmark_scripts/lift_vcf.py" calls.vcf c2r.sam "$REF" "$CHROM" lifted.vcf contigs.fa
 log "[3/5] done"
 
 # ── 4. DiscoSNP++ on the identical reads ─────────────────────────────────────

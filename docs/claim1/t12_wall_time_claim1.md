@@ -85,7 +85,7 @@ decompress-side cost below).
 
 Verified against `docs/FINAL_HEADROOM.md`. Of a measured 40.1 s total
 decompress (against PgRC2's 4.0 s — the ~10x figure), **80% (32.19 s) is a
-Python script** (`scripts/core_test_scripts/decode_105.py`) iterating every read in the
+Python script** (`scripts/build_scripts/decode_105.py`) iterating every read in the
 interpreter, and it also sets the peak memory (1,563 MB — higher than this
 project's own *compress* peak of 1,032 MB). The C++ portion
 (`capsule_decode`) alone takes 7.95 s. Ported fully to C++, decompress

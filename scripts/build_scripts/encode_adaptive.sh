@@ -36,8 +36,8 @@ ARGS="${ENC_ARGS:-3 16 16 22 16 16 1 24 64 1}"
 # gate still applies regardless.
 HERE_SCA="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 if [ -z "${CAPS_SKIP_SCOPE_CHECK:-}" ] && [ -x "$(command -v python3)" ] \
-   && [ -f "$HERE_SCA/setup_scripts/check_input_scope.py" ]; then
-    python3 "$HERE_SCA/setup_scripts/check_input_scope.py" "$IN"
+   && [ -f "$HERE_SCA/benchmark_scripts/check_input_scope.py" ]; then
+    python3 "$HERE_SCA/benchmark_scripts/check_input_scope.py" "$IN"
     SCOPE_RC=$?
     if [ "$SCOPE_RC" -ge 2 ]; then
         echo "encode_adaptive.sh: refusing -- see the OUT OF SCOPE finding(s) above." >&2

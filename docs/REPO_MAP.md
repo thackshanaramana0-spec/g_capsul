@@ -50,8 +50,8 @@ and Genozip, and losslessly against PgRC2 on the sequence stream alone.
 | Stream selector / general coders | `include/coders_inproc.h` (selector, transforms), `include/coders_entropy.h` (PPMd7 / FSE / range coder) |
 | Identifiers | `include/names_coder.h` |
 | Quality scores | `include/quality_coder.h` (wraps vendored `thirdparty/htscodecs/fqzcomp_qual.c`) |
-| Build | `scripts/core_test_scripts/build106.sh` → binary `best106` (must include `-fopenmp`, see the script's own header comment) |
-| Encode / verify | `scripts/core_test_scripts/encode_adaptive.sh`, `scripts/core_test_scripts/verify_lossless.sh` |
+| Build | `scripts/build_scripts/build106.sh` → binary `best106` (must include `-fopenmp`, see the script's own header comment) |
+| Encode / verify | `scripts/build_scripts/encode_adaptive.sh`, `scripts/build_scripts/verify_lossless.sh` |
 | Result data | `results/claim1/claim1_T1.1_T1.2.csv` — one row per (dataset, tool), archive size + compress/decompress time + peak RAM, all 19 datasets × 3 tools |
 | Result plot source | `results/plots/claim1/make_claim1_bar_vertical.py` → `claim1_margin_vertical.{pdf,png}` (the `.tif` copy is `Figures/Fig2.tif`) |
 | Docs — overview | `docs/claim1/overview_claim1.md` |
@@ -146,8 +146,8 @@ the completion index, 1,451/1,452 native).
 | `thirdparty/fse/` | BSD (Yann Collet) | FSE / Huffman entropy coding, another selectable stream codec |
 | `thirdparty/htscodecs/` | BSD 3-clause (Genome Research Ltd / James Bonfield) | `fqzcomp_qual.c` — the vendored quality-score codec wrapped by `include/quality_coder.h` |
 
-None of the three is modified from upstream. Both `scripts/core_test_scripts/build106.sh` and
-`scripts/core_test_scripts/build_decode.sh` compile the vendored C sources with `gcc` and the
+None of the three is modified from upstream. Both `scripts/build_scripts/build106.sh` and
+`scripts/build_scripts/build_decode.sh` compile the vendored C sources with `gcc` and the
 project's own C++ with `g++`, then link them together (see either script's
 header comment for why the two compilers cannot be merged into one
 invocation).
@@ -175,8 +175,8 @@ reproducible code+data+docs view, not the full development history.
 ## How to reproduce a number end to end
 
 1. Pick a claim above and its result CSV.
-2. Find the exact command that produced that CSV's row: `scripts/core_test_scripts/build106.sh`
-   to build, `scripts/core_test_scripts/encode_adaptive.sh` to encode, then the relevant mode
+2. Find the exact command that produced that CSV's row: `scripts/build_scripts/build106.sh`
+   to build, `scripts/build_scripts/encode_adaptive.sh` to encode, then the relevant mode
    of the built decoder (`call`, `export`, `coverage`, `query`, `index`) to
    produce the downstream number.
 3. Cross-check the row against the claim's own `docs/claimN/tXX_*.md` file,

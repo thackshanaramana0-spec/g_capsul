@@ -22,11 +22,11 @@ check-deps:
 ENC_SRC := stages/106_inprocess.cpp $(wildcard include/*.h)
 DEC_SRC := stages/capsule_decode.cpp $(wildcard include/*.h)
 
-$(BIN)/capsule_encode: $(ENC_SRC) scripts/core_test_scripts/build106.sh | $(BIN)
-	bash scripts/core_test_scripts/build106.sh $@
+$(BIN)/capsule_encode: $(ENC_SRC) scripts/build_scripts/build106.sh | $(BIN)
+	bash scripts/build_scripts/build106.sh $@
 
-$(BIN)/capsule_decode: $(DEC_SRC) scripts/core_test_scripts/build_decode.sh | $(BIN)
-	bash scripts/core_test_scripts/build_decode.sh $@
+$(BIN)/capsule_decode: $(DEC_SRC) scripts/build_scripts/build_decode.sh | $(BIN)
+	bash scripts/build_scripts/build_decode.sh $@
 
 $(BIN):
 	mkdir -p $(BIN)

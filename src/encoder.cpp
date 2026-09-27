@@ -533,7 +533,7 @@ int main(int argc,char** argv){
                 "success.\n"
                 "  Supported input: short-read FASTQ, any read length up to %u "
                 "bases, fixed or variable length, forward/reverse-complement "
-                "strands, ACGTN alphabet. See scripts/setup_scripts/check_input_scope.py for "
+                "strands, ACGTN alphabet. See scripts/benchmark_scripts/check_input_scope.py for "
                 "a standalone pre-flight report on any input file.\n",
                 toolong, tot, 100.0*toolong/tot, (unsigned)MAX_READ_LEN,
                 (unsigned)longest, longest_hdr.c_str(),

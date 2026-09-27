@@ -213,7 +213,7 @@ specifically.
 5. **Do not download full WGS BAMs for GIAB individuals.** Stream chr20
    only via `samtools view -b <S3 BAM> chr20` (§3) — a full WGS BAM per
    individual is hundreds of GB and none of it outside chr20 is used.
-6. **Do not build the encoder without `-fopenmp`.** `scripts/core_test_scripts/build106.sh`'s
+6. **Do not build the encoder without `-fopenmp`.** `scripts/build_scripts/build106.sh`'s
    own header comment documents this exact mistake: without the flag, the
    single `#pragma omp parallel for` in the largest stage is silently
    discarded and it runs serial — a real, previously-hit, -45%-wall-time

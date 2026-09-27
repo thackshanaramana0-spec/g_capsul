@@ -18,10 +18,10 @@ jobs:
           sudo apt-get install -y build-essential liblzma-dev bwa bcftools tabix samtools
 
       - name: Build encoder
-        run: bash scripts/core_test_scripts/build106.sh /tmp/best106
+        run: bash scripts/build_scripts/build106.sh /tmp/best106
 
       - name: Build decoder
-        run: bash scripts/core_test_scripts/build_decode.sh /tmp/capsule_decode
+        run: bash scripts/build_scripts/build_decode.sh /tmp/capsule_decode
 
       - name: Generate a small synthetic FASTQ for the lossless check
         run: |
@@ -36,7 +36,7 @@ jobs:
           PY
 
       - name: COMPACT — lossless round-trip (Claim 1)
-        run: BEST=/tmp/best106 bash scripts/core_test_scripts/verify_lossless.sh /tmp/ci_reads.fq /tmp/ci_verify
+        run: BEST=/tmp/best106 bash scripts/build_scripts/verify_lossless.sh /tmp/ci_reads.fq /tmp/ci_verify
 
       - name: FAITHFUL — caller regression test (Claim 2)
         run: bash scripts/claim2_scripts/test_claim2.sh /tmp/ci_claim2
@@ -45,7 +45,7 @@ jobs:
         run: bash scripts/claim3_scripts/test_claim3.sh /tmp/ci_claim3
 
   build-and-test-macos:
-    # Apple Silicon (arm64). Built via CMake, not scripts/core_test_scripts/build106.sh: that
+    # Apple Silicon (arm64). Built via CMake, not scripts/build_scripts/build106.sh: that
     # script hardcodes the literal `gcc`/`g++` binaries, which on macOS are
     # Apple Clang aliases that lack -fopenmp support. Real GCC from Homebrew
     # sidesteps that instead of fighting AppleClang + libomp.
@@ -79,7 +79,7 @@ jobs:
           PY
 
       - name: COMPACT — lossless round-trip (Claim 1)
-        run: BEST=/tmp/best106 bash scripts/core_test_scripts/verify_lossless.sh /tmp/ci_reads.fq /tmp/ci_verify
+        run: BEST=/tmp/best106 bash scripts/build_scripts/verify_lossless.sh /tmp/ci_reads.fq /tmp/ci_verify
 
       - name: FAITHFUL — caller regression test (Claim 2)
         run: |
@@ -98,7 +98,7 @@ jobs:
     # The single-command Docker workflow documented in the Dockerfile itself,
     # rebuilt and round-trip-verified on every push so it can't silently rot.
     # Caught a real bug this way once already: best106 run bare (without the
-    # DUMP_LIT/DUMP_PERM/DUMP_MM env vars scripts/core_test_scripts/encode_adaptive.sh always
+    # DUMP_LIT/DUMP_PERM/DUMP_MM env vars scripts/build_scripts/encode_adaptive.sh always
     # sets) skips the streams full reconstruction needs, with no warning --
     # fixed by baking those in as ENV defaults in the image, verified here.
     runs-on: ubuntu-24.04
@@ -133,7 +133,7 @@ jobs:
           docker run --rm -v /tmp/docker_ci:/data \
             g_capsul:ci capsule_decode /data/out.capsule /data/outdir /data/outdir/reads_out.fq
 
-      - name: Verify byte-identical (same comparison scripts/setup_scripts/benchmark_1_run.sh's losscmp uses)
+      - name: Verify byte-identical (same comparison scripts/benchmark_scripts/benchmark_1_run.sh's losscmp uses)
         run: |
           cd /tmp/docker_ci
           awk 'NR%4==1{n=substr($0,2)} NR%4==2{s=$0} NR%4==0{print n"\t"s"\t"$0}' reads.fq | sort > _a

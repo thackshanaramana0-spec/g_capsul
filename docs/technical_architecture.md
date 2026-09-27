@@ -93,7 +93,7 @@ per this project's standing rule that refuted ideas are recorded, not
 deleted.
 
 **Why the shipped encoder searches a 4-point candidate grid, not a wider
-one — measured, not assumed.** `scripts/core_test_scripts/encode_adaptive.sh` tries several
+one — measured, not assumed.** `scripts/build_scripts/encode_adaptive.sh` tries several
 `(MAXMAP, MINOV)` candidates per encode and keeps whichever produces the
 smallest archive. Verified against the raw measurement data
 (`docs/GRID_COST_MEASURED.txt`, `docs/GRID2_COST_MEASURED.txt`, 14 real
