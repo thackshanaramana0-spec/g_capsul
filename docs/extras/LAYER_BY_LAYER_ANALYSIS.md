@@ -1162,7 +1162,7 @@ per-position models** (`coders/PpmdCoder.cpp`, `FSECoder.cpp`,
 `PropsLibrary.cpp`). Measuring xz-vs-bzip2-vs-zstd and reporting "0.49%, not
 decisive" was measuring the wrong thing.
 
-**What was built.** `coders_pgrc.h` plus `thirdparty/{ppmd,fse}`:
+**What was built.** `coders_entropy.h` plus `thirdparty/{ppmd,fse}`:
 - **PPMd7** (LZMA SDK, public domain) at order 5 / 32 MB, matching their
   `getDefaultCoderProps(PPMD7_CODER, level, 5)` for mismatched symbols.
 - **FSE and Huff0** (Yann Collet, BSD).

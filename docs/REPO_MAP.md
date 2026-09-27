@@ -47,7 +47,7 @@ and Genozip, and losslessly against PgRC2 on the sequence stream alone.
 | Encoder | `src/encoder.cpp` |
 | Decoder | `src/decoder.cpp` |
 | Sequence coder | `include/seqpar_core.h` — the DNA context-mixing coder shared by encoder and decoder |
-| Stream selector / general coders | `include/coders_inproc.h` (selector, transforms), `include/coders_pgrc.h` (PPMd7 / FSE / range coder) |
+| Stream selector / general coders | `include/coders_inproc.h` (selector, transforms), `include/coders_entropy.h` (PPMd7 / FSE / range coder) |
 | Identifiers | `include/names_coder.h` |
 | Quality scores | `include/quality_coder.h` (wraps vendored `thirdparty/htscodecs/fqzcomp_qual.c`) |
 | Build | `scripts/core_test_scripts/build106.sh` → binary `best106` (must include `-fopenmp`, see the script's own header comment) |
@@ -142,7 +142,7 @@ the completion index, 1,451/1,452 native).
 
 | Package | License | Used for |
 |---|---|---|
-| `thirdparty/ppmd/` | Public domain (LZMA SDK) | PPMd7 entropy coding, one of the general-purpose stream codecs `coders_pgrc.h` selects between |
+| `thirdparty/ppmd/` | Public domain (LZMA SDK) | PPMd7 entropy coding, one of the general-purpose stream codecs `coders_entropy.h` selects between |
 | `thirdparty/fse/` | BSD (Yann Collet) | FSE / Huffman entropy coding, another selectable stream codec |
 | `thirdparty/htscodecs/` | BSD 3-clause (Genome Research Ltd / James Bonfield) | `fqzcomp_qual.c` — the vendored quality-score codec wrapped by `include/quality_coder.h` |
 

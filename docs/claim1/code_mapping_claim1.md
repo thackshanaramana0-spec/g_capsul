@@ -16,7 +16,7 @@ Keywords: code mapping, encoder.cpp, coders_inproc.h, seqpar_core.h,
 # Code-to-table mapping
 
 Line/stage numbers from `src/encoder.cpp` (4,961 lines),
-`include/coders_inproc.h` (931 lines), `include/coders_pgrc.h` (213 lines),
+`include/coders_inproc.h` (931 lines), `include/coders_entropy.h` (213 lines),
 `include/seqpar_core.h` (357 lines), as present in the repo this session.
 Traced by targeted grep/read, not a full line-by-line read of all 6,462
 combined lines — sufficient to ground the mechanism claims in
@@ -49,7 +49,7 @@ Comment: *"universal per-stream selector over the REAL coder set"* — this
 is the mechanism behind T1.1's size result: each stream (literal bases,
 match references, read order, mismatches, etc.) is coded by multiple
 candidate coders and the smallest result kept, rather than a fixed
-generic-compressor pass. `include/coders_pgrc.h` provides PPMd7/FSE/range
+generic-compressor pass. `include/coders_entropy.h` provides PPMd7/FSE/range
 coder implementations that are among the candidates this selector chooses
 from. `include/seqpar_core.h` is the shared DNA coder used identically by
 both the standalone binary and the in-process path (per its own module

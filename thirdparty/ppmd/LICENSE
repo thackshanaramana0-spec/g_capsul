@@ -10,9 +10,9 @@ From the source headers (Ppmd7.c, Ppmd7aDec.c, Ppmd7Dec.c, Ppmd7Enc.c):
 
 Vendored unmodified from the 7-Zip / LZMA SDK (https://www.7-zip.org/sdk.html)
 for use as one of this project's general-purpose stream coders
-(`include/coders_pgrc.h`), selected automatically per stream by
+(`include/coders_entropy.h`), selected automatically per stream by
 `best_encode` when it produces the smallest result — see
-`paper/ARCHITECTURE.md` §3.
+`docs/technical_architecture.md`.
 
 Added for consistency with `thirdparty/fse/LICENSE` and
 `thirdparty/htscodecs/LICENSE.md`, which document the same fact for this

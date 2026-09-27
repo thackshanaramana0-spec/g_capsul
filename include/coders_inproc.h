@@ -16,7 +16,7 @@
 #include <map>
 #include <thread>
 #include <atomic>
-#include "coders_pgrc.h"
+#include "coders_entropy.h"
 
 // ---------- xz (liblzma), equivalent to `xz -9 -c` ----------
 // Multi-threaded LZMA. PgRC2 passes a thread count to every LzmaCoderProps

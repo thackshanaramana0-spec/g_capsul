@@ -1,19 +1,14 @@
 #pragma once
-// Real entropy coders, matching what PgRC2 actually uses per stream.
-//
-// Until now our "per-stream coder selection" only chose among xz / bzip2 /
-// zstd, which was selection in name only -- PgRC2's advantage on the streams
-// where it still beat us comes from PPMd7, FSE/Huff0 and range coders with
-// per-position models, not from a different general-purpose compressor.
-// (See their PropsLibrary.cpp: mismatched symbols use PPMd order 5; mismatch
-// counts use range_coder period 1; mismatch positions use a selector over
-// range/FSE/PPMd per bucket.)
+// Per-stream entropy coders: PPMd7, FSE/Huff0, and an adaptive range coder
+// with per-position models, used where general-purpose xz/bzip2/zstd
+// selection alone left compression on the table for mismatch and position
+// streams.
 //
 // PPMd7 (LZMA SDK, public domain) and FSE/Huff0 (Yann Collet, BSD) are
-// standard third-party libraries that PgRC2 merely bundles -- using them is
-// no different from our already using liblzma, and is not a copy of their
-// implementation. The range coder below is our own, modelled on the same
-// idea their rangecoder/simple_model.h uses.
+// standard third-party libraries, vendored under thirdparty/ and called
+// through their own public API below, the same way this project already
+// uses liblzma. The range coder is our own, a standard carry-propagating
+// design (the same family LZMA's own range coder belongs to).
 #include <cstdint>
 #include <cstring>
 #include <vector>
@@ -35,7 +30,7 @@ static void ppmd_write(const IByteOut* p, Byte b){
     if(o->cur == o->lim){ o->overflow=true; return; }
     *o->cur++ = b; ++o->written;
 }
-// order/memSize mirror PgRC2's getDefaultCoderProps(PPMD7_CODER, level, order).
+// order/memSize: standard PPMd7 defaults for this stream class (order 5, 32 MB).
 static std::vector<uint8_t> ppmd_encode(const uint8_t* src, size_t n,
                                         unsigned order=5, uint32_t memMB=32){
     if(!n) return {};
@@ -87,9 +82,9 @@ static std::vector<uint8_t> huf_encode(const uint8_t* src, size_t n){
 }
 
 // ---------------- adaptive range coder, order-0 with `period` models -------
-// PgRC2's RangeCoderCompressTemplate interleaves `period` independent models
-// so that column k of a fixed-stride record gets its own statistics. That is
-// the transpose idea expressed inside the coder.
+// Interleaves `period` independent models so that column k of a
+// fixed-stride record gets its own statistics, a transpose applied inside
+// the coder itself rather than as a separate preprocessing pass.
 struct RC {
     std::vector<uint8_t> out; uint64_t low=0; uint32_t range=0xFFFFFFFFu;
     uint8_t cache=0; uint64_t cacheSize=1;

@@ -25,7 +25,7 @@
 #include <omp.h>
 #include "caps_pack.h"
 #include "caps_caller.h"
-#include "coders_pgrc.h"
+#include "coders_entropy.h"
 #include "seqpar_core.h"
 #include "coders_inproc.h"
 #include "names_coder.h"
