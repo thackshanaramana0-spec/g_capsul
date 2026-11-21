@@ -1,44 +1,46 @@
 #pragma once
-// Names / read-ID coder, shared by the encoder (106_inprocess.cpp) and the
-// archive decoder (capsule_decode.cpp) so the two cannot diverge -- the same
-// reason seqpar_core.h exists.
+// Names (read-ID) coder, shared by the encoder (src/encoder.cpp) and the archive
+// decoder (src/decoder.cpp) so the two cannot diverge, for the same reason
+// seqpar_core.h is shared. Namespace `nmc`.
 //
-// Algorithm: stage 86 (= stage 70's global frozen dictionary + stage 85's
-// bounded-memory streaming queue, merged). Namespaced `nmc` following this
-// project's existing per-coder convention (mmc, refc, pgc), each of which
-// carries its own RangeEnc/RangeDec.
+// Approach (SPRING's): split each FASTQ header into tokens and code each token
+// against the token at the SAME position in the previous header. A token is a run
+// of letters, a run of digits, a run of zeros, or one other character. The '@' is
+// not stored, since it is constant on every header line, and is re-added on output.
+// Token types (TokType), each with its own adaptive model per token position:
+//   ID_MATCH   identical to the previous header's token
+//   ID_DELTA   a number 1..255 above the previous one
+//   ID_ZDELTA  a signed difference within +-32,768, offered only for a field where,
+//              after at least 20 observations, 30% or more of the earlier
+//              differences were within +-2,048
+//   ID_DIGIT   any other number: looked up in that position's value dictionary,
+//              or coded as four bytes if the value is not in it
+//   ID_ZEROS, ID_ALPHA, ID_CHAR   a run of zeros, a run of letters, one character
+//   ID_SEQLEN  the number is this read's own length, which the archive already
+//              holds in read_lengths, so nothing is stored
+//   ID_END     end of header
+// A digit run is split once its value reaches 2^28, so every number fits 32 bits.
 //
-// FOUR THINGS THIS FIXES relative to stage 86, all of which a mechanical
-// copy of that file would have carried into the archive:
+// Two streaming passes over the FASTQ ID column, so the headers are never all
+// resident:
+//   pass 1 (dict_pass) measures, for each token position, whether a value
+//     dictionary is cheaper than coding the number's bytes (priced from the
+//     pass's own histograms), which positions hold identical text in every read,
+//     which always equal the read length, and whether line 3 of each record is
+//     '+' alone or '+' followed by the header.
+//   pass 2 codes blocks of BLOCK names (250,000 by default) on a thread pool, each
+//     block with fresh adaptive models, behind a bounded queue.
 //
-// 1. Stage 86 streams from a names.txt that someone extracted by hand. Here
-//    pass 1 and pass 2 both stream the ID column straight out of the FASTQ,
-//    so nothing accumulates. Holding the headers instead (the obvious
-//    MemStream route, matching every other stream in this pipeline) would be
-//    ~5 GB on T. cacao and would defeat the entire point of merging stage 85
-//    in -- the bounded queue would sit behind a fully-materialized input.
-//
-// 2. Stage 86's "dict_header~=25356 B" is `entries*4`, arithmetic, never
-//    serialized. Here the dictionary is really serialized, and returned RAW
-//    for the caller to run through best_encode() like every other stream --
-//    so its cost is real bytes in the archive, and it gets the coder
-//    selector instead of raw uint32s.
-//
-// 3. Stage 86 has NO block index: its round trip re-reads the original file
-//    to learn how many names are in each block. A decoder holding only the
-//    archive cannot do that. Block byte-lengths and name-counts are a real
-//    stream here and are really counted. This is the exact bug class that
-//    has already cost this project twice (mm_pos/mm_count omitted from
-//    totals; mem_triples' destination/length/rc dropped as "diagnostics
-//    only" leaving an archive that could not decode) -- a cost landing in a
-//    stream nobody measures.
-//
-// 4. Decode streams block-by-block to a FILE* rather than returning a
-//    vector<string> of every name, so the decoder keeps the same bounded
-//    memory property as the encoder.
-//
-// The '@' is not stored: it is structurally constant on every FASTQ header
-// line and is re-added on output. SPRING and Genozip both do the same.
+// Result (struct Encoded), which becomes three archive streams:
+//   body   names_body   the blocks' range-coded payloads, concatenated
+//   dict   names_dict   the token layout, the constant tokens and the value
+//                       dictionaries, serialized by serialize_dict
+//   index  names_index  per block, the payload byte length and the name count, as
+//                       varints, so a decoder holding only the archive can find
+//                       every block
+// dict and index are returned RAW so the caller codes them through best_encode
+// like every other stream. decode_to_file streams one block at a time, so the
+// decoder has the encoder's bounded-memory property.
 
 #include <cstdio>
 #include <cstdlib>
@@ -140,30 +142,14 @@ struct GlobalDict {
 };
 // Adaptive frequency model over the value dictionary.
 //
-// TWO REAL DEFECTS FIXED HERE, both only visible on high-cardinality fields
-// (the X/Y coordinates of raw Illumina headers), which is exactly where
-// Genozip beats us:
-//
-// 1. The rescale ceiling was a hardcoded 60000 while `total` STARTS at N (all
-//    frequencies initialised to 1). So any dictionary with more than ~60k
-//    symbols was already over the limit before coding its first symbol, and
-//    halved every frequency on every symbol thereafter -- the model could
-//    never accumulate a statistic, and the dictionary degenerated to a flat
-//    log2(N) code (~16.6 bits/value at N=98k) while still paying dictionary
-//    overhead. Between ~3.7k and 60k symbols it was impaired rather than
-//    dead. The range coder's ACTUAL constraint is tot <= 2^24 (it computes
-//    range/=tot after normalising range >= 2^24), so 60000 was needlessly
-//    conservative by two orders of magnitude. The ceiling now scales with the
-//    alphabet, giving every dictionary a real adaptation window.
-//
-// 2. encSym/decSym computed the cumulative frequency by LINEAR SCAN, O(N) per
-//    symbol. At N=98k over 500k names that is ~10^11 operations -- this is
-//    what looked like a hang on raw-Illumina headers (it was quadratic
-//    blow-up, not a deadlock), and in decSym the unbounded
-//    `while(lo+freq[sym]<=target)` walk could also run past the array.
-//    Replaced with a Fenwick tree (binary indexed tree): O(log N) prefix sum
-//    to encode, O(log N) binary-lifting search to decode. Standard,
-//    decades-proven for large-alphabet adaptive range coding.
+// Adaptive model over one token position's value dictionary, with cumulative
+// frequencies kept in a Fenwick tree so each symbol costs O(log N). The rescale
+// ceiling is max(60000, 8N), capped at 2^22, and scales with the alphabet because
+// the range coder only needs the total to stay at or below 2^24. Two defects of an
+// earlier version are why: a fixed 60000 ceiling made any dictionary of more than
+// ~60k symbols halve its frequencies on every symbol, so it never learned and
+// degraded to a flat log2(N) code, and a linear-scan cumulative frequency made raw
+// Illumina headers (high-cardinality X/Y coordinates) quadratic.
 struct LocalDictFreq {
     std::vector<uint32_t> freq;   // per-symbol frequency
     std::vector<uint32_t> bit;    // Fenwick tree, 1-based
@@ -211,6 +197,7 @@ struct LocalDictFreq {
         return sym;
     }
 };
+// All adaptive models for one block: one set per token position (up to MAXTOK).
 struct IdModels {
     std::vector<Model> token_type, alpha_len, alpha_value, chars, zero_run, delta;
     std::vector<Model> integer;
@@ -226,6 +213,8 @@ struct IdModels {
 };
 
 // ---- varint helpers ---------------------------------------------------------
+// Unsigned LEB128: seven bits per byte, low bits first, high bit set on every
+// byte but the last. pv appends one, gv reads one and advances the pointer.
 static inline void pv(std::vector<uint8_t>& o, uint64_t v){
     while(v>=0x80){ o.push_back((uint8_t)(v|0x80)); v>>=7; }
     o.push_back((uint8_t)v);
@@ -271,6 +260,10 @@ struct Layout {
     //   supported yet -- an archive claiming losslessness must not see this).
     // Same admission rule as every other elision: verified on EVERY read in
     // pass 1, never inferred from the first one.
+    // The byte travels in the names dictionary stream. capsule_decode does not
+    // read it today: it writes names, reads and quality as separate files and does
+    // not reassemble the 4-line record, so a caller that does must restore line 3
+    // from it. A file in mode 2 has a line 3 the archive does not reproduce.
     uint8_t line3_mode=2;
     bool active() const { return ntok>0 && !isconst.empty(); }
 };
@@ -486,6 +479,14 @@ static void dict_pass(const char* fq_path, std::array<GlobalDict,MAXTOK>& gdict,
 }
 
 // ---- per-name encode / decode ----------------------------------------------
+// compress_id codes one header (without its '@') as a sequence of tokens against
+// the previous header, then ID_END. prev_id and prev_tok_ptr carry the previous
+// header and, for each token position, where that token started in it, so the
+// caller must pass the same two objects for every header of a block and start
+// them empty at the start of each block. lay, when set, lets constant and
+// read-length token positions cost nothing. seqlen is this read's length (0 if
+// unknown, which disables ID_SEQLEN). decompress_id is its exact inverse and
+// needs the same lay and the same seqlen for each header.
 static void compress_id(RangeEnc& enc, IdModels& m, std::array<GlobalDict,MAXTOK>& gdict,
                         std::array<LocalDictFreq*,MAXTOK>& ldict, const char* id,
                         std::string& prev_id, std::array<uint32_t,MAXTOK>& prev_tok_ptr,
@@ -706,7 +707,10 @@ static std::string decompress_id(RangeDec& dec, IdModels& m, std::array<GlobalDi
     return id;
 }
 
-// ---- bounded queue (stage 85's, with its in-flight accounting fix) ---------
+// ---- bounded queue ---------------------------------------------------------
+// push() blocks while `cap` blocks are in flight. A slot is freed by release(),
+// which a worker calls when it has finished coding a block, not when it pops it,
+// so memory is bounded by `cap` blocks in total, queued or being coded.
 struct Chunk { size_t block_idx=0; std::vector<std::string> lines;
                std::vector<uint32_t> slen; };   // seq length per read (for ID_SEQLEN)
 template<typename T>

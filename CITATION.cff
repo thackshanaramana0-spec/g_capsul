@@ -24,4 +24,4 @@ abstract: >-
   57/57 archives verified lossless. Het-SNV calling from the archive alone
   reaches mean F1 0.876 across four GIAB individuals. Reference-free locus
   retrieval recovers both allelic read sets at 1,452 of 1,452 heterozygous
-  sites across four individuals and two loci.
+  sites across four individuals at one chr20 locus.

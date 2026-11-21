@@ -29,7 +29,7 @@ comparison, not the field-by-field technical comparison that surfaces it.
 
 ## Claim 1's actual novel insight: capability, not just ratio
 
-**The headline fact, verified against `docs/SOTA_COMPARISON.md`**: PgRC2 —
+**The headline fact, verified against `docs/extras/SOTA_COMPARISON.md`**: PgRC2 —
 the only architecturally comparable tool (also pseudogenome-based) — **fails
 outright on 6 of the 14 originally-locked datasets** when reads are
 variable-length, either refusing (`"Unsupported variable length reads"` —
@@ -50,7 +50,7 @@ not buried as an implementation detail below the ratio numbers.**
 
 ## The mechanism — why variable length is hard, and how it is handled as a first-class case, not a patch
 
-Verified against `paper/METHODS.md` and `docs/VARIABLE_LENGTH_DESIGN.md`:
+Verified against the methods draft and the variable-length design note:
 
 1. **Prefix-containment removal generalizes exact deduplication.** At fixed
    read length, a duplicate is trivially detected (identical string, hash
@@ -69,7 +69,7 @@ Verified against `paper/METHODS.md` and `docs/VARIABLE_LENGTH_DESIGN.md`:
 
 **Why this was hard to get right — the 4 bugs, already documented in this
 project's bug history, now connected to their actual trigger**: per
-`docs/FAILURES_AND_REFUTED_IDEAS.md` Part A (also cited in `BTR_NOTES.md` §6.3
+the failures and refuted-ideas record Part A (also cited in the development notes §6.3
 and `code_mapping_claim1.md`), at least two of the four silent data-loss
 bugs found in this project's pre-session history were **specifically
 triggered by variable-length input**: the mismatch-position byte clamp
@@ -84,7 +84,7 @@ in the bug-history section below.**
 
 ## The full stream-by-stream technical comparison against PgRC2 — verified, not summarized from a single aggregate number
 
-Source: `docs/SOTA_COMPARISON.md` Table 1, read in full this session (its
+Source: `docs/extras/SOTA_COMPARISON.md` Table 1, read in full this session (its
 own reasoning, not its superseded headline numbers, per its own
 superseded-banner rule). Both tools solve the same core problem
 (pseudogenome-based read compression) with recognizably similar internal
@@ -131,7 +131,7 @@ genuinely free.
 
 ## What predicts the compression margin, and a self-correction about it
 
-Verified against `docs/WHAT_IS_NEXT.md`. Across the 7-dataset PgRC2
+Verified against the size-work roadmap. Across the 7-dataset PgRC2
 comparison, the fraction of a dataset's pseudogenome that ends up in the
 **second region** (the append-and-reassemble pool for reads that failed
 both chaining and pigeonhole mapping) correlates with margin at **+0.607**;
@@ -140,7 +140,7 @@ salinarum (70.5% second-region share) wins by +8.58%; S. acidocaldarius
 (8.9% share, 51.3% mapped — the extreme on both axes) is the one loss,
 −0.83%.
 
-**This inverts an earlier, since-corrected thesis.** `docs/DO_WE_NEED_THEIR_3WAY.md`
+**This inverts an earlier, since-corrected thesis.** The PgRC2 three-way-split note
 had argued the *opposite* — that an oversized second region was itself the
 problem, estimating the "span penalty" at ~87 KB on S. acidocaldarius,
 "essentially its entire loss." Measured after later coder work brought
@@ -158,7 +158,7 @@ handles the data shape well; theirs simply handles it 0.83% better.
 
 ## Historical dataset gap, and its resolution
 
-`docs/CLAIM1_FINAL_VERDICT.md`'s body (predating the 2026-09-10 sweep)
+The Claim 1 final-verdict note's body (predating the 2026-09-10 sweep)
 records the SPRING/Genozip comparison as **14/15**, not 15/15 — Utricularia
 gibba (SRR10676752) was on disk but not yet run, named explicitly as an
 open gap. **Resolved**: this session confirmed SRR10676752 present as one
@@ -172,7 +172,7 @@ incomplete — `refc::encode` stored a reference's source but not its
 destination gap/length/RC flag, found only because `verify_lossless.sh`'s
 own limitation was itself questioned; margin corrected from a
 previously-claimed +4.65% to the real +1.90%. (2) Four further silent
-data-loss bugs (`BTR_NOTES.md` §6.3, `docs/FAILURES_AND_REFUTED_IDEAS.md` Part
+data-loss bugs (the development notes §6.3, the failures and refuted-ideas record Part
 A) — two of them specifically triggered by variable-length input, as
 detailed above. **All five were found by actually decoding archives and
 diffing against the original file, never by trusting a passing size
@@ -192,7 +192,7 @@ and `MAXMAP` and finding both already at interior optima on that dataset.
 Speed/RAM: **~1.7x slower, ~2.5x heavier at worst**.
 
 **Precisely why S. acidocaldarius still loses, verified against
-`docs/PGRC2_STREAM_COMPARISON.md`** (full per-stream instrumentation of
+the PgRC2 stream-comparison note** (full per-stream instrumentation of
 PgRC2's own real archive on this dataset, accounting for 99.9% of its
 bytes): the deficit is not spread evenly. Mismatch symbols are a **win**
 (124,280 B vs PgRC2's 208,234 — 40% smaller, the largest single margin in
@@ -211,7 +211,7 @@ architectural difference in what gets coded, not a coder-quality gap on
 either side.
 
 **What "sequence-only" precisely means, verified against
-`docs/LOCKED_SEQORDER_SCOPE.md`**: confirmed directly from PgRC2's own
+the locked-scope note**: confirmed directly from PgRC2's own
 source (its `-q` flag only uses quality as an internal read-division
 heuristic; there is no quality- or header-compression code path anywhere
 in its encoder), so its one archive-size number is genuinely the complete
@@ -225,7 +225,7 @@ order/permutation, (3) MEM self-match references, (4) positions + strand,
 N-containing reads — which, at the time this scope was locked, had been
 **silently dropped with no storage anywhere** by every earlier stage in
 the project's history, a real undisclosed data-loss bug distinct from the
-four cataloged in `BTR_NOTES.md` §6.3. All six are required for a decoder to
+four cataloged in the development notes §6.3. All six are required for a decoder to
 reconstruct every read's sequence and original file position; any subset
 is an incomplete, misleadingly favorable number.
 

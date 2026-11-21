@@ -6,11 +6,11 @@
 # individuals' real reads are concatenated into one 4-copy sample; the truth
 # is the union of their real GIAB v4.2.1 calls. Nothing simulated -- every
 # read and every truth allele is real data from a real person. See
-# docs/CLAIM2_TABLES_AND_INDEL_SCAN.md sec T5.3 for the full writeup.
+# docs/claim2/t25_tetraploid_claim2.md for the full writeup.
 #
-# This replays, as a single script, the commands that were run by hand in
-# /root/tetraploid_bench/ earlier this project (docs/HET_INDEL_FRESH_SCAN.md,
-# results/claim2/t5_3_tetraploid.csv) -- that CSV's numbers should reproduce
+# This replays, as a single script, the commands that were first run by hand
+# (the numbers are in results/claim2/t5_3_tetraploid.csv; the method is in
+# docs/claim2/t25_tetraploid_claim2.md) -- that CSV's numbers should reproduce
 # from this script within measurement noise.
 #
 #   usage: run_tetraploid_bench_capsule.sh <capsule_exe> <scripts_dir> <ref.fa> \

@@ -1,12 +1,33 @@
-// CAPSULE decoder -- reads the archive back.
+// CAPSULE decoder: reads a G_CAPSUL archive back and serves the operations the
+// archive makes possible.
 //
-// Until now losslessness was verified by decoding the RAW intermediate streams
-// dumped alongside the archive, which exercises the whole algorithm (assembly,
-// mapping, mismatches, order) but never the entropy-coding layer. Every coder
-// we use is standard and invertible, so this was a completeness gap rather than
-// a suspected bug -- but a compressor whose archive nothing reads back is not a
-// format. This closes it: archive in, raw streams out, byte-for-byte identical
-// to what the encoder held in memory.
+// "Claim 1/2/3" in comments below are the three claims of the paper: COMPACT
+// (the archive is smaller than SPRING and Genozip and lossless), FAITHFUL
+// (variants can be called from the archive alone) and ADDRESSABLE (export,
+// coverage, query and locus retrieval without a second assembly).
+// docs/REPO_MAP.md maps each claim to its code and result files.
+//
+// Modes (first argument, dispatched in main() at the end of this file):
+//   <in.capsule> <outdir> [reads.out]  full decode. Rebuilds the pseudogenome, writes every
+//                                      raw stream to <outdir>, and with reads.out the reads in
+//                                      their original order
+//   export   <in> <out.fa>             the pseudogenome as FASTA
+//   coverage <in> <out.tsv>            per-base depth from the stored placements
+//   query    <in> <out.fa> <arg>       reads overlapping a pseudogenome range START-END, or
+//                                      reads located by a DNA sequence (comma-separated list allowed)
+//   index    <in> <out.qidx>           write the optional post-processing index files (see SIDECAR)
+//   call     <in> <out.vcf> [workdir]  variant calls from the archive alone
+//
+// Where to look: the container layout is documented at read_capsule(), the
+// per-stream codec framing at capsule_decode_stream(), the optional index files
+// at the SIDECAR block above the `index` mode, and the stream-by-stream content
+// of the archive above the Archive writer in src/encoder.cpp.
+//
+// Why a decoder that reads the ARCHIVE is part of the program at all: an earlier
+// check decoded the RAW intermediate streams the encoder dumps beside the
+// archive. That exercises assembly, mapping, mismatches and read order but never
+// the entropy-coding layer, so a coder bug would have gone unseen. Verification
+// must go archive in, reads out, compared byte for byte with the input.
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
@@ -30,6 +51,8 @@
 #include "coders_inproc.h"
 #include "names_coder.h"
 #include "quality_coder.h"
+#include "caps_fmi.h"
+#include <unordered_map>
 
 // ---- inverse of xz_compress / xz_compress_lzma (both write .xz containers) --
 static std::vector<uint8_t> xz_decompress(const uint8_t* d, size_t n, size_t hint){
@@ -56,8 +79,22 @@ static std::vector<uint8_t> u32_unplane(const std::vector<uint8_t>& bp){
 }
 
 // ---- inverse of best_encode / const_or_encode -------------------------------
-// Layout written by the encoder: [method:1][raw_len:8][payload]
-// or, for a constant stream: [0xC0][count:8][value bytes]
+// Every stream is framed as [method:1][raw_len:8][payload], or, for a constant
+// stream, [0xC0][count:8][one value of `width` bytes]. The method byte records
+// which candidate coder produced the smallest output for that stream (the
+// encoder tries them all, see best_encode in coders_inproc.h):
+//   0  xz (liblzma, preset 9)
+//   1  LZMA with lc=2 lp=2 pb=2
+//   2  PPMd7, order 5, 32 MB model
+//   3  FSE (finite state entropy)
+//   4  adaptive range coder, period 1
+//   5  uint32 stream split into 4 byte planes, then xz        (stream length multiple of 4)
+//   6  byte planes with a raw-plane mask: [mask:1], and if mask != 0 also
+//      [coded_len:4][xz of the non-raw planes][raw planes in order]
+//   7  chunked: [n_chunks:4][chunk byte lengths:4 each][each chunk framed as above],
+//      used to code large streams on several threads
+// raw_len is stored uniformly because FSE, PPMd and the range coder cannot
+// recover the decoded length from their own output.
 std::vector<uint8_t> capsule_decode_stream(const std::vector<uint8_t>& in, size_t width){
     if(in.empty()) return {};
     const uint8_t m = in[0];
@@ -122,6 +159,18 @@ std::vector<uint8_t> capsule_decode_stream(const std::vector<uint8_t>& in, size_
 }
 
 // ---- container walk ---------------------------------------------------------
+// Archive layout, written by the Archive struct in src/encoder.cpp. Integers are
+// stored in host byte order (little-endian on every supported platform).
+//   "CAPSULE\0"   8 B   magic
+//   version      u16   must be 2
+//   pg_len       u64   length of the pseudogenome in bases
+//   main_end     u64   boundary between the pseudogenome's main region and its second region
+//   minmem       u32   minimum MEM length; mem_len stores (match length - minmem) and destination
+//                      gaps are measured from the END of the previous match, so neither is
+//                      recoverable without it
+//   n_streams    u16
+//   then n_streams times:  name_len u8, name bytes, coded_len u64, coded bytes
+// Streams are located by NAME, so adding one is additive and not a format break.
 struct Stream { std::string name; std::vector<uint8_t> coded; };
 static bool read_capsule(const char* path, uint64_t& pg_len, uint64_t& main_end,
                          uint32_t& minmem, std::vector<Stream>& out){
@@ -259,9 +308,15 @@ static void find_occurrences(const std::string& hay, const std::string& pat,
     // reach it. Clamped to [8,16] so neither end runs away.
     //
     // On a 2.15 Mb pseudogenome this yields 9, which lets a 40 bp probe reach
-    // k=3 and take exact-match recall from 0.9998 to 1.0000. On a 3 Gb one it
-    // yields 14, which is the correct answer there -- short seeds on a
-    // genome-scale haystack are how a candidate set explodes.
+    // k=3 and take exact-match recall from 0.9998 to 1.0000 when the pg search was
+    // the only mechanism. On a 3 Gb one it yields 14, which is the correct answer
+    // there -- short seeds on a genome-scale haystack are how a candidate set
+    // explodes.
+    //
+    // Exact-match completeness no longer rests on this tolerance: with the
+    // FM-index (.fmi) every read containing the probe is returned at k=0. The
+    // tolerance still governs locus retrieval, where a probe has to reach a read's
+    // pseudogenome placement despite variants close to it.
     const size_t MINSEED = [&]()->size_t{
         if(const char* e = getenv("CAPS_QUERY_MINSEED")){
             int v = atoi(e);
@@ -311,6 +366,8 @@ static void find_occurrences(const std::string& hay, const std::string& pat,
 //   export   : literal + mem_triples  -> the pseudogenome         (no assembly)
 //   coverage : pos_abs + read_lengths -> per-position depth       (no alignment)
 //   query    : pos_abs + pg           -> reads overlapping a range (no full decode)
+//   index    : full pseudogenome rebuild, once, written to the optional SIDECAR
+//              files; with them present `query` skips the assembly layer entirely
 // Each stops as soon as the streams it needs are decoded, so none pays for the
 // full reconstruction.
 // IN-MEMORY HANDOFF (out_flat/out_rowoff). The decoder already materialises
@@ -353,6 +410,43 @@ static std::vector<uint8_t> caps_join_positions(const std::vector<uint8_t>& main
     return out;
 }
 
+// read_lengths is stored per ORIGINAL read, but every other per-read array the
+// sidecar holds (placements, deviations, strand, N) is per UNIQUE read, and
+// `query` indexes them all with the same id. With duplicates or contained
+// reads (several originals on one unique) the two numberings diverge, so the
+// length looked up for unique u was the length of original read u -- a
+// different read -- and query emitted wrongly sized records. This returns the
+// lengths per UNIQUE read, the longest original of each group (the unique
+// read is the longest of its group, as the read reconstruction also assumes).
+// Without duplicates it returns the input unchanged, so such sidecars keep
+// their exact bytes.
+static std::vector<uint8_t> caps_unique_lengths(const std::vector<uint8_t>& lenb,
+                                                const std::vector<uint8_t>& o2f,
+                                                const std::vector<uint8_t>& o2v,
+                                                size_t NU)
+{
+    if(o2f.empty() && o2v.empty()) return lenb;
+    const size_t NO = lenb.size()/2;
+    std::vector<uint32_t> o2u; o2u.reserve(NO);
+    size_t k = 0;
+    for(size_t i=0;i<NO;++i){
+        const bool nz = (i>>3)<o2f.size() ? ((o2f[i>>3]>>(7-(i&7)))&1) : 0;
+        int32_t d = 0; if(nz && k+4<=o2v.size()){ memcpy(&d,&o2v[k],4); k+=4; }
+        o2u.push_back((uint32_t)d);
+    }
+    uint32_t exp = 0;
+    for(auto& v : o2u){ const int32_t d=(int32_t)v; if(d==0){ v=exp; ++exp; } else v=exp-(uint32_t)d; }
+    if((size_t)exp == NO) return lenb;                 // every read is its own unique
+    std::vector<uint16_t> rl(NU, 0);
+    for(size_t o=0;o<NO;++o){
+        uint16_t l; memcpy(&l,&lenb[o*2],2);
+        if(o2u[o] < NU && l > rl[o2u[o]]) rl[o2u[o]] = l;
+    }
+    std::vector<uint8_t> out(NU*2);
+    memcpy(out.data(), rl.data(), NU*2);
+    return out;
+}
+
 int capsule_decode_all(const char* arcpath, const std::string& outdir,
                        const std::string& outreads = std::string(),
                        const std::string& mode = std::string(),
@@ -365,8 +459,10 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
                        std::vector<std::string>* out_qtext = nullptr,
                        std::vector<std::string>* out_contigs = nullptr){
     auto _dt0 = std::chrono::steady_clock::now();
-    // [DEC-RSS] temporary: the run's PEAK is 13.2 GB while the caller's own
-    // RSS is 4.8 GB, so ~8.4 GB is transient in here. Find out where.
+    // [DEC-RSS] resident and peak memory (VmRSS, VmHWM) printed to stderr at each
+    // stage. Added because a run's kernel-tracked peak (13.2 GB) was far above
+    // the caller's own steady RSS (4.8 GB), i.e. ~8.4 GB was transient inside the
+    // decoder, and the stage that owned it was not visible without these probes.
     auto _rssmb = []() -> long { FILE* f=fopen("/proc/self/status","r"); if(!f) return -1;
         char l[256]; long kb=-1; while(fgets(l,sizeof l,f)) if(!strncmp(l,"VmRSS:",6)){sscanf(l+6,"%ld",&kb);break;}
         fclose(f); return kb/1024; };
@@ -431,8 +527,8 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
     // prose.
     if(mode=="coverage"){
         // INDEXING: pos_abs is per-UNIQUE read, read_lengths is per-ORIGINAL
-        // read (see 106_inprocess.cpp's "read_lengths is indexed by ORIGINAL
-        // read, always" invariant). Indexing both with one counter silently
+        // read (the encoder, src/encoder.cpp, indexes read_lengths by ORIGINAL
+        // read, always). Indexing both with one counter silently
         // undercounts every DUPLICATE read, since duplicates share a unique's
         // placement but are separate reads for coverage purposes.
         // Measured before this fix on E. coli: 185,346,900 covered bases
@@ -641,20 +737,66 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
                         if(!d){ fprintf(stderr,"query needs START-END or a DNA sequence\n"); return 2; }
                         rr.push_back({strtoull(modearg.c_str(),nullptr,10), strtoull(d+1,nullptr,10)});
                     }
-                    // ── EXACT-MATCH COMPLETION (.xmi) ──────────────────────
+                    // ── EXACT-MATCH COMPLETION ──────────────────────────────
                     // Position retrieval answers "which reads COVER this
                     // locus". CAPS_QUERY_CONTAIN=1 additionally guarantees
                     // "which reads CONTAIN this probe", which the pg search
                     // alone cannot: a read whose own deviations spell the probe
-                    // is not a pg substring. Only deviation-carrying reads can
-                    // be missed (a read with none is emitted as pure pg), so
-                    // the .xmi indexes exactly those.
+                    // is not a pg substring. Only reads that differ from the
+                    // pg (deviations, N) can be missed, since any other read is
+                    // emitted as a pure pg slice. An index over exactly those
+                    // reads completes the answer. Two interchangeable ones
+                    // exist: the FM-index (.fmi, below) and the older k-mer
+                    // index (.xmi, further down).
                     //
                     // The result is the UNION of both questions, so one call
                     // answers both completely rather than making the caller
                     // choose.
                     std::set<uint32_t> extra;
-                    if(sq && getenv("CAPS_QUERY_CONTAIN")){
+                    capsfmi::FMIndex fm; std::string ferr;      // loaded below when .fmi is used
+                    std::set<uint32_t> verb;                    // verbatim hits (FM-index identities)
+                    // ── EXACT-MATCH COMPLETION BY FM-INDEX (.fmi) ──────────
+                    // The pg search above already reached every read that is a
+                    // pure pg substring. The .fmi holds every other read, so
+                    // one backward search per probe and strand completes the
+                    // answer exactly, for probes of any length, including ones
+                    // containing N. Used whenever <sidecar>.fmi exists.
+                    // CAPS_QUERY_INDEX=xmi selects the older k-mer completion
+                    // index instead, CAPS_QUERY_INDEX=fmi makes a missing .fmi
+                    // an error rather than a fallback.
+                    const char* csel = getenv("CAPS_QUERY_INDEX");
+                    const bool want_contain = sq && getenv("CAPS_QUERY_CONTAIN");
+                    bool contain_done = false;
+                    if(want_contain && !(csel && !strcmp(csel,"xmi"))){
+                        const std::string fp = qidx + ".fmi";
+                        struct stat fst;
+                        if(stat(fp.c_str(),&fst)==0){
+                            if(!fm.load(fp,ferr)){ fprintf(stderr,"[fmi] %s\n",ferr.c_str()); return 1; }
+                            size_t nhit=0;
+                            for(const std::string& raw : split_probes(modearg)){
+                                std::string p=raw; for(auto&c:p) c=(char)toupper((unsigned char)c);
+                                std::string rp(p.rbegin(),p.rend());
+                                for(auto&c:rp) c=(c=='A'?'T':c=='T'?'A':c=='C'?'G':c=='G'?'C':c);
+                                for(const std::string* pp : { &p, &rp }){
+                                    if(pp==&rp && rp==p) break;
+                                    std::vector<uint32_t> ids;
+                                    if(!fm.find(*pp,ids,ferr)){ fprintf(stderr,"[fmi] %s\n",ferr.c_str()); return 1; }
+                                    nhit+=ids.size();
+                                    for(uint32_t id : ids){
+                                        if(id & capsfmi::FMIndex::VERBATIM_FLAG) verb.insert(id);
+                                        else extra.insert(id);
+                                    }
+                                }
+                            }
+                            fprintf(stderr,"[fmi] %llu indexed reads: %zu hits -> %zu reads containing the probe\n",
+                                    (unsigned long long)fm.num_reads(), nhit, extra.size()+verb.size());
+                            contain_done = true;
+                        } else if(csel && !strcmp(csel,"fmi")){
+                            fprintf(stderr,"[fmi] %s absent -- rebuild the index with CAPS_FMI=1\n",fp.c_str());
+                            return 1;
+                        }
+                    }
+                    if(want_contain && !contain_done){
                         const std::string xp = qidx + ".xmi";
                         FILE* xf=fopen(xp.c_str(),"rb");
                         if(!xf){
@@ -790,6 +932,14 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
                           } }
                         obuf.push_back('\n');
                         fwrite(obuf.data(),1,obuf.size(),of); ++n;
+                    }
+                    // reads stored verbatim in the .fmi: emitted as the read itself
+                    for(uint32_t id : verb){
+                        const std::string& vs=fm.verbatim_seq(id);
+                        char hdr[96];
+                        int hl=snprintf(hdr,sizeof hdr,">v%u pos=%llu len=%zu\n",id&~capsfmi::FMIndex::VERBATIM_FLAG,
+                                        (unsigned long long)fm.verbatim_place(id),vs.size());
+                        fwrite(hdr,1,hl,of); fwrite(vs.data(),1,vs.size(),of); fputc('\n',of); ++n;
                     }
                     fclose(of);
                     QLAP("emit answer from sidecar");
@@ -958,17 +1108,55 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
     // ── CLAIM 3 / export ────────────────────────────────────────────────────
     // The pseudogenome IS the assembly; it was built at compress time. Emit it
     // as FASTA and stop -- no read reconstruction, no assembler.
-    // ── build the sidecar index: the pseudogenome, 2-bit packed ────────────
-    // One full rebuild, written once, so every later query skips the assembly
-    // layer. Costs an optional file (~9% of the archive here); costs the
-    // ARCHIVE nothing, which is the point.
+    // ── SIDECAR: the optional post-processing index files ──────────────────
+    // `index` decodes the archive once and writes the result to files next to it,
+    // so every later query skips the assembly layer. The archive itself is never
+    // changed, and its size is not affected, which is the point. The files are
+    // built from information the archive already retains:
+    //
+    //   <out>          the decoded sidecar, layout below
+    //   <out>.sites    allele-resolved pileup of the deviations (CAPS_PILEUP=1)
+    //   <out>.fmi      FM-index over the reads the pseudogenome cannot represent (CAPS_FMI=1)
+    //   <out>.xmi      older k-mer index over the same reads (CAPS_XMI=1), kept for comparison
+    //
+    // Size: the decoded sidecar holds the pseudogenome at 2 bits per base plus 6
+    // bytes per unique read (placement and length), plus, when CAPS_PILEUP is set,
+    // 5 bytes per stored deviation and 8 per deviating read. On the four GIAB
+    // chr20 windows it was 3.0 to 3.4 times the size of the archive it was built
+    // from.
+    //
+    // Decoded sidecar layout (host byte order). Sections after the placements are
+    // present only when the index was built with CAPS_PILEUP=1 or CAPS_FMI=1, and
+    // are read in this order:
+    //   magic 0x5158494451494451   u64
+    //   plen                       u64   pseudogenome length
+    //   main_end                   u64
+    //   packed pseudogenome        (plen+3)/4 bytes; base i is in byte i>>2 at bits 2*(3-(i&3)),
+    //                              A=0 C=1 G=2 T=3, anything else stored as A
+    //   np, nl                     u64 x2
+    //   placements                 np x u32   pseudogenome start of each UNIQUE read
+    //   lengths                    nl x u16   length of each UNIQUE read (the stored read_lengths
+    //                                         stream is per original read; caps_unique_lengths()
+    //                                         maps it to unique reads)
+    //   deviations                 nid u64, nmm u64, then nid x (unique id u32, count u32),
+    //                              nmm x offset u32, nmm x observed base u8
+    //   strand bitmap              nsb u64, then nsb bytes; unique read u is bit 7-(u&7) of byte u>>3,
+    //                              set for a reverse-strand read
+    //   N positions                nn u64, no u64, then nn x (unique id u32, count u32), no x offset u32
+    // A deviation or N offset j is relative to the read as sequenced. In the
+    // pseudogenome-oriented record `query` emits, it sits at j for a forward read
+    // and at length-1-j for a reverse-strand read.
     // CAPS_PILEUP=1 makes `index` continue past the pg dump and also emit the
     // VARIANT-SITE TABLE (see below). Off by default so `index` stays fast.
     // `index` returns early with pg+placements only. With CAPS_PILEUP=1 it
     // continues past the mismatch decode so the sidecar can also carry each
     // read's own deviations -- which is what makes `query` emit the READ
     // rather than the consensus beneath it.
-    const bool WANT_PILEUP = (mode=="index") && getenv("CAPS_PILEUP")!=nullptr;
+    // CAPS_FMI=1 implies the deviations: the FM-index holds each deviating
+    // read as `query` emits it, and `query` can only emit the read (rather
+    // than the consensus under it) from a sidecar that carries them.
+    const bool WANT_PILEUP = (mode=="index") &&
+                             (getenv("CAPS_PILEUP")!=nullptr || getenv("CAPS_FMI")!=nullptr);
     if(mode=="index"){
         FILE* f=fopen(outdir.c_str(),"wb");
         if(!f){ fprintf(stderr,"cannot write %s\n",outdir.c_str()); return 1; }
@@ -988,6 +1176,7 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
           if(has("pos_sec")||has("pos_region"))
               pb = caps_join_positions(pb, has("pos_sec")?dec("pos_sec"):std::vector<uint8_t>(),
                                        has("pos_region")?dec("pos_region"):std::vector<uint8_t>(), MAINEND);
+          lb = caps_unique_lengths(lb, dec("orig2uid_flags"), dec("orig2uid_vals"), pb.size()/4);
           const uint64_t np=pb.size()/4, nl=lb.size()/2;
           fwrite(&np,8,1,f); fwrite(&nl,8,1,f);
           fwrite(pb.data(),1,np*4,f); fwrite(lb.data(),1,nl*2,f);
@@ -1021,7 +1210,7 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
         // ~451k real ones.
         //
         // contig_spans is written by the encoder under CAPS_CALL (see
-        // 106_inprocess.cpp): the chain boundaries, which the decoder cannot
+        // src/encoder.cpp): the chain boundaries, which the decoder cannot
         // recompute because it rebuilds pg faithfully but never sees where one
         // chain ended and the next began.
         if (has("contig_spans") && getenv("CAPSULE_EXPORT_CONTIGS")) {
@@ -1438,7 +1627,7 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
           // for an RC read mirrors the substitutions onto the wrong bases, so
           // what is emitted is not the read. It stays invisible until a probe
           // window happens to cover an affected base.
-          // One bit per read: 14.7 kB against a 1.24 MB sidecar.
+          // One bit per read, so it costs NU/8 bytes however many reads deviate.
           { FILE* sf=fopen(outdir.c_str(),"ab");
             if(sf){
                 std::vector<uint8_t> sb((NU+7)/8, 0);
@@ -1504,18 +1693,18 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
             const uint32_t a0=vpos_[u];
             if(a0==UINT32_MAX) continue;
             size_t off=vmoff[u]; uint32_t prevj=0;
-            // KNOWN INCONSISTENCY, DELIBERATELY NOT FIXED HERE (2026-09-19).
+            // KNOWN INCONSISTENCY, DELIBERATELY NOT FIXED HERE.
             // This tally uses the raw offset j, while the `query` emit path and
-            // the .xmi verifier both strand-correct it (q+j forward, q+RL-1-j
-            // reverse-complement). So every RC read contributes its deviations
-            // at mirrored positions here. The fix is one line and was written
-            // and tested this session -- it builds, the archive stays LOSSLESS
-            // and the export stays byte-identical -- but it CHANGES .sites,
-            // which feeds the native-pileup fast path whose published numbers
-            // (400/400 het at >=2 reads, 25 homozygous false positives, 19.6x
-            // faster than the read path) are recorded in BTR_NOTES.md. Adopting it
-            // therefore requires re-running and re-gating those numbers, not a
-            // drive-by edit. Reverted pending that.
+            // the .xmi and .fmi builders all strand-correct it (q+j forward,
+            // q+RL-1-j reverse-complement). So every RC read contributes its
+            // deviations at mirrored positions here. The fix is one line, and
+            // was written and tested: it builds, the archive stays LOSSLESS and
+            // the export stays byte-identical. It was not adopted because it
+            // CHANGES .sites, which feeds the native-pileup fast path whose
+            // measured numbers (400/400 het at >=2 reads, 25 homozygous false
+            // positives, 19.6x faster than the read path) were recorded with the
+            // current behaviour. Adopting it requires re-running and re-gating
+            // those numbers, not a drive-by edit.
             //
             // Separately: correcting the offsets does NOT make this tally
             // usable as an assembly-polishing consensus. Measured on E. coli,
@@ -1531,6 +1720,11 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
                 tally[{a0+j,obs[off+m]}]++;
             }
         }
+        // .sites layout: magic 0x5345544953504756 u64, nsite u64, then per site in
+        // ascending order: delta of the pseudogenome position from the previous
+        // site as a LEB128 varint, the observed base (ASCII) u8, and the number
+        // of reads showing it, capped at 255, u8. Only (position, base) pairs
+        // seen in at least KMIN reads (CAPS_PILEUP_MIN, default 3) are kept.
         const uint32_t KMIN = getenv("CAPS_PILEUP_MIN")?(uint32_t)atoi(getenv("CAPS_PILEUP_MIN")):3;
         FILE* vf=fopen((outdir+".sites").c_str(),"wb");
         if(vf){
@@ -1633,6 +1827,8 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
                 FILE* xf=fopen(xp.c_str(),"wb");
                 if(!xf){ fprintf(stderr,"[xmi] cannot write %s\n",xp.c_str()); }
                 else{
+                    // .xmi layout: magic u64, k u32, stride u32, np u64, then np sorted
+                    // unique postings (k-mer code u64, unique read id u32).
                     const uint64_t magic=0x494D585F53504143ULL;   // "CAPS_XMI" little-endian
                     const uint64_t np=post.size();
                     const uint32_t k32=(uint32_t)K, s32=(uint32_t)S;
@@ -1648,6 +1844,161 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
                 }
             }
         }
+        }
+        // ── FM-INDEX OVER THE READS THE PSEUDOGENOME CANNOT REPRESENT (.fmi) ─
+        //
+        // Compression already splits the reads in two. A read with no
+        // deviations and no N is emitted by `query` as pg[pos, pos+len), so the
+        // pg search reaches every string it contains. Every other read differs
+        // from the pg somewhere, and only those can be missed. They are indexed
+        // here, each one exactly as `query` emits it (pg slice, deviations
+        // applied at strand-corrected offsets, N restored), in an FM-index.
+        // pg search + this index therefore returns every read containing the
+        // probe by construction: no tolerance, no seed floor and no minimum
+        // probe length is involved, and the index grows with the reads
+        // compression could not absorb rather than with all reads.
+        //
+        // Replaces the k-mer completion index (.xmi) as the completion step.
+        // The .xmi code above is kept and still selectable at query time with
+        // CAPS_QUERY_INDEX=xmi.
+        if(getenv("CAPS_FMI")){
+            auto ft0 = std::chrono::steady_clock::now();
+            const size_t NO = o2u.size();
+            auto comp=[](char c)->char{ return c=='A'?'T':c=='C'?'G':c=='G'?'C':c=='T'?'A':c; };
+            auto canon=[&](const std::string& s)->std::string{
+                std::string r(s.rbegin(),s.rend()); for(auto& c:r) c=comp(c);
+                return r<s ? r : s; };
+            // first deviation of each unique read in the flat mismatch arrays
+            std::vector<size_t> mmoffU(NU+1,0);
+            for(size_t u=0;u<NU;++u) mmoffU[u+1]=mmoffU[u]+(u<mmcount.size()?mmcount[u]:0);
+            // N offsets: per ORIGINAL read (what the lossless decode restores),
+            // and per UNIQUE read with the sidecar's first-kept rule (what
+            // `query` emits). They differ exactly when originals share a unique.
+            std::unordered_map<uint32_t,std::vector<uint32_t>> nO, nU;
+            { auto ni=dec("n_indices"), nc=dec("n_cnt"), npv=dec("n_pos");
+              const size_t NI=ni.size()/4; size_t k=0;
+              std::vector<char> seen(NU,0);
+              for(size_t r=0;r<NI && r<nc.size();++r){
+                  uint32_t oi; memcpy(&oi,&ni[r*4],4);
+                  const uint8_t c=nc[r];
+                  std::vector<uint32_t> v;
+                  for(uint8_t m=0;m<c && k+m<npv.size();++m) v.push_back(npv[k+m]);
+                  k+=c;
+                  if(v.empty()) continue;
+                  const uint32_t u=(oi<o2u.size())?o2u[oi]:oi;
+                  if(u<NU && !seen[u]){ seen[u]=1; nU.emplace(u,v); }
+                  nO.emplace(oi,std::move(v));
+              } }
+            // The record `query` emits for unique read u, byte for byte
+            // (pg slice of the sidecar's length, 2-bit alphabet, deviations and
+            // N applied at strand-corrected offsets). `dev` reports whether
+            // anything other than the pg slice was applied.
+            auto emitted=[&](size_t u, std::string& out, bool& dev)->bool{
+                dev=false;
+                const uint64_t aa=(u<positions.size())?positions[u]:UINT64_MAX;
+                // the sidecar stores the length per UNIQUE read (caps_unique_lengths)
+                const uint16_t l=(u<rlenU.size())?rlenU[u]:0;
+                if(!l||aa==UINT32_MAX||aa>=PGLEN) return false;
+                const uint64_t e=std::min<uint64_t>(PGLEN,aa+l);
+                out.assign((const char*)pg.data()+aa,(size_t)(e-aa));
+                for(auto& ch:out) if(ch!='C'&&ch!='G'&&ch!='T') ch='A';
+                const bool rcu=(u<strand.size())&&strand[u];
+                const uint16_t cnt=(u<mmcount.size())?mmcount[u]:0;
+                uint32_t prevj=0;
+                for(uint16_t m=0;m<cnt;++m){
+                    const size_t at=mmoffU[u]+m;
+                    if(at>=mmpos32.size()||at>=obs.size()) break;
+                    const uint32_t j=prevj+mmpos32[at]; prevj=j;
+                    const uint32_t o=rcu?(uint32_t)(l-1-(uint16_t)j):j;
+                    if(j<l && o<out.size()){ out[o]=(char)obs[at]; dev=true; }
+                }
+                auto it=nU.find((uint32_t)u);
+                if(it!=nU.end())
+                    for(uint32_t j : it->second){
+                        const uint32_t o=rcu?(uint32_t)(l-1-(uint16_t)j):j;
+                        if(j<l && o<out.size()){ out[o]='N'; dev=true; }
+                    }
+                return true;
+            };
+            // The read the lossless decode returns for ORIGINAL read o.
+            auto original=[&](size_t o, std::string& out)->bool{
+                const uint32_t u=o2u[o];
+                const uint32_t L=(o<lengths.size())?lengths[o]:0;
+                if(u>=NU||!L) return false;
+                const uint64_t pp=positions[u];
+                const bool rcu=strand[u];
+                const uint32_t RLu=(u<rlenU.size()&&rlenU[u]>L)?rlenU[u]:L;
+                out.assign(L,'A');
+                if(!rcu){ for(uint32_t k=0;k<L;++k) out[k]=(pp+k<PGLEN)?(char)pg[pp+k]:'A'; }
+                else    { for(uint32_t k=0;k<L;++k) out[k]=(pp+RLu-1-k<PGLEN)?comp((char)pg[pp+RLu-1-k]):'A'; }
+                const uint16_t cnt=(u<mmcount.size())?mmcount[u]:0;
+                uint32_t prevj=0;
+                for(uint16_t m=0;m<cnt;++m){
+                    const size_t at=mmoffU[u]+m;
+                    if(at>=mmpos32.size()||at>=obs.size()) break;
+                    const uint32_t j=prevj+mmpos32[at]; prevj=j;
+                    if(j>=L) continue;
+                    const char ob=(char)obs[at]; out[j]=rcu?comp(ob):ob;
+                }
+                auto it=nO.find((uint32_t)o);
+                if(it!=nO.end()) for(uint32_t j : it->second) if(j<L) out[j]='N';
+                return true;
+            };
+
+            capsfmi::FMIndex fm;
+            std::vector<std::string> frd; std::vector<uint32_t> fid;
+            std::vector<char> uidx(NU,0);                       // unique already indexed
+            size_t nuniq=0, nverb=0, ndev=0, nN=0; uint64_t fbases=0;
+            std::string E, Ru;
+            // (1) every unique read whose emitted record differs from a pg slice
+            for(size_t u=0;u<NU;++u){
+                bool dev=false;
+                if(!emitted(u,E,dev) || !dev) continue;
+                uidx[u]=1; ++nuniq;
+                if(u<mmcount.size() && mmcount[u]) ++ndev;
+                if(nU.count((uint32_t)u)) ++nN;
+                fbases+=E.size(); frd.push_back(E); fid.push_back((uint32_t)u);
+            }
+            // (2) every original read the emitted record does NOT reproduce
+            //     (shared placements with different length, N pattern or
+            //     deviations): stored verbatim, so completeness never rests on
+            //     what the sidecar can emit.
+            std::string Eo;
+            std::set<std::string> vseen;       // a repeated read is stored once: the answer is a set of sequences
+            for(size_t o=0;o<NO;++o){
+                if(!original(o,Ru)) continue;
+                const size_t u=o2u[o]; bool dev=false;
+                if(emitted(u,Eo,dev) && canon(Eo)==canon(Ru)) continue;
+                // Stored like every other record `query` emits: in pseudogenome
+                // orientation, with its own pseudogenome start, so a caller that
+                // reads a base at (pg position - record start) reads the right
+                // base. A contained original is a PREFIX of its unique in read
+                // space, hence a SUFFIX in pg space on the reverse strand.
+                const bool rcu=(u<strand.size())&&strand[u];
+                const uint32_t L=(uint32_t)Ru.size();
+                const uint32_t RLu=(u<rlenU.size()&&rlenU[u]>L)?rlenU[u]:L;
+                std::string Rpg = Ru;
+                if(rcu){ Rpg.assign(Ru.rbegin(),Ru.rend()); for(auto& c:Rpg) c=comp(c); }
+                const uint64_t pu=(u<positions.size()&&positions[u]!=UINT32_MAX)?positions[u]:0;
+                const uint64_t start=pu+(rcu?(uint64_t)(RLu-L):0);
+                if(!vseen.insert(Rpg).second) continue;
+                const uint32_t vid=fm.add_verbatim(Rpg,(uint32_t)std::min<uint64_t>(start,UINT32_MAX));
+                fbases+=Rpg.size(); ++nverb; frd.push_back(Rpg); fid.push_back(vid);
+            }
+            const uint32_t D = getenv("CAPS_FMI_SAMPLE") ? (uint32_t)atoi(getenv("CAPS_FMI_SAMPLE")) : 256u;
+            std::string err;
+            if(!fm.build(frd,fid,D,err)){ fprintf(stderr,"[fmi] build failed: %s\n",err.c_str()); return 1; }
+            std::vector<std::string>().swap(frd);
+            const std::string fp=outdir+".fmi";
+            if(!fm.save(fp,err)){ fprintf(stderr,"[fmi] %s\n",err.c_str()); return 1; }
+            struct stat fst; const long long fbytes = stat(fp.c_str(),&fst)==0 ? (long long)fst.st_size : -1;
+            fprintf(stderr,"[fmi] %zu reads indexed of %zu unique / %zu original: %zu placement-keyed "
+                           "(%zu with deviations, %zu with N), %zu stored verbatim; %llu bases, "
+                           "%llu locate samples -> %lld B -> %s (%.2f s)\n",
+                    nuniq+nverb, NU, NO, nuniq, ndev, nN, nverb, (unsigned long long)fbases,
+                    (unsigned long long)fm.num_samples(), fbytes, fp.c_str(),
+                    std::chrono::duration<double>(std::chrono::steady_clock::now()-ft0).count());
+            fprintf(stderr,"[fmi] pg search + this index is complete for exact matches over all %zu original reads\n",NO);
         }
         return 0;
     }

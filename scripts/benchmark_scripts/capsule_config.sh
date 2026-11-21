@@ -6,7 +6,7 @@
 # Every value here is an env-var default: an existing environment variable
 # always wins (":=` assigns only if unset), so a one-off override doesn't
 # require editing this file either:
-#   CAPSULE_DATA_DIR=/mnt/other/fastq bash scripts/run_capsule.sh 1
+#   CAPSULE_DATA_DIR=/mnt/other/fastq bash scripts/benchmark_scripts/benchmark_1_run.sh
 
 : "${CAPSULE_DATA_DIR:=/data/fastq}"          # Claim 1 SRA-derived FASTQ, Claim 2 GIAB pooled FASTQ
 : "${CAPSULE_REFS_DIR:=$HOME/refs}"           # chr20.fa (Claim 2, Claim 3 coverage baseline)

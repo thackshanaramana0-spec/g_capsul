@@ -45,10 +45,11 @@ and without fully decompressing first.
 - Export the assembled pseudogenome as FASTA directly from the archive.
 - Compute per-base sequencing depth/coverage directly from the archive.
 - Retrieve every read covering a given coordinate range of the
-  pseudogenome via bilateral (upstream + downstream) probing, with an
-  optional post-archive completion index (`CAPS_QUERY_CONTAIN=1`) that
-  trades archive-adjacent disk space and a higher homozygous
-  false-positive rate for complete recall.
+  pseudogenome via bilateral (upstream + downstream) probing, and return
+  every read that contains a query sequence, using an optional post-archive
+  FM-index (`CAPS_FMI=1` at `index` time, `CAPS_QUERY_CONTAIN=1` at query
+  time) that trades archive-adjacent disk space and a higher homozygous
+  false-positive rate in locus retrieval for complete recall.
 - Adaptively select its own compression parameters by sweeping candidate
   settings and keeping the smallest resulting archive
   (`scripts/build_scripts/encode_adaptive.sh`), rather than requiring the caller to tune

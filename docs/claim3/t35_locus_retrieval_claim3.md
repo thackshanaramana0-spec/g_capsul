@@ -1,5 +1,5 @@
 ---
-Date: 2026-09-19
+Date: 2026-11-21
 Title: T3.5 — Locus Retrieval at Heterozygous Sites (Bilateral Anchoring)
 Purpose: Complete, verified record of T3.5's mechanism, why it is the
   paper's actual novel claim (not T3.4), the multi-individual/multi-locus
@@ -9,7 +9,7 @@ When to refer to this file: Writing/checking T3.5's table or text; deciding
   what "the paper's insight" sentence should say; citing the 96/400-vs-
   400/400 motivating number; explaining why this table has no competitor.
 Keywords: T3.5, locus retrieval, bilateral anchoring, heterozygous, allele
-  splitting, coordinate-only addressing, completion index, homopolymer, indel eviction
+  splitting, coordinate-only addressing, FM-index, homopolymer, indel eviction
 ---
 
 # T3.5 — Locus Retrieval
@@ -34,7 +34,7 @@ same biological site."
 
 Following a **single** pseudogenome coordinate for a het site recovers both
 alleles only a small fraction of the time (the coordinate-only control,
-measured on the archive's own data — see `docs/CLAIM3_LOCUS_ADDRESSABILITY.md`
+measured on the archive's own data — see the Claim 3 locus-addressability write-up
 for the exact figure and its provenance). This is the direct, measured proof
 that plain coordinate lookup (the mechanism T3.3 uses generically) fails
 specifically at heterozygous sites, because that is exactly where
@@ -47,8 +47,8 @@ breaks.
 ## The mechanism — bilateral anchoring, and where it actually lives
 
 **Not a separate C++ code path.** T3.5 is built entirely at the
-orchestration layer (`scripts/t34_realdata/run_window.sh`,
-`scripts/score_bilateral.py`), by calling T3.4's `query` primitive **twice**
+orchestration layer (`scripts/claim3_scripts/run_locus_retrieval_capsule.sh`,
+`scripts/claim3_scripts/score_locus_retrieval.py`), by calling T3.4's `query` primitive **twice**
 — once with a probe 40bp upstream of the variant, once 40bp downstream —
 and unioning the two result sets in Python, assigning each read to whichever
 probe's occurrence it overlaps most. Neither probe contains the variant
@@ -63,34 +63,34 @@ broke on that side — measured directly: upstream-only anchoring found 0 of
 6 failing sites; downstream-only found 5 of 6. Unioning both closes the gap
 neither can close alone.
 
-## Results — locked, multi-individual, multi-locus
+## Results — four individuals, one locus
 
-Source: `docs/T34_T35_MULTI_INDIVIDUAL_20260919.md`.
+Source: `results/claim3/claim3_T3.5_locus_retrieval.csv`, produced by phase 4
+of `scripts/benchmark_scripts/benchmark_1_run.sh`. Detail of the earlier
+replication: `docs/claim3/t34_t35_multi_individual_claim3.md`.
 
-**Native (archive alone, no the completion index), first pass:**
+A heterozygous SNV is tested only if both flanking 40-bp reference sequences
+are unambiguous and the upstream flank occurs in the pseudogenome, the same
+rule for every individual, so the number of sites differs between them.
 
-| Individual | Sites | Bilateral (both) |
-|---|---|---|
-| HG002 | 400 | 400/400 |
-| HG003 | 335 | 335/335 |
-| HG004 | 400 | **399/400** (one real miss — diagnosed below) |
-| HG005 (locus 1) | 317 | 317/317 |
+| Individual | Locus | Sites | Position query (tolerance 2) | Archive + FM-index (tolerance 3) |
+|---|---|---:|---:|---:|
+| HG002 | chr20:3.0-3.6 Mb | 400 | 400/400 | 400/400 |
+| HG003 | chr20:3.0-3.6 Mb | 335 | 335/335 | 335/335 |
+| HG004 | chr20:3.0-3.6 Mb | 400 | **399/400** (one real miss, diagnosed below) | **400/400** |
+| HG005 | chr20:3.0-3.6 Mb | 317 | 317/317 | 317/317 |
+| **All** | chr20:3.0-3.6 Mb | **1,452** | 1,451/1,452 (99.93%) | **1,452/1,452 (100%)** |
 
-**With the completion index completion, all four individuals plus a second, independently
-chosen locus on HG005 — the full, final result:**
+"Position query" is the bilateral query on the decoded pseudogenome and read
+placements. It is the "archive" column of the result CSV, together with its
+homozygous-control hits (29, 35, 29 and 66 of 400). Phase 4 of
+`benchmark_1_run.sh` re-runs both columns from the downloaded data.
 
-| Individual | Locus | Sites | Result |
-|---|---|---|---|
-| HG002 | chr20:3.0-3.6Mb | 400 | 400/400 |
-| HG003 | chr20:3.0-3.6Mb | 335 | 335/335 |
-| HG004 | chr20:3.0-3.6Mb | 400 | **400/400** (miss fixed) |
-| HG005 | chr20:3.0-3.6Mb | 317 | 317/317 |
-| HG005 | chr20:4.0-4.6Mb (new locus) | 400 | 400/400 |
+A separate additional check on HG005 at chr20:4.0-4.6 Mb (400/400, measured
+with the earlier k-mer completion index) is not part of the 1,452 aggregate
+and is not in the manuscript's table.
 
-**Aggregate: 1,452/1,452 (100%) across four individuals, two GIAB trios, two
-independent loci.** Native alone (before the completion index): 1,451/1,452 = 99.93%.
-
-## The one native miss — fully diagnosed, not hand-waved
+## The one position-query miss — fully diagnosed, not hand-waved
 
 Site chr20:3,009,763 (HG004, T→G). GIAB itself flags this exact site as a
 homopolymer/simple-repeat difficult region. Both probes retrieved reads (62
@@ -102,27 +102,29 @@ read differing by indel exceeds the placement mismatch ceiling and gets
 placed *elsewhere* in the pseudogenome at encode time. No positional query
 at any tolerance could find it there, because it structurally is not there.
 
-**This was tested, not assumed**: re-querying with the completion index (which matches by
-read content, not position) recovered 11 ALT-carrying reads that plain query
-could not reach, flipping the site to a correct het call. This confirms the
-diagnosis and is why the completion index closes exactly this class of miss.
+**This was tested, not assumed**: querying by read content, which matches
+what a read contains instead of where it was placed, recovered the
+ALT-carrying reads that the position query could not reach (11 with the
+earlier k-mer index, flipping the site to a correct het call), and the
+FM-index recovers the site too (HG004 400/400). That confirms the diagnosis
+and is why a content index closes exactly this class of miss.
 
 ## The real cost, disclosed — do not present 100% as free
 
-Homozygous negative-control false positives rose with the completion index across every
-individual: HG002 31→42, HG003 38→52, HG004 28→49, HG005 71→87 (a notably
-higher rate than the other three — flagged as a real, undiagnosed open
-question; a second locus test on HG005 showed the rate drop to 63/400,
-suggesting it may be locus-specific rather than an inherent property of that
-individual, but this is not a full diagnosis).
+Homozygous negative-control false positives (400 control sites per
+individual) rise when the content index is added: HG002 29 to 48, HG003 35 to
+52, HG004 29 to 49, HG005 66 to 87. HG005 is notably higher than the other
+three. That is an open question, not a diagnosis: the earlier additional
+check at a second HG005 locus gave 63 of 400, which suggests the rate is
+locus-specific, not a property of the individual.
 
 ## Generalization claim — precise wording
 
-The mechanism (bilateral union) is geometric, not a completeness proof the
-way T3.4's the completion index is — this is an honest asymmetry, not a weakness to hide.
-It generalizes on the strength of: (a) every parameter is derived from data,
-never fitted (seed floor, the completion index k, probe construction identical across
-runs), and (b) it held clean across two ancestries, two trios, and a
-genuinely new locus never tested before. State it that way — "broad,
-verified empirical generalization" — not as a mathematical guarantee, which
-would overclaim relative to T3.4's actual proof-backed claim.
+The mechanism (bilateral union) is geometric, not a completeness argument the
+way T3.4's FM-index is, which is an honest asymmetry, not a weakness to
+hide. It generalizes on the strength of: (a) every parameter is derived from
+data, never fitted (seed floor, probe construction identical across runs),
+and (b) it held clean across two ancestries, two trios and a locus never
+tested before. State it that way, "broad, verified empirical
+generalization", not as a mathematical guarantee, which would overclaim
+relative to T3.4's actual construction-backed claim.

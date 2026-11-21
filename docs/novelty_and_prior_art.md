@@ -38,7 +38,7 @@ flattened into one confident voice.
 
 ## Variant-calling comparators — Claim 2
 
-- **DiscoSNP++**: **confirmed** (via literature survey, `docs/HET_INDEL_SOTA.md`)
+- **DiscoSNP++**: **confirmed** (via literature survey, the het-indel literature survey)
   to be the only other general-purpose reference-free caller handling
   heterozygous indels from a single diploid sample with zero reference —
   the right primary comparator, not a weak strawman.
@@ -55,7 +55,7 @@ flattened into one confident voice.
 - **eBWT2SNP's precision figure — self-correction, verified applied.**
   This project once cited eBWT2SNP's "99.13% precision" as motivation for
   an abandoned design direction (read-support clustering). **Confirmed**
-  (`docs/EBWT_LITERATURE_CORRECTION.md`, reading the primary source —
+  (the eBWT literature-correction note, reading the primary source —
   Prezza, Pisanti, Sciortino, Rosone, *Algorithms Mol Biol* 2019,
   PMC6364478): that figure is from a **simulated**-data experiment; on the
   paper's one real-data experiment (chr1, real reads) the ordering flips
@@ -80,7 +80,7 @@ flattened into one confident voice.
   explained by SPAdes optimizing for assembly correctness (dedicated
   repeat resolution + error correction) while this system optimizes for
   compressed size, both genuinely "assembly" in the mechanical sense
-  (**confirmed** against `paper/METHODS.md`'s own wording), just different
+  (**confirmed** against the methods draft's own wording), just different
   objective functions. See `claim3/t31_export_claim3.md` and
   `claim3/mechanism_insight_claim3.md`.
 
@@ -115,7 +115,7 @@ flattened into one confident voice.
 
 ## BFQzip — the single closest prior work by intent, verified as already the manuscript's own centerpiece comparison
 
-**Confirmed** (`docs/NOVELTY_SCAN_DBG_CHANNEL.md`, flagged there as "the
+**Confirmed** (the de Bruijn-channel novelty scan, flagged there as "the
 single most important citation we were missing," and confirmed already
 resolved — `guerrini2023bfqzip` is cited in the manuscript with a
 dedicated comparison table, `gcapsul_manuscript.tex` line 336). BFQzip
@@ -143,7 +143,7 @@ own centerpiece related-work comparison.
 ## Content-retrieval / exact-match comparators — Claim 3, T3.4
 
 - **BEETL-fastq (2014), CIndex (2022), sFASTQ (2022)**: **confirmed** (via
-  literature survey, `BTR_NOTES.md`'s "Novelty, corrected after a literature
+  literature survey, the development notes' "Novelty, corrected after a literature
   survey 2026-09-16" section) to already do content retrieval from
   compressed reads via BWT/FM-index, natively, no auxiliary index needed —
   content retrieval itself is **not novel**. What is distinct: retrieval by
@@ -154,10 +154,10 @@ own centerpiece related-work comparison.
   session, not asserted from the technique's name.
 - **No speed or index-size benchmark against any of the three has been
   run.** Stated as the single most valuable missing experiment
-  (`BTR_NOTES.md`, `claim3/t34_exact_match_claim3.md`).
+  (the development notes, `claim3/t34_exact_match_claim3.md`).
 - **Could BEETL add position retrieval with a small addition?** **Confirmed
   structurally, by tracing what each compression method actually
-  computes**: this project's the completion index addition was cheap because placement
+  computes**: this project's FM-index addition was cheap because placement
   data already existed as a free byproduct of overlap chaining. BWT's
   compression step (sorting) computes nothing analogous — position is not
   hard to look up for a BWT, it is simply never computed. Adding it would
@@ -166,7 +166,7 @@ own centerpiece related-work comparison.
 
 ## The PgRC2 "could they add locus retrieval with an evening of work" question — the deepest-checked comparison in the whole project
 
-**Confirmed by reading PgRC2's actual source** (`pgrc/pgrc-decoder.cpp`):
+**Confirmed by reading PgRC2's actual source** (PgRC2's decoder source):
 its decoder computes per-read position and strand during decompression, but
 exposes no query/extraction interface anywhere.
 
@@ -185,13 +185,13 @@ day one of its own retrieval work, and building a *correct* query layer on
 top still took a multi-day effort and surfaced several silent bugs,
 demonstrating that possessing the raw data is not the hard part even for a
 team with full access to its own code. Full analysis:
-`docs/PGRC2_EXTENSION_ANALYSIS.md`, synthesized in
+The PgRC2 extension analysis, synthesized in
 `claim3/mechanism_insight_claim3.md`.
 
 ## "No tool combines all three" — verified as a checked code-audit claim, not an assumption
 
-Verified against root-level `RECAP.md` §2 (checked this session, not
-previously in `refer_paper_docs/`). The "one archive, three properties"
+Verified against the root-level project recap §2 (checked this session, not
+previously in `docs/`). The "one archive, three properties"
 claim was tested directly against every real candidate architecture, not
 merely asserted:
 
@@ -222,7 +222,7 @@ or the export/coverage/query code paths.
 
 ## A claim explicitly investigated and left unresolved, on purpose
 
-Verified against `RECAP.md` §3. "India's first reference-free FASTQ
+Verified against the project recap §3. "India's first reference-free FASTQ
 compressor" was checked, not casually asserted, and the check did **not**
 resolve cleanly: FQC (Dutta, Haque, Bose, Reddy, Mande — TCS Innovation
 Labs, Pune, 2015, *J. Bioinformatics and Computational Biology*) is a real,

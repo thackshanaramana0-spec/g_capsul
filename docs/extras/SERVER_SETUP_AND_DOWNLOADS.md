@@ -1,7 +1,7 @@
 # Server setup — every dataset and tool, exactly as installed, verified
 
 Written 2026-09-03. Every command below is either (a) copied from a
-checked-in script (`benchmark/download.sh` in the outer `/root/arcs-clean`
+checked-in script (the dataset download script in the outer `/root/arcs-clean`
 repo) and re-verified against this server's actual state, or (b)
 reconstructed from a verified git remote / installed version / package
 manager record on this exact server — never guessed. Where something could
@@ -59,7 +59,7 @@ unzip awscliv2.zip && sudo ./aws/install
 exact reasoning, not silently substituted). **Never change these lists
 without documenting why**, per this project's own standing rule.
 
-**The actual, working download command** (from `benchmark/download.sh`,
+**The actual, working download command** (from the dataset download script,
 run for every accession in the locked list):
 
 ```bash
@@ -72,7 +72,7 @@ fasterq-dump --split-files --threads "$(nproc)" \
 
 **For the two large datasets (C. elegans SRR065390 ~22GB, T. cacao
 SRR870667 ~15GB SRA), `prefetch` is too slow — use the S3 Open Data mirror
-instead**, exactly as documented in `BTR_NOTES.md`:
+instead**, exactly as documented in the development notes:
 
 ```bash
 aws s3 cp --no-sign-request \
@@ -108,7 +108,7 @@ S3-mirror method above; only the `fasterq-dump` conversion step remains.
 
 **Not a bulk file download — a targeted S3 stream + downsample**, because
 the full WGS BAMs are hundreds of GB per individual and only chr20 at 30×
-is needed. This is `benchmark/download.sh` Phase 3, reproduced here exactly:
+is needed. This is the dataset download script Phase 3, reproduced here exactly:
 
 ```bash
 export HTS_S3_ADDRESS_STYLE=path
@@ -145,7 +145,7 @@ why the downsample-to-30× step exists: it removes that confound so T3 F1
 comparisons across individuals are apples-to-apples, not an accident of
 whichever individual happened to be sequenced deeper.
 
-**chr20 reference and GIAB truth VCFs** (also Phase 5 of `download.sh`):
+**chr20 reference and GIAB truth VCFs** (also Phase 5 of the dataset download script):
 
 ```bash
 # GRCh37/hg19 chr20, sequence renamed from ">chr20" to ">20" to match GIAB's convention
@@ -176,7 +176,7 @@ unzip rtg-tools.zip
 ## 4. Claim 3 — E. coli export/coverage/query baseline
 
 Uses the same `SRR2584863` accession already fetched for Claim 1 (locked
-accession #1) — no separate download needed. `scripts/run_claim3.sh` in
+accession #1) — no separate download needed. `scripts/benchmark_scripts/benchmark_1_run.sh` in
 `c_star_pg_advance` builds everything else it needs (its own binaries,
 SPAdes if absent) automatically — see §5 below for the SPAdes part
 specifically.
@@ -188,11 +188,11 @@ specifically.
 | **SPRING** | (no `--version` flag; boost-based build) | `git clone https://github.com/shubhamchandak94/SPRING.git` at `/root/SPRING`, built per its own README (CMake + boost). |
 | **Genozip** | 15.0.87 (`genozip --version`) | Source tarball `genozip-src.tar.gz` (7.6MB, present at `/root/genozip-src.tar.gz`) extracted to `/root/genozip-genozip-15.0.87/` and built there. Official source: `https://github.com/genozip/genozip` (download a release tarball, e.g. `https://github.com/genozip/genozip/archive/refs/tags/genozip-15.0.87.tar.gz`, then `make`). |
 | **PgRC2** | git clone, GPL-3, never vendored | `git clone https://github.com/kowallus/PgRC.git` at `/root/arcs-clean/method_c` (renamed on clone). Build per its own CMake instructions. |
-| **DiscoSNP++** | v2.6.2-12 (per `docs/HOW_DISCOSNP_WINS.md`) | `git clone https://github.com/GATB/DiscoSnp.git` at `/root/DiscoSnp`. Build with its own `./INSTALL` or CMake script; needs `-G <ref.fa>` at run time (mandatory, not optional — see `BTR_NOTES.md`'s command reference). |
-| **Kmer2SNP** | — | `git clone https://github.com/yanboANU/Kmer2SNP.git` at `/root/Kmer2SNP`. **Real compatibility fixes required** for this 2020-era code on a modern Python (documented in full in `docs/KMER2SNP_BENCHMARK.md`): `time.clock()` → `time.perf_counter()` (Python 3.8 removed the former), `networkx.connected_component_subgraphs` → a documented generator-expression equivalent (removed in networkx 2.4+), and `findGSE` (an R package) bypassed via Kmer2SNP's own documented `--c1/--c2/--r` flags with data-derived values from a k-mer histogram, rather than installing R. |
+| **DiscoSNP++** | v2.6.2-12 (per the DiscoSNP++ comparison note) | `git clone https://github.com/GATB/DiscoSnp.git` at `/root/DiscoSnp`. Build with its own `./INSTALL` or CMake script; needs `-G <ref.fa>` at run time (mandatory, not optional — see the development notes' command reference). |
+| **Kmer2SNP** | — | `git clone https://github.com/yanboANU/Kmer2SNP.git` at `/root/Kmer2SNP`. **Real compatibility fixes required** for this 2020-era code on a modern Python (documented in full in the Kmer2SNP benchmark note): `time.clock()` → `time.perf_counter()` (Python 3.8 removed the former), `networkx.connected_component_subgraphs` → a documented generator-expression equivalent (removed in networkx 2.4+), and `findGSE` (an R package) bypassed via Kmer2SNP's own documented `--c1/--c2/--r` flags with data-derived values from a k-mer histogram, rather than installing R. |
 | **DSK** | v2.3.3 | `git clone https://github.com/GATB/dsk.git` at `/root/dsk`. Kmer2SNP's driver script hardcodes a `/path2dsk/` placeholder — must be pointed at the real built binary after cloning. |
 | **MEGAHIT** | 1.2.9-5 | `apt-get install megahit` — a real Ubuntu package, no manual build needed. |
-| **SPAdes** | v4.0.0 | **Prebuilt binary, not apt** (no current Ubuntu package tracks the latest release): `curl -sL https://github.com/ablab/spades/releases/download/v4.0.0/SPAdes-4.0.0-Linux.tar.gz -o spades.tar.gz && tar xzf spades.tar.gz` — installed this way in this session at `~/SPAdes-4.0.0-Linux/`, verified working (real 239-contig E. coli assembly, `docs/CLAIM3_LOCKED.md` §6.2). |
+| **SPAdes** | v4.0.0 | **Prebuilt binary, not apt** (no current Ubuntu package tracks the latest release): `curl -sL https://github.com/ablab/spades/releases/download/v4.0.0/SPAdes-4.0.0-Linux.tar.gz -o spades.tar.gz && tar xzf spades.tar.gz` — installed this way in this session at `~/SPAdes-4.0.0-Linux/`, verified working (real 239-contig E. coli assembly, the Claim 3 locked-results note §6.2). |
 | **bwa / samtools / mosdepth / tabix / bcftools** | see §0 table | plain `apt-get install`, no manual build for any of these. |
 
 ## 6. What NOT to do — real errors this project hit, so a fresh server doesn't repeat them
@@ -203,12 +203,12 @@ specifically.
 2. **Do not install R/`findGSE` to run Kmer2SNP.** The tool's own
    `--c1/--c2/--r` flags accept the same inputs `findGSE` would have
    computed — use those instead of adding a whole R toolchain for one
-   dependency (`docs/KMER2SNP_BENCHMARK.md`).
+   dependency (the Kmer2SNP benchmark note).
 3. **Do not run DiscoSNP++ without `-G <ref.fa>`.** Without it, its output
    cannot be lifted to genome coordinates for scoring — this is mandatory
    for every benchmark in this project, not an optional accuracy flag.
 4. **Do not skip `-g` on SPRING decompress.** `spring -d` without `-g`
-   produces the wrong output format — `BTR_NOTES.md`'s own command reference
+   produces the wrong output format — the development notes' own command reference
    flags this explicitly because it was a real, previously-hit mistake.
 5. **Do not download full WGS BAMs for GIAB individuals.** Stream chr20
    only via `samtools view -b <S3 BAM> chr20` (§3) — a full WGS BAM per

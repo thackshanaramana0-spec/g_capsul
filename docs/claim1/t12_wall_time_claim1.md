@@ -52,14 +52,14 @@ selector (which measures multiple candidate encoders per stream and keeps
 the smallest — see `code_mapping_claim1.md`) all cost real time that a
 simpler compressor without this structure does not spend. **This is the
 same trade-off already stated candidly elsewhere in the project's own
-documentation** (`PIPELINE.md`/session history: "~1.7x slower, ~2.5x
+documentation** (the pipeline notes/session history: "~1.7x slower, ~2.5x
 heavier at worst" against PgRC2, on the earlier, narrower sequence-only
 comparison — see `mechanism_insight_claim1.md`). T1.2 is the full-FASTQ,
 19-dataset version of that same honest disclosure.
 
 ## Precisely where the RAM cost comes from, verified file-and-line
 
-Verified against `docs/HEADROOM_ANALYSIS.md`. The dominant RAM item is a
+Verified against the headroom analysis. The dominant RAM item is a
 single structure: `src/encoder.cpp`'s duplicate-detection map
 (`std::unordered_map<uint64_t, std::vector<uint32_t>>`) costs **~80 B per
 distinct read** (hash node + a separately heap-allocated inner vector).
@@ -83,7 +83,7 @@ decompress-side cost below).
 
 ## Most of the disclosed decompress slowdown is a Python/C++ artifact, not an algorithmic cost
 
-Verified against `docs/FINAL_HEADROOM.md`. Of a measured 40.1 s total
+Verified against the final-headroom note. Of a measured 40.1 s total
 decompress (against PgRC2's 4.0 s — the ~10x figure), **80% (32.19 s) is a
 Python script** (`scripts/build_scripts/decode_105.py`) iterating every read in the
 interpreter, and it also sets the peak memory (1,563 MB — higher than this
@@ -101,10 +101,10 @@ correctness," per the same source, an explicitly open item.
 
 ## One real engineering fix behind the shipped speed number, worth keeping visible
 
-Verified against `docs/CANDIDATE_FORK_DEPTH.md`: the encoder searches a grid
+Verified against the candidate-fork-depth note: the encoder searches a grid
 of `MAXMAP`×`MINOV` candidates and keeps whichever produces the smallest
 archive (a genuine measured-optimum search, not a heuristic — see
-`docs/REPRODUCIBILITY.md`'s discipline). A real inefficiency was found and
+the reproducibility note's discipline). A real inefficiency was found and
 fixed: `MINOV` is consumed at the round-2 sweep, `MAXMAP` only later at
 pigeonhole mapping, so candidates sharing the same `MINOV` were computing a
 **bit-identical round-2 assembly** up to four times over — confirmed

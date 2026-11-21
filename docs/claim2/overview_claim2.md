@@ -23,7 +23,7 @@ FASTQ or building a second, independent representation.**
 ## What Claim 2 is NOT
 
 - **Not a claim to beat every variant caller in existence.** The comparator
-  set is deliberately narrow and justified: per `refer_paper_docs/HET_INDEL_SOTA.md`'s
+  set is deliberately narrow and justified: per the het-indel
   literature survey, DiscoSNP++ is the only other general-purpose
   reference-free caller that handles heterozygous indels from a single
   diploid sample with no reference at all. Everything else surveyed
@@ -56,7 +56,7 @@ directly against `results/claim2/claim2_T2.*.csv` **and** the live
 manuscript tables in `capsul_paper/capsul_manuscript.tex` (lines 499-660+),
 number by number, not sampled. Zero discrepancies found — Claim 2's
 manuscript tables are current and correct, unlike Claim 3's T3.1/T3.4
-tables which needed correction this session (see `refer_paper_docs/claim3/`).
+tables which needed correction this session (see `docs/claim3/`).
 
 ## How the tables relate to each other
 

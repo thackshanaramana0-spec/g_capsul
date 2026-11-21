@@ -6,7 +6,7 @@ Purpose: `mechanism_insight_claim1.md` covers Claim 1's DNA-sequence stream
   quality as a single passing table row ("Full columns — SPRING-derived
   tokenizer; vendored fqzcomp"). This file is the missing depth: how the
   names tokenizer, the quality coder, and line 3 actually work, condensed
-  and verified against `docs/TECHNICAL_ARCHITECTURE.md` §5-6 (the project's
+  and verified against `docs/technical_architecture.md` §5-6 (the project's
   own from-scratch reference), not rewritten from memory.
 When to refer to this file: Writing the Materials and Methods description
   of the full 4-column FASTQ reconstruction (sequence + names + quality +
@@ -29,7 +29,7 @@ sequence-only number.
 
 ## Names — `include/names_coder.h`, namespace `nmc`
 
-**Tokenizer**: ported from SPRING's real algorithm (`id_compression.cpp`,
+**Tokenizer**: ported from SPRING's real algorithm (the ID-compression experiment,
 read line by line, not inferred). Each FASTQ header is split left-to-right
 into typed tokens by character class, and each token is compared
 positionally against the same slot in the *previous* read's header — a
@@ -135,7 +135,7 @@ whole file**. Case (c) is not yet supported, and the archive is checked
 
 ## A real, fixed bug found by testing all three claims' features together
 
-Verified against `docs/FINAL_ALGORITHMIC_SCAN.md` (2026-09-03). Every
+Verified against the final algorithmic scan (2026-09-03). Every
 per-claim test built its own archive with only its own claim's flags set;
 none had exercised `CAPS_NAMES=1 CAPS_QUAL=1` through the *recommended*
 compression path (`encode_adaptive.sh`'s candidate sweep) together with a

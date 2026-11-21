@@ -4,7 +4,7 @@
 #
 #  Design rules this script obeys:
 #   * ONE TIMED JOB AT A TIME. Concurrency corrupts wall time and peak RAM,
-#     which are published numbers (BTR_NOTES.md rule 3). Nothing here runs in
+#     which are reported in the paper. Nothing here runs in
 #     parallel with anything else that is being measured.
 #   * SPEED AND RAM come from /usr/bin/time -v (wall clock + VmHWM). Never
 #     estimated, never derived from a log timestamp.
@@ -14,11 +14,11 @@
 #   * RESULTS ARE WRITTEN AS THEY HAPPEN. A crash at dataset 15 keeps 1-14.
 #   * FAILURE OF ONE DATASET IS NOT FAILURE OF THE RUN: retry once, then
 #     record FAILED and continue. The single exception is a LOSSY archive,
-#     which halts everything (BTR_NOTES.md rule 5) -- that is a correctness bug,
+#     which halts everything -- that is a correctness bug,
 #     not a flaky run.
 #
 #  usage:
-#    bash scripts/benchmark_scripts/benchmark_1_run.sh                 # everything, ~9-12 h
+#    bash scripts/benchmark_scripts/benchmark_1_run.sh                 # all six manuscript tables
 #    SANITY_ONLY=1 bash scripts/benchmark_scripts/benchmark_1_run.sh   # 1 dataset, measured rate
 #    PHASES=1,3    bash scripts/benchmark_scripts/benchmark_1_run.sh   # selected phases
 #
@@ -26,10 +26,12 @@
 #    OUT_DIR       results dir              [results/benchmark_1_<timestamp>]
 #    HEARTBEAT_MIN minutes between "still alive" lines            [15]
 #    SANITY_ONLY   run only the first dataset of phase 1           [unset]
-#    PHASES        comma list of phases to run                     [1,2,3]
+#    PHASES        comma list of phases to run                     [1,2,3,4]
+#                  phase 4 = T3.4 exact-match recall + T3.5 locus retrieval
+#                  (manuscript Tables 5 and 6); PHASES=4 runs only that phase
 # ═══════════════════════════════════════════════════════════════════════════
 set -u
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; cd "$HERE"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"; cd "$HERE"
 source "$HERE/scripts/benchmark_scripts/capsule_config.sh" 2>/dev/null || true
 
 STAMP=$(date +%Y%m%d_%H%M%S)
@@ -37,7 +39,7 @@ OUT_DIR="${OUT_DIR:-$HERE/results/benchmark_1_$STAMP}"
 mkdir -p "$OUT_DIR"
 LOG="$OUT_DIR/run.log"
 HEARTBEAT_MIN="${HEARTBEAT_MIN:-15}"
-PHASES="${PHASES:-1,2,3}"
+PHASES="${PHASES:-1,2,3,4}"
 DATA_DIR="${CAPSULE_DATA_DIR:-/data/fastq}"
 REFS="${CAPSULE_REFS_DIR:-$HOME/refs}"
 TRUTH="${CAPSULE_TRUTH_DIR:-$HOME/giab_truth}"
@@ -46,8 +48,7 @@ BEST="$BIN_DIR/best106"; DEC="$BIN_DIR/capsule_decode"
 NPROC=$(nproc)
 # DiscoSNP++ ships as a shell script in its own tree and its runner resolves
 # `run_discoSnp++.sh` through PATH. The file existing is NOT enough -- this
-# project has lost a competitor arm to exactly that before (see
-# docs/INVOCATION_ERRORS.md), and it fails as "no SNV line", which looks like a
+# project has lost a competitor arm to exactly that before, and it fails as "no SNV line", which looks like a
 # scoring problem rather than a missing tool.
 [ -d "$HOME/DiscoSnp" ] && export PATH="$HOME/DiscoSnp:$PATH"
 T_RUN_START=$(date +%s)
@@ -120,7 +121,7 @@ trap 'stop_heartbeat' EXIT INT TERM
 # ── CSVs, written incrementally ───────────────────────────────────────────
 # ── projection from benchmark_0, so a wrong number is visible at minute 19
 # and not at hour 9. Absent file = projections simply not shown; never fatal,
-# and never used to judge a result (BTR_NOTES.md rule 6: measured wins).
+# and never used to judge a result (a measured number always wins over a projection).
 PROJ_F="${PROJ_FILE:-$HERE/results/BENCHMARK_0_PROJECTION.tsv}"
 proj_ds(){   # $1=accession -> "ours_c ours_d spring_c geno_c", empty if unknown
     [ -s "$PROJ_F" ] || return 0
@@ -140,10 +141,10 @@ CSV4="$OUT_DIR/claim2_T2.2_coverage_sweep.csv"
 CSV5="$OUT_DIR/claim2_T2.3_indel.csv"
 CSV6="$OUT_DIR/claim2_T2.4_multiallelic.csv"
 CSV7="$OUT_DIR/claim2_T2.5_tetraploid.csv"
-CSV8="$OUT_DIR/claim3_T3.4_locus_fidelity.csv"
+CSV8="$OUT_DIR/claim3_T3.5_locus_fidelity_100site.csv"
 echo "individual,depth_x,reads,archive_bytes,tp,fp,fn,precision,recall,f1,wall_s,peak_ram_kb,status" > "$CSV4"
 echo "individual,tool,tp,fp,fn,precision,recall,f1,wall_s,peak_ram_kb,status" > "$CSV5"
-echo "individual,region,truth_multiallelic_sites,capsule_anycall,disco_anycall,capsule_both_alleles,disco_both_alleles,capsule_rate,disco_rate,wall_s,peak_ram_kb,status" > "$CSV6"
+echo "individual,region,truth_multiallelic_sites,truth_snv_only_sites,capsule_anycall,disco_anycall,capsule_both_alleles,disco_both_alleles,capsule_rate,disco_rate,wall_s,peak_ram_kb,status" > "$CSV6"
 echo "pair,ploidy,region,tool,class,tp,fp,fn,precision,recall,f1,wall_s,peak_ram_kb,status" > "$CSV7"
 echo "individual,sites,coord_both,coord_one,coord_none,content_both,content_one,content_none,ref_reads,alt_reads,status" > "$CSV8"
 
@@ -280,9 +281,8 @@ phase1_one(){                      # $1 = dataset name ; returns 1 on failure
 losscmp_plain(){
     # THE '+' LINE IS NORMALISED ON BOTH SIDES. SPRING drops the optional ID
     # after '+', which the FASTQ spec makes redundant (it must repeat line 1),
-    # so a raw comparison reports LOSSY for a tool that lost no data. BTR_NOTES.md
-    # specifies this normalisation so the SPRING comparison is fair on DATA
-    # recovery. Verified on SRR29296997: raw compare differs only in that
+    # so a raw comparison reports LOSSY for a tool that lost no data. Normalising
+    # both sides makes the SPRING comparison fair on DATA recovery. Verified on SRR29296997: raw compare differs only in that
     # field; normalised, it is byte-identical.
     local orig="$1" dec="$2"
     [ -s "$dec" ] || { echo "LOSSY(no-output)"; return; }
@@ -494,7 +494,7 @@ run_phase2(){
     # are subsampled, re-compressed, and called from the resulting archive by
     # exactly the path T3 uses, so the only variable is depth.
     #
-    # HG002_pooled.fq is standardised to 30x (DATASET_LOCKED.md), so the
+    # HG002_pooled.fq is standardised to 30x (docs/extras/NEW_DATASET_LOCKED.md), so the
     # fraction for a target depth is target/30 -- a formula over a declared
     # property of the input, not a fitted constant. 30x itself is not re-run:
     # it IS the T3 row, and re-running it would spend 6 minutes to reproduce a
@@ -552,7 +552,7 @@ run_phase2(){
     fi
 
     # ═══ T2.4 — MULTI-ALLELIC, and T2.5 — TETRAPLOID ═══════════════════════
-    # Both are locked parts of Claim 2 (docs/CLAIM2_TABLES_AND_INDEL_SCAN.md)
+    # Both are locked parts of Claim 2 (docs/claim2/overview_claim2.md)
     # and both had working runners that this benchmark never called, so a full
     # sweep produced 6 of the 8 tables and looked complete.
     #
@@ -566,7 +566,12 @@ run_phase2(){
         # ---- T2.4 multi-allelic (one diploid individual's own GT=1/2 sites) ----
         mark "T2.4 multi-allelic"
         banner "T2.4 — multi-allelic sites recovered"
-        local MA_IND="${T24_IND:-HG002}" MA_REG="${T24_REGION:-20:1000000-6000000}" mad
+        # The published figure (17/26, manuscript text) is a census of the WHOLE
+        # chromosome: 26 SNV-only multi-allelic truth sites on chr20, re-derived
+        # and re-run three times (see docs/claim2/t24_multiallelic_claim2.md). A 5 Mb
+        # window gives a different denominator and is what produced the
+        # withdrawn number, so the default is the full chromosome.
+        local MA_IND="${T24_IND:-HG002}" MA_REG="${T24_REGION:-20:1-63025520}" mad
         mad="$OUT_DIR/c2_T2.4_${MA_IND}"
         if /usr/bin/time -v bash "$HERE/scripts/claim2_scripts/run_multiallelic_bench_capsule.sh" \
               "$BEST" "$HERE/scripts" "$REFS/chr20.fa" "$MA_IND" "$MA_REG" "$mad" \
@@ -579,22 +584,27 @@ run_phase2(){
             # for continuity. They disagree in DIRECTION on real data
             # (anycall 6 vs 15 = loss; strict 5 vs 0 = win), so recording only
             # one of them would be a choice, not a measurement.
-            local CS DS
+            local CS DS NS
             CS=$(grep -aoP 'CAPSULE\s+both-allele sites: \K[0-9]+' "$mad.log" | tail -1)
             DS=$(grep -aoP 'DiscoSNP\+\+ both-allele sites: \K[0-9]+' "$mad.log" | tail -1)
+            # The strict both-allele metric is scored over the SNV-only subset
+            # (a base comparison cannot score an indel allele), so its
+            # denominator is that subset -- 26 on chr20 -- not all NT
+            # multi-allelic sites. Using NT gave 17/952 instead of 17/26.
+            NS=$(grep -aoP 'CAPSULE\s+both-allele sites: [0-9]+ / \K[0-9]+' "$mad.log" | tail -1)
             tvm=$(parse_time_v "$mad.log"); wm=${tvm% *}; hm=${tvm#* }
-            if [ -n "${NT:-}" ] && [ -n "${CH:-}" ]; then
-                ok "T2.4  strict both-allele: CAPSULE ${CS:-?}/$NT  DiscoSNP++ ${DS:-NOT_RUN}/$NT   (anycall proxy $CH vs ${DH:-NOT_RUN})"
-                checkpoint "T2.4 multi-allelic done -- $CH/$NT vs ${DH:-0}/$NT"
-                printf "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,DONE\n" "$MA_IND" "$MA_REG" "$NT" \
+            if [ -n "${NT:-}" ] && [ -n "${CH:-}" ] && [ -n "${NS:-}" ]; then
+                ok "T2.4  strict both-allele: CAPSULE ${CS:-?}/$NS  DiscoSNP++ ${DS:-NOT_RUN}/$NS   (anycall proxy $CH vs ${DH:-NOT_RUN} of $NT)"
+                checkpoint "T2.4 multi-allelic done -- ${CS:-?}/$NS vs ${DS:-0}/$NS"
+                printf "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,DONE\n" "$MA_IND" "$MA_REG" "$NT" "$NS" \
                     "$CH" "${DH:-NOT_RUN}" "${CS:-}" "${DS:-NOT_RUN}" \
-                    "$(awk -v a=${CS:-0} -v n=${NT:-1} 'BEGIN{printf "%.3f",(n?a/n:0)}')" \
-                    "$(awk -v a=${DS:-0} -v n=${NT:-1} 'BEGIN{printf "%.3f",(n?a/n:0)}')" \
+                    "$(awk -v a=${CS:-0} -v n=${NS:-1} 'BEGIN{printf "%.3f",(n?a/n:0)}')" \
+                    "$(awk -v a=${DS:-0} -v n=${NS:-1} 'BEGIN{printf "%.3f",(n?a/n:0)}')" \
                     "$wm" "$hm" >> "$CSV6"
             else err "T2.4: could not parse counts"; debug_dump "T2.4" "$mad.log"
-                 printf "%s,%s,,,,,,,,,,PARSE_FAILED\n" "$MA_IND" "$MA_REG" >> "$CSV6"; fi
+                 printf "%s,%s,,,,,,,,,,,PARSE_FAILED\n" "$MA_IND" "$MA_REG" >> "$CSV6"; fi
         else err "T2.4 runner failed"; debug_dump "T2.4" "$mad.log"
-             printf "%s,%s,,,,,,,,,,FAILED\n" "$MA_IND" "$MA_REG" >> "$CSV6"; fi
+             printf "%s,%s,,,,,,,,,,,FAILED\n" "$MA_IND" "$MA_REG" >> "$CSV6"; fi
 
         # ---- T2.5 tetraploid (two real diploids concatenated, Cooke 2022) ----
         mark "T2.5 tetraploid"
@@ -762,7 +772,7 @@ run_phase3(){
         fi
         inf "[$i/$n] $DS done in $(( $(date +%s) - t0 ))s   (elapsed $(_el))"
     done
-    # ═══ T3.4 — LOCUS RETRIEVAL FIDELITY ═══════════════════════════════════
+    # ═══ T3.5-fidelity — LOCUS RETRIEVAL FIDELITY ═══════════════════════════════════
     # T3.1-T3.3 measure what retrieval COSTS. This measures whether what comes
     # back is USABLE. A het locus is not one place in a compression-optimal
     # pseudogenome -- it is N parallel contigs -- so a COORDINATE returns one
@@ -771,22 +781,22 @@ run_phase3(){
     # archive and the same GIAB sites, so nothing else can explain the gap.
     # Correctness only: no timing is recorded and the queries run in parallel.
     if [ -s "$ARCH_DIR/HG002.capsule" ] && [ -s "$REFS/chr20.fa" ]; then
-        mark "T3.4 locus fidelity"
-        banner "T3.4 — locus retrieval fidelity (coordinate vs content)"
-        local t34d="$OUT_DIR/c3_T3.4"
+        mark "T3.5-fidelity locus fidelity"
+        banner "T3.5-fidelity — locus retrieval fidelity (coordinate vs content)"
+        local t34d="$OUT_DIR/c3_T3.5_fidelity"
         if bash "$HERE/scripts/claim3_scripts/run_locus_fidelity.sh" "$DEC" "$ARCH_DIR/HG002.capsule" \
               "$REFS/chr20.fa" HG002 "$t34d" "${T34_N:-100}" > "$t34d.log" 2>&1; then
             local row; row=$(grep -a '^T34,' "$t34d.log" | tail -1)
             if [ -n "${row:-}" ]; then
                 printf "%s,DONE\n" "${row#T34,}" >> "$CSV8"
-                ok "T3.4  $(grep -a 'content recovers both' "$t34d.log" | tail -1)"
-                checkpoint "T3.4 locus fidelity done"
-            else err "T3.4: no result row"; debug_dump "T3.4" "$t34d.log"
+                ok "T3.5-fidelity  $(grep -a 'content recovers both' "$t34d.log" | tail -1)"
+                checkpoint "T3.5-fidelity locus fidelity done"
+            else err "T3.5-fidelity: no result row"; debug_dump "T3.5-fidelity" "$t34d.log"
                  printf "HG002,,,,,,,,,,NO_RESULT\n" >> "$CSV8"; fi
-        else err "T3.4 runner failed"; debug_dump "T3.4" "$t34d.log"
+        else err "T3.5-fidelity runner failed"; debug_dump "T3.5-fidelity" "$t34d.log"
              printf "HG002,,,,,,,,,,FAILED\n" >> "$CSV8"; fi
     else
-        inf "SKIP T3.4: needs the HG002 archive and chr20.fa"
+        inf "SKIP T3.5-fidelity: needs the HG002 archive and chr20.fa"
     fi
 
     checkpoint "PHASE 3 COMPLETE"
@@ -794,9 +804,50 @@ run_phase3(){
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
+#  PHASE 4 — T3.4 exact-match recall and T3.5 heterozygous locus retrieval
+#  (manuscript Tables 5 and 6). Part of the default PHASES. It streams four ~300x
+#  GIAB BAMs over the network and needs samtools, tabix, curl and python3.
+#  Run it alone with  PHASES=4 . Needs only the built binaries, not the archives
+#  of phases 1-3: every individual is re-encoded from its own chr20 window.
+#  env: T34_LO / T34_HI window [3000000 / 3600000], T34_SITES max sites [400]
+# ═══════════════════════════════════════════════════════════════════════════
+run_phase4(){
+    banner "PHASE 4 — CLAIM 3 locus addressability: T3.4 exact-match recall, T3.5 locus retrieval"
+    local lo="${T34_LO:-3000000}" hi="${T34_HI:-3600000}" ns="${T34_SITES:-400}" ind d row
+    CSV9="$OUT_DIR/claim3_T3.4_exact_match_recall.csv"
+    CSV10="$OUT_DIR/claim3_T3.5_locus_retrieval.csv"
+    echo "individual,region,sites,exact_recall_archive,exact_recall_archive_fm_index,source,status" > "$CSV9"
+    echo "individual,region,sites,locus_archive_both_alleles,locus_archive_fm_index_both_alleles,negctl_fp_archive_of_400,negctl_fp_archive_fm_index_of_400,source,status" > "$CSV10"
+    for ind in $C2_SETS; do
+        mark "T3.4/T3.5 $ind"
+        d="$OUT_DIR/c3_locus_$ind"
+        inf "T3.4/T3.5 — $ind chr20:$lo-$hi"
+        if bash "$HERE/scripts/claim3_scripts/run_locus_retrieval_capsule.sh" "$ind" "$lo" "$hi" "$d" "$ns" > "$d.log" 2>&1; then
+            row=$(tail -n 1 "$d/locus_retrieval_${ind}_${lo}_${hi}.csv")
+            # runner columns: 1 ind,2 region,3 reads,4 pg_bp,5 archive_B,6 sites,7 loc_archive,
+            #   8 loc_fm_index,9 fp_archive,10 fp_fm_index,11 recall_archive,12 recall_fm_index
+            echo "$row" | awk -F, '{printf "%s,%s,%s,%s,%s,run_locus_retrieval_capsule.sh,MEASURED\n",$1,$2,$6,$11,$12}' >> "$CSV9"
+            echo "$row" | awk -F, '{printf "%s,%s,%s,%s,%s,%s,%s,run_locus_retrieval_capsule.sh,MEASURED\n",$1,$2,$6,$7,$8,$9,$10}' >> "$CSV10"
+            ok "T3.4/T3.5  $ind  $row"
+            checkpoint "T3.4/T3.5 $ind done"
+        else
+            err "T3.4/T3.5 $ind runner failed"; debug_dump "T3.4/T3.5 $ind" "$d.log"
+            echo "$ind,chr20:$lo-$hi,,,,run_locus_retrieval_capsule.sh,FAILED" >> "$CSV9"
+            echo "$ind,chr20:$lo-$hi,,,,,,run_locus_retrieval_capsule.sh,FAILED" >> "$CSV10"
+            # counted like a phase-1 dataset failure, so the run's exit status
+            # and the final summary cannot report success with a table missing
+            N_FAIL=$((N_FAIL+1)); FAILED_LIST="$FAILED_LIST T3.4/T3.5:$ind"
+        fi
+    done
+    checkpoint "PHASE 4 COMPLETE"
+    banner "PHASE 4 COMPLETE  ->  $CSV9  and  $CSV10"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
 case ",$PHASES," in *,1,*) run_phase1;; esac
 case ",$PHASES," in *,2,*) run_phase2;; esac
 case ",$PHASES," in *,3,*) run_phase3;; esac
+case ",$PHASES," in *,4,*) run_phase4;; esac
 stop_heartbeat
 
 banner "BENCHMARK 1 COMPLETE"
@@ -810,8 +861,9 @@ say "  T2.2  (Claim 2): $CSV4"
 say "  T2.3  (Claim 2): $CSV5"
 say "  T2.4  (Claim 2): $CSV6"
 say "  T2.5  (Claim 2): $CSV7"
-say "  T3.4  (Claim 3): $CSV8"
-say "  T6    (Claim 3): $CSV3"
+say "  T3.1-T3.3 (Claim 3): $CSV3"
+say "  T3.5-fidelity  (Claim 3): $CSV8"
+case ",$PHASES," in *,4,*) say "  T3.4  (Claim 3): ${CSV9:-}"; say "  T3.5  (Claim 3): ${CSV10:-}";; esac
 say "  archives kept  : $ARCH_DIR  ($(du -sh "$ARCH_DIR" 2>/dev/null | cut -f1))"
 say "  full log       : $LOG"
 say ""
@@ -822,6 +874,10 @@ say ""; say "── CLAIM 2 — T2.3 het-indel ──";      column -s, -t "$CSV
 say ""; say "── CLAIM 2 — T2.4 multi-allelic ──";  column -s, -t "$CSV6" 2>/dev/null | tee -a "$LOG"
 say ""; say "── CLAIM 2 — T2.5 tetraploid ──";     column -s, -t "$CSV7" 2>/dev/null | tee -a "$LOG"
 say ""; say "── CLAIM 3 ──"; column -s, -t "$CSV3" 2>/dev/null | head -30 | tee -a "$LOG"
-say ""; say "── CLAIM 3 — T3.4 locus retrieval fidelity ──"; column -s, -t "$CSV8" 2>/dev/null | tee -a "$LOG"
+say ""; say "── CLAIM 3 — T3.5-fidelity locus retrieval fidelity ──"; column -s, -t "$CSV8" 2>/dev/null | tee -a "$LOG"
+case ",$PHASES," in *,4,*)
+    say ""; say "── CLAIM 3 — T3.4 exact-match recall (Table 5) ──";  column -s, -t "$CSV9"  2>/dev/null | tee -a "$LOG"
+    say ""; say "── CLAIM 3 — T3.5 locus retrieval (Table 6) ──";     column -s, -t "$CSV10" 2>/dev/null | tee -a "$LOG";;
+esac
 rm -rf "$WD"
 [ "$N_FAIL" -eq 0 ] && exit 0 || exit 1

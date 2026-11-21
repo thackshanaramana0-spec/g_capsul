@@ -11,6 +11,13 @@
 //
 //  SEQUENCE  pure ACGT : [0][len_lo][len_hi][2-bit packed, 4 bases/byte]
 //            has non-ACGT: [1][the raw bases]
+//            Packing detail: A=0 C=1 G=2 T=3 (either case), base i sits in byte
+//            3+(i>>2) at bits 2*(i&3), i.e. the first base of each group of four
+//            is in the LOW bits. This is the opposite bit order from the archive
+//            sidecar's pseudogenome packing (decoder.cpp), which is a different
+//            format with a different reader. The length is two bytes, so a packed
+//            read is at most 65,535 bases (the encoder's scope check refuses
+//            reads over MAX_READ_LEN = 1023 long before this).
 //            The raw fallback exists because 2-bit packing cannot represent N,
 //            and mapping N to a real base invents k-mers that were never read.
 //
@@ -59,6 +66,8 @@ inline std::string pack_seq(const char* b, size_t nb){
     }
     return pk;
 }
+// One bit per base, set when phred (d[i]-33) >= qmin. Bit i&7 of byte i>>3
+// (least significant bit first), (nd+7)/8 bytes.
 inline std::string pack_qual(const char* d, size_t nd, int qmin){
     std::string packed((nd+7)/8, '\0');
     for(size_t i=0;i<nd;++i)
@@ -67,6 +76,10 @@ inline std::string pack_qual(const char* d, size_t nd, int qmin){
 }
 
 // Sequence -> the caller's packed form. Mirrors caps_caller.h::unpack_read.
+// Same format as pack_seq(const char*, size_t) above, written out a second time.
+// No caller uses it today (callers go through pack_seq(const std::string&), which
+// forwards to the range overload), so any change to the format must be made in
+// both or this one removed.
 inline std::string pack_seq_str(const std::string& b){
     bool pure = true;
     for(size_t i=0;i<b.size();++i){

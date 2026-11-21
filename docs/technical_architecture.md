@@ -4,7 +4,7 @@ Title: Technical Architecture — Container Format and the Assembly Pipeline
   (Rounds 1/2, Pigeonhole Mapping, MAXMAP Ramp, Second Region, MEM Self-Match)
 Purpose: The one file that explains HOW the pseudogenome and archive are
   actually built, layer by layer, independent of any single claim's
-  results. Condensed and verified against `docs/TECHNICAL_ARCHITECTURE.md`
+  results. Condensed and verified against `docs/technical_architecture.md`
   §1-2 (the project's own from-scratch architecture reference, written
   2026-09-02), not rewritten from memory.
 When to refer to this file: Explaining the encoder's mechanism to a reader
@@ -28,7 +28,7 @@ a sequence of self-identifying streams (name, length, payload). The decoder
 looks each one up by name rather than by position — adding a stream is
 additive and cannot shift any other stream's offset, a property an earlier
 positional format lacked (it broke silently once; see
-`docs/FAILURES_AND_REFUTED_IDEAS.md`). Header cost is ~300 B against archives
+the failures and refuted-ideas record). Header cost is ~300 B against archives
 of 2.6–150 MB (0.001–0.01% of archive size).
 
 ## Assembly: building the pseudogenome, in order
@@ -96,7 +96,7 @@ deleted.
 one — measured, not assumed.** `scripts/build_scripts/encode_adaptive.sh` tries several
 `(MAXMAP, MINOV)` candidates per encode and keeps whichever produces the
 smallest archive. Verified against the raw measurement data
-(`docs/GRID_COST_MEASURED.txt`, `docs/GRID2_COST_MEASURED.txt`, 14 real
+(the grid-cost measurements, the second grid-cost measurements, 14 real
 locked datasets, sizes 8.7 MB to 574 MB): widening the search from 4 points
 to 8 costs **+0.000% archive size on 10 of 14 datasets**, with the 4 real
 deviations tiny (SRR2584863 +0.012%, SRR40271341 +0.032%, SRR29296997

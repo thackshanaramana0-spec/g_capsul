@@ -15,7 +15,7 @@
 #  Exit: 0 = GO, 1 = NO-GO (a required item is missing/broken)
 # ═══════════════════════════════════════════════════════════════════════════
 set -u
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$HERE"
 OUT="${1:-$HERE/results/BENCHMARK_0_STATUS.txt}"
 mkdir -p "$(dirname "$OUT")"
@@ -115,7 +115,7 @@ chk_path "kmer2snp->VCF"   "$HERE/scripts/claim2_scripts/kmer2snp_sam_to_vcf.py"
 # full sweep produced 6 of 8 tables and still printed COMPLETE.
 chk_path "T2.4 multi-allelic runner" "$HERE/scripts/claim2_scripts/run_multiallelic_bench_capsule.sh" req
 chk_path "T2.5 tetraploid runner"    "$HERE/scripts/claim2_scripts/run_tetraploid_bench_capsule.sh" req
-chk_path "T2.5 truth builder"        "$HERE/scripts/claim2_scripts/build_tetraploid_truth.py" req
+chk_path "T2.5 truth builder (v2)"   "$HERE/scripts/claim2_scripts/build_tetraploid_truth_v2.py" req
 chk_cmd  "seqtk (T2.2 subsampling)"  seqtk req
 chk_cmd  "bcftools"                  bcftools req
 chk_cmd  "tabix"                     tabix req
@@ -124,6 +124,22 @@ chk_path "SPAdes"         "$HOME/SPAdes-4.0.0-Linux/bin/spades.py" req
 chk_cmd  "bwa"            bwa        req
 chk_cmd  "samtools"       samtools   req
 chk_cmd  "mosdepth"       mosdepth   req
+# Phase 4 (manuscript Tables 5 and 6): exact-match recall and locus retrieval.
+# It streams the GIAB BAMs and VCFs and a UCSC reference slice, so the network
+# is a dependency like any tool: an unreachable host would otherwise surface
+# hours in as a FAILED row.
+say "  -- Claim 3 phase 4 (Tables 5 and 6) --"
+chk_cmd  "curl"           curl       req
+chk_cmd  "python3"        python3    req
+chk_cmd  "xargs"          xargs      req
+chk_path "T3.4/T3.5 runner" "$HERE/scripts/claim3_scripts/run_locus_retrieval_capsule.sh" req
+chk_path "T3.5 scorer"      "$HERE/scripts/claim3_scripts/score_locus_retrieval.py" req
+chk_path "T3.4 scorer"      "$HERE/scripts/claim3_scripts/score_exact_match_recall.py" req
+for _u in "https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/" \
+          "https://api.genome.ucsc.edu/list/genomes"; do
+    if curl -sS -o /dev/null -I --max-time 20 "$_u" 2>/dev/null; then pass "reachable" "$_u"
+    else fail "unreachable" "$_u — phase 4 streams its data from here"; fi
+done
 say "  -- build toolchain --"
 chk_cmd "g++"             g++        req
 chk_cmd "/usr/bin/time"   /usr/bin/time req
@@ -143,6 +159,15 @@ say "  building decoder (capsule_decode) ..."
 if bash "$HERE/scripts/build_scripts/build_decode.sh" "$DEC" >/tmp/_b0_dec.log 2>&1 && [ -x "$DEC" ]; then
     pass "decoder builds"   "$DEC ($(stat -c%s "$DEC" | awk '{printf "%.1f MB", $1/1048576}'))"
 else fail "decoder build"   "see /tmp/_b0_dec.log"; tail -5 /tmp/_b0_dec.log | sed 's/^/         /' | tee -a "$OUT"; fi
+# Tables 5 and 6 rest on the FM-index (include/caps_fmi.h). Its self-test
+# checks the suffix-array construction against a naive sort and every read
+# lookup against a brute-force scan, so a broken index is a NO-GO here rather
+# than a wrong table hours into the run.
+say "  building + running FM-index self-test ..."
+if g++ -O2 -std=c++17 -I"$HERE/include" -o "$BIN_DIR/fmi_selftest" "$HERE/tests/fmi_selftest.cpp" >/tmp/_b0_fmi.log 2>&1 \
+   && "$BIN_DIR/fmi_selftest" >>/tmp/_b0_fmi.log 2>&1; then
+    pass "FM-index self-test" "$(grep -a 'pattern queries' /tmp/_b0_fmi.log | sed 's/^\[selftest\] //')"
+else fail "FM-index self-test" "see /tmp/_b0_fmi.log"; tail -5 /tmp/_b0_fmi.log | sed 's/^/         /' | tee -a "$OUT"; fi
 
 # ── 4. DATASETS ───────────────────────────────────────────────────────────
 hdr "4. DATASETS — 19 total (15 non-human + 4 GIAB human)"
@@ -338,7 +363,7 @@ say "               -> rtg vcfeval against GIAB truth"
 say "      tables: T2.1 het-SNV F1 (3-way, all 4 sets)"
 say "              T2.2 coverage sweep 10/15/20/30x (HG002; 30x carried from T2.1)"
 say "              T2.3 het-indel F1, ours vs DiscoSNP++ (Kmer2SNP is SNP-only)"
-say "              T2.4 multi-allelic sites recovered (one diploid GT=1/2 window)"
+say "              T2.4 multi-allelic sites recovered (HG002 GT=1/2, whole chr20: 26 SNV-only)"
 say "              T2.5 tetraploid SNV+indel, two real diploids (Cooke 2022)"
 say "      est: see the PROJECTION below"
 say ""
@@ -348,6 +373,12 @@ say "      T3.2 coverage vs bwa+samtools+mosdepth — same 6"
 say "      T3.3 query    — ALL 19 (partial random access, reference-free coords)"
 say "      est: see the PROJECTION below"
 say ""
+say "  PHASE 4 — Claim 3: 4 GIAB individuals, chr20:3.0-3.6 Mb, re-encoded from the BAMs"
+say "      per individual: encode -> lossless gate -> index (sidecar + FM-index)"
+say "                      -> bilateral probes at het SNVs and homozygous controls"
+say "      tables: T3.4 exact-match recall (manuscript Table 5)"
+say "              T3.5 het locus retrieval, 1,452 sites in total (manuscript Table 6)"
+say ""
 say "  Peak transient disk ~35 GB, peak RAM ~20 GB."
 
 # ── 8b. PROJECTION ────────────────────────────────────────────────────────
@@ -356,8 +387,7 @@ say "  Peak transient disk ~35 GB, peak RAM ~20 GB."
 # while a 6-9 h job crawls, and so a wrong number is visible early instead of
 # at the end.
 #
-# BTR_NOTES.md rule 6: projections are SANITY CHECKS ONLY. Fresh server numbers
-# are authoritative. Never reject a measured result because it disagrees here.
+# Projections are SANITY CHECKS ONLY. Fresh server numbers are authoritative. Never reject a measured result because it disagrees here.
 #
 # BASIS -- all measured on THIS box, idle, one tool at a time, 2026-09-08,
 # with the same CLAIMS=1 methodology benchmark_1 uses:
@@ -425,12 +455,24 @@ say "               pseudogenome coordinate with no reference -- state it that w
 say "    - dominated by the SPAdes baselines, NOT by us: SPAdes on HG002 alone"
 say "      took 2675.80 s against our 5.49 s. Budget ~2 h for the 6 baselines."
 say ""
-TOT_H=$(awk -v p="$P1_ALL" 'BEGIN{printf "%.1f",(p+7920+7200)/3600}')
+say "  PHASE 4 projected (4 GIAB individuals, chr20:3.0-3.6 Mb, measured 2026-11-20):"
+say "    - T3.4 exact-match recall, archive:            0.8536 / 0.8457 / 0.8099 / 0.6047"
+say "      archive + FM-index:                          1.0000 on all four (at tolerance 0 and 3)"
+say "    - T3.5 het sites admitted:                     400 / 335 / 400 / 317  (1,452 in total)"
+say "      both alleles recovered, archive + FM-index:  all 1,452"
+say "      homozygous-control hits, archive + FM-index: 48 / 52 / 49 / 87 of 400"
+say "    - FM-index 0.9-2.6 MB per individual, built in under 2 s from the archive"
+say "    - per individual: BAM window fetch + encode + index + 1,600 archive"
+say "      queries (each decodes the archive, ~2-4 min) + FM-index queries (~15 s)."
+say "      Budget ~1 h for the four; network speed to NCBI dominates."
+say ""
+TOT_H=$(awk -v p="$P1_ALL" 'BEGIN{printf "%.1f",(p+7920+7200+3600)/3600}')
 hb "TOTAL projected" "~${TOT_H} h sequential"
 { printf "PHASE1_ALL_S\t%s\n" "$P1_ALL"
   printf "PHASE1_OURS_S\t%s\n" "$P1_OURS"
   printf "PHASE2_S\t7920\n"
   printf "PHASE3_S\t7200\n"
+  printf "PHASE4_S\t3600\n"
   printf "TOTAL_H\t%s\n" "$TOT_H"; } >> "$PROJ"
 say ""
 hb "projection written" "$PROJ"

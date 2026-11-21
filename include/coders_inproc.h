@@ -1,11 +1,17 @@
 #pragma once
-// Stage 106: in-process coder wrappers. Same algorithms, same bytes, but
-// operating on memory buffers instead of files so the pipeline can run as a
-// single process with no intermediate files (PgRC2's architecture -- their
-// release build writes zero intermediates; see PGRC2_DISK_ARCHITECTURE.md).
-// The RangeEnc/RangeDec model code lives in the original coder sources; the
-// pieces needed for encoding are reproduced here in isolated namespaces so
-// the standalone binaries keep working unchanged.
+// In-process stream coders and the per-stream framing of the archive.
+//
+// Every coder here works on memory buffers, so the encoder runs as one process
+// with no intermediate files (PgRC2's release build also writes none). Contents:
+//   xz_compress, xz_compress_lzma     liblzma wrappers (preset 9, explicit lc/lp/pb)
+//   mmc::                             mismatch symbol coder: the observed base given the base it replaced
+//   refc::                            MEM source coder (the mem_triples stream) and its self-match flags
+//   mmpos_encode_buckets, _decode_    mismatch positions, bucketed by the read's mismatch count
+//   mmcnt_split, mmcnt_join           per-read mismatch counts as a zero-flag bitmap plus values
+//   best_encode, best_encode_chunked, const_or_encode    per-stream method selection and framing
+// The framing (method byte, constant marker, chunk table) is documented at
+// capsule_decode_stream() in src/decoder.cpp, which is its inverse. The PPMd7,
+// FSE and range coders the selector tries are in coders_entropy.h.
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
@@ -56,6 +62,7 @@ static std::vector<uint8_t> xz_compress(const void* data, size_t n, uint32_t pre
     out.resize(pos);
     return out;
 }
+// xz of a vector's raw bytes. Currently unused.
 template<class T>
 static std::vector<uint8_t> xz_compress_vec(const std::vector<T>& v, uint32_t preset=9){
     return xz_compress(v.data(), v.size()*sizeof(T), preset);
@@ -142,6 +149,9 @@ static double plane_entropy(const uint8_t* p, size_t n){
     return h;
 }
 
+// Transposes a uint32 array into byte planes: out[k*cnt+i] is byte k of value i,
+// with cnt = n/4. Any trailing n%4 bytes are dropped, so callers use it only when
+// n is a multiple of 4 (best_encode checks this before offering methods 5 and 6).
 static std::vector<uint8_t> u32_byteplanes(const uint8_t* d, size_t n){
     const size_t cnt=n/4;
     std::vector<uint8_t> out(cnt*4);
@@ -155,6 +165,9 @@ static std::vector<uint8_t> u32_byteplanes(const uint8_t* d, size_t n){
 // equivalent with its selector coders.
 //   0 = xz default, 1 = lzma lc2/lp2/pb2, 2 = byte-planes + xz,
 //   3 = byte-planes + lzma lc0/lp0/pb0
+// Currently unused. best_encode below covers the same candidates and is what the
+// archive uses. These method ids are NOT the ones capsule_decode_stream() reads,
+// so a stream coded here could not be decoded by it.
 static std::vector<uint8_t> xz_best_for_u32(const void* data, size_t n){
     std::vector<std::vector<uint8_t>> cand(4);
     cand[0] = xz_compress(data,n);
@@ -172,7 +185,17 @@ static std::vector<uint8_t> xz_best_for_u32(const void* data, size_t n){
     return out;
 }
 
-// ---------- mismatch symbol coder (from 50_mismatch_coder_real.cpp) ----------
+// ---------- mismatch symbol coder ----------
+// Codes the base OBSERVED in a read at each deviation, given the pseudogenome base
+// it replaced (`ref`). Because observed != ref, only three symbols are possible, so
+// each symbol is coded among those three with an adaptive frequency table kept
+// separately for each of the four ref bases (every frequency starts at 1, each
+// coded symbol adds 8, and the table is halved, keeping at least 1, when the total
+// would pass 65536). The decoder needs the identical ref sequence in the identical
+// order for its tables to track. ref is never stored: it is pg[read position +
+// offset], recomputed from the rebuilt pseudogenome. Coded form: raw range-coder
+// bytes, no header; the first byte is the initial carry (zero) and the decoder
+// skips it.
 namespace mmc {
 #include <cstdio>
 #include <cstdlib>
@@ -288,49 +311,23 @@ struct StreamDecoder {
 };
 } // namespace mmc
 
-// ---------- MEM-reference src coder (from 37_ref_coder.cpp) ----------
+// ---------- MEM-reference src coder ----------
 namespace refc {
-// Reference-stream coder: sources bounded by their own destination.
-//
-// Profiled per component at MINMEM 24, RC-only self-matching:
-//
-//   component     ours    bits/match      PgRC2   bits/match    delta
-//   sources    186,852         25.38    128,671        23.83  +58,181
-//   lengths     63,988          8.69     48,509         8.99  +15,479
-//   dest gaps   43,932          5.97          0            -  +43,932
-//
-// Two things that profile settles.
-//
-// The gap stream is NOT a loss. Their destination positions are in-band: a '%'
-// MATCH_MARK sits in the pg literal and rides along inside the VarLenDNA
-// codebook, which carries phrases like "T%", "AT%", "GG%". So the fair unit is
-// literal plus positions -- ours 2,985,570 + 43,932 = 3,029,502 against their
-// 3,056,474, and we are 26,972 AHEAD. An earlier note in this file called the
-// gap stream pure overhead they avoid; that was double-counting.
-//
-// Sources ARE the loss, and the reason is a varint. log2(23,233,953) = 24.47
-// bits is the naive floor and we spend 25.38, because a varint for values near
-// 23M needs four bytes. Theirs sits at 23.83 -- BELOW their own naive floor --
-// which means LZMA is finding structure in it.
-//
-// The structure is not subtle once looked for: in a self-match the source is
-// always earlier than the destination, and matches are stored in destination
-// order. So src is uniform in [0, dst), not in [0, pg_len), and coding it that
-// way costs log2(dst), which averages about 1.4 bits below log2(pg_len) for
-// destinations spread across the pg. That is ~23.0 bits/match, under what they
-// manage, and it needs no new information -- the decoder already knows dst when
-// it reads src.
-//
-// Cross-matches (survivor pg into main pg) are the one exception: there the
-// source lives in the main pg while the destination is past main_pg_end, so the
-// bound is main_pg_end rather than dst. The decoder can tell the two apart from
-// dst alone, so nothing extra is stored to distinguish them.
-//
-// Range coder is the same LZMA-style one used for the permutation in stage 23.
-// Round trip is verified before any size is reported.
-//
-//   g++ -O3 -march=native -o refc 37_ref_coder.cpp
-//   ./refc mem_triples.bin <pg_len> <main_pg_end>
+// Coder for the SOURCE position of each MEM reference (the mem_triples stream).
+// A reference is (dst, src, len, rc). dst, len and rc travel in their own streams
+// (mem_dstgap, mem_len, mem_rc), so this stream holds only src. References are
+// coded in destination order, each src uniform within a bound derived from its
+// own dst, which the decoder already knows when it reads src:
+//   self-match inside the main pg:           src is earlier than dst, so src in [0, dst)
+//   cross-match (source in the main pg, destination past main_pg_end):
+//                                            src in [0, main_pg_end)
+//   second-region self-match:                src coded relative to main_pg_end,
+//                                            flagged in the mem_self stream
+// Coding src in [0, dst) instead of [0, pg_len) costs log2(dst) bits, on average
+// about 1.4 bits fewer per match than log2(pg_len) when destinations are spread
+// across the pg. The measured per-component profile against PgRC2 (sources,
+// lengths, destination gaps, and why the gap stream is not a loss) is in
+// docs/extras/ENGINEERING_NOTES_CODERS.md.
 
 struct RangeEnc {
     std::vector<uint8_t> out; uint64_t low=0; uint32_t range=0xFFFFFFFFu;
@@ -392,6 +389,8 @@ static inline uint32_t bound_sel(uint32_t dst, bool self, uint64_t MAINEND){
     if(self){ uint32_t b=(uint32_t)((uint64_t)dst-MAINEND); return b?b:1; }
     return (uint64_t)dst<MAINEND ? (dst?dst:1) : (uint32_t)MAINEND;
 }
+// bound_sel() with the self flag derived from (dst, src). Currently unused:
+// encode() and decode() call bound_sel() with the flag they already hold.
 static inline uint32_t bound_for(uint32_t dst, uint32_t src, uint64_t MAINEND){
     return bound_sel(dst, (uint64_t)src>=MAINEND && (uint64_t)dst>=MAINEND, MAINEND);
 }
@@ -479,6 +478,9 @@ static std::vector<uint32_t> decode(const uint8_t* d, size_t n,
 // uniform. Measured on real P. aeruginosa: -13.5% at MAXMAP=12, -12.5% at
 // MAXMAP=40, on top of the reverse-offset coding already applied.
 // Fully invertible from the counts alone, which the archive already carries.
+// mmpos_bucket_transpose and mmpos_untranspose, which flatten all buckets into one
+// transposed stream, are currently unused. mmpos_encode_buckets (below) does the
+// bucketing itself, decides per bucket whether to transpose, and frames the result.
 static std::vector<uint8_t> mmpos_bucket_transpose(const std::vector<uint8_t>& pos,
                                                    const std::vector<uint16_t>& counts){
     std::map<uint16_t,std::vector<uint8_t>> buck;
@@ -496,7 +498,7 @@ static std::vector<uint8_t> mmpos_bucket_transpose(const std::vector<uint8_t>& p
     }
     return out;
 }
-// Inverse -- used by the encoder's own round-trip self-check and by any decoder.
+// Inverse of mmpos_bucket_transpose. Currently unused (see above).
 static std::vector<uint8_t> mmpos_untranspose(const std::vector<uint8_t>& t,
                                               const std::vector<uint16_t>& counts){
     std::map<uint16_t,size_t> nreads;
@@ -542,6 +544,8 @@ static bool mmcnt_split(const std::vector<uint16_t>& counts,
     if(nb) flags.push_back((uint8_t)(acc<<(8-nb)));
     return true;
 }
+// Inverse of mmcnt_split: rebuilds n counts from the flag bitmap and the dense
+// values (a flagged read takes the next value, an unflagged read is 0).
 static std::vector<uint16_t> mmcnt_join(const std::vector<uint8_t>& flags,
                                         const std::vector<uint8_t>& vals, size_t n){
     std::vector<uint16_t> out(n,0);
@@ -554,13 +558,13 @@ static std::vector<uint16_t> mmcnt_join(const std::vector<uint8_t>& flags,
 }
 
 // ---------- universal per-stream selector over the REAL coder set ----------
-// Until now "per-stream selection" only chose among xz/bzip2/zstd, which is
-// selection in name only. PgRC2 selects among PPMd, FSE/Huff0 and range
-// coders with per-position models (PropsLibrary.cpp getSelectorCoderProps).
-// This tries the same real set and keeps the smallest, with a 1-byte method
-// id so it stays decodable.
+// Tries the real coder set PgRC2's selector uses (PPMd, FSE/Huff0, range coders
+// with per-position models, PropsLibrary.cpp getSelectorCoderProps) plus xz, and
+// keeps the smallest, with a 1-byte method id so the result stays decodable.
 //   0 xz default | 1 xz lc2lp2pb2 | 2 ppmd5 | 3 fse | 4 range(period=1)
 //   5 byteplanes+xz | 6 byteplanes+lzma(0,0,0)
+// Method 7 (chunked) is added by best_encode_chunked, and the 0xC0 marker for a
+// constant stream by const_or_encode.
 static std::vector<uint8_t> encode_method(const uint8_t* d, size_t n, int m){
     switch(m){
         case 0: return xz_compress(d,n);
@@ -615,6 +619,7 @@ static std::vector<uint8_t> encode_method(const uint8_t* d, size_t n, int m){
 // encodes the full stream ONCE. Running all candidates at full length was
 // costing 10.0 s of an 18.7 s run, 6.69 s of it on pos_abs alone.
 static const size_t PROBE_MIN   = 1u<<16;   // 64 KB, their DEFAULT_MIN_PROBE_SIZE
+// Fraction of a stream used to choose its method (override: PROBE_FRAC).
 static double probe_frac(){
     const char* e = getenv("PROBE_FRAC");
     // PgRC2 uses 0.20. Measured on real files: 0.20 costs E. coli +50,149 B
@@ -625,6 +630,13 @@ static double probe_frac(){
     return e ? atof(e) : 0.40;
 }
 
+// Codes d[0..n) with the smallest candidate method and returns the framed result
+// [method:1][raw_len:8][payload] (empty when n is 0). The method is chosen on a
+// prefix of probe_frac() of the stream, at least PROBE_MIN bytes, and the whole
+// stream is then coded once with the winner. A stream no longer than the probe is
+// coded by every method in full and the smallest kept. u32shaped declares the data
+// to be a uint32 array, which also offers the byte-plane methods 5 and 6 when n is
+// a multiple of 4. If the chosen coder returns nothing, the stream falls back to xz.
 static std::vector<uint8_t> best_encode(const uint8_t* d, size_t n, bool u32shaped=false){
     if(!n) return {};
     std::vector<int> methods = {0,1,2,3,4};
@@ -682,7 +694,7 @@ static std::vector<uint8_t> best_encode(const uint8_t* d, size_t n, bool u32shap
 // Method 7 nests: each chunk is itself a complete best_encode output, so the
 // decoder needs no new per-method logic, only the chunk table.
 //
-//   [7][total_raw:8][nchunks:u32]  then per chunk [coded_len:u32][payload]
+//   [7][total_raw:8][nchunks:u32][coded_len:u32 x nchunks][chunk 0 payload][chunk 1 payload]...
 //
 // The split factor is DERIVED from the stream size, never fixed: chunking is a
 // loss on small streams (H. salinarum pos_abs is slower chunked, 0.67 -> 0.82 s
@@ -691,6 +703,8 @@ static std::vector<uint8_t> best_encode(const uint8_t* d, size_t n, bool u32shap
 static const size_t CHUNK_MIN   = 4u<<20;   // below this, splitting loses
 static const size_t CHUNK_TARGET= 2u<<20;   // aim for chunks about this size
 
+// Number of chunks for an n-byte stream: 1 below CHUNK_MIN, otherwise about
+// n / CHUNK_TARGET, at least 2 and at most the hardware thread count.
 static size_t chunk_count(size_t n){
     if(n < CHUNK_MIN) return 1;
     unsigned hw = std::thread::hardware_concurrency(); if(!hw) hw = 4;
@@ -749,9 +763,9 @@ static std::vector<uint8_t> best_encode_chunked(const uint8_t* d, size_t n,
         out.insert(out.end(),(uint8_t*)&L,(uint8_t*)&L+4); }
     for(auto& p:parts) out.insert(out.end(), p.begin(), p.end());
 
-    // Splitting costs bytes (context reset). Keep it only if it actually helps,
-    // measured against coding the stream whole -- otherwise this would trade
-    // size for speed silently.
+    // Splitting costs bytes (the coder context resets at each chunk) and this
+    // function does not compare against coding the stream whole. The trade is set
+    // once, by CHUNK_MIN: streams below it are never split, streams above it always are.
     return out;
 }
 
@@ -762,7 +776,7 @@ static std::vector<uint8_t> best_encode_chunked(const uint8_t* d, size_t n,
 //
 // This is detected, never assumed: variable-length input (SARS-CoV-2, <=221)
 // takes the normal path unchanged. The marker 0xC0 cannot collide with
-// best_encode's leading byte, which is a method id in 0..6, so the ordinary
+// best_encode's leading byte, which is a method id in 0..7, so the ordinary
 // path pays nothing.
 static const uint8_t CONST_MARKER = 0xC0;
 static std::vector<uint8_t> const_or_encode(const uint8_t* d, size_t n, size_t w,
@@ -795,12 +809,15 @@ static std::vector<uint8_t> mmpos_encode_buckets(const std::vector<uint8_t>& pos
         if(c){ auto& v=b[c]; v.insert(v.end(), pos.begin()+off, pos.begin()+off+c); }
         off += c;
     }
-    // Buckets were emitted back to back as [method][payload] with no count, no
-    // key and no payload length -- nothing marked where one ended, so the form
-    // was undecodable however good the coder. Framed now as
-    //   [nbuckets:u32] then per bucket [key:u16][raw:u32][method:u8][coded:u32][payload]
-    // 11 B per bucket. The key and raw length are derivable from the mismatch
-    // counts, but are stored so this stream can be decoded on its own terms.
+    // Frame: [nbuckets:u32], then per bucket
+    //   [key:u16 (the mismatch count)][raw:u32][method:u8][transposed:u8][coded:u32][payload]
+    // 12 B of header per bucket. The method ids are those of encode_method,
+    // restricted to 0, 2, 3 and 4, and for method 4 the range coder's period is
+    // the key. `transposed` says the bucket is stored column-major (see below).
+    // The key and raw length could be derived from the per-read mismatch counts
+    // but are stored so the stream can be decoded on its own. An earlier form wrote
+    // the buckets back to back with no count, key or length, so nothing marked where
+    // one ended and the stream could not be decoded at all.
     std::vector<uint8_t> out;
     auto put32=[&](uint32_t v){ out.insert(out.end(),(uint8_t*)&v,(uint8_t*)&v+4); };
     auto put16=[&](uint16_t v){ out.insert(out.end(),(uint8_t*)&v,(uint8_t*)&v+2); };
@@ -815,21 +832,11 @@ static std::vector<uint8_t> mmpos_encode_buckets(const std::vector<uint8_t>& pos
     //
     // Chosen per bucket by coding both and keeping the smaller, so a bucket
     // that does not benefit is unaffected -- the flag costs one byte.
-    // ── BUCKETS CODED IN PARALLEL ───────────────────────────────────────────
-    //
-    // MEASURED: this function is 1.58 s of a 2.13 s mm_pos job, and mm_pos is
-    // the coding pool's LONGEST job -- the pool runs at its Amdahl floor, so
-    // this loop alone sets the encoder's floor. It is a nested search: per
-    // bucket it builds two layouts and probes FOUR coders on each, all serial.
-    //
-    // Buckets are independent -- each reads only its own vector and produces
-    // its own record -- so they are coded concurrently and the RESULTS ARE
-    // EMITTED IN THE ORIGINAL std::map ORDER afterwards. Byte-identical output:
-    // same candidates, same smaller-wins rule, same emission order.
-    //
-    // Concurrency is bounded because each in-flight bucket holds an LZMA
-    // encoder state; buckets are few (one per distinct mismatch count) and the
-    // pool already has this thread, so the bound is deliberately modest.
+    // Buckets are independent, so they are coded concurrently (this loop was the
+    // longest job in the encoder's coding pool) and emitted afterwards in the
+    // original std::map order, which keeps the output byte-identical to serial
+    // coding. Concurrency is deliberately modest because each in-flight bucket
+    // holds an LZMA encoder state. Measurements: docs/extras/ENGINEERING_NOTES_CODERS.md.
     struct BRec { uint16_t c; uint32_t vsz; uint8_t bi, bt; std::vector<uint8_t> keep; };
     std::vector<BRec> recs(b.size());
     {

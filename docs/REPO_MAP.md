@@ -86,7 +86,7 @@ size-minimizing compressor produces.
 | Result data | `results/claim2/claim2_T2.1_snv.csv` (het-SNV), `claim2_T2.2_coverage_sweep.csv` (T2.2), `claim2_T2.3_indel.csv` (het-indel), `claim2_T2.4_multiallelic.csv` (T2.4), `claim2_T2.5_tetraploid.csv` (T2.5) |
 | Result plot source | `results/plots/claim2/make_claim2_t21_bar.py`, `make_claim2_t22_line.py` → `claim2_t21_snv_f1.{pdf,png,tif}`, `claim2_t22_coverage_sweep.{pdf,png,tif}` |
 | Docs — overview | `docs/claim2/overview_claim2.md` |
-| Docs — per-table detail | `docs/claim2/t21_snv_claim2.md`, `t22_coverage_sweep_claim2.md`, `t23_indel_claim2.md`, `t24_multiallelic_claim2.md`, `t25_tetraploid_claim2.md` |
+| Docs — per-table detail | `docs/claim2/t21_snv_claim2.md`, `docs/claim2/t22_coverage_sweep_claim2.md`, `docs/claim2/t23_indel_claim2.md`, `docs/claim2/t24_multiallelic_claim2.md`, `docs/claim2/t25_tetraploid_claim2.md` |
 | Docs — mechanism (allele-splitting, the ablation) | `docs/claim2/mechanism_insight_claim2.md` |
 | Docs — DiscoSNP++/Kmer2SNP architecture comparison | `docs/claim2/architecture_vs_discosnp_claim2.md` |
 | Docs — exact function/line references | `docs/claim2/code_mapping_claim2.md` |
@@ -97,18 +97,21 @@ size-minimizing compressor produces.
 
 **What it claims:** the same archive supports pseudogenome export, per-base
 coverage, coordinate-range query, exact-match retrieval (via an optional
-completion index), and locus retrieval at heterozygous sites (via bilateral
+FM-index built after compression), and locus retrieval at heterozygous sites (via bilateral
 upstream/downstream querying) — all without a second assembly or a
 reference genome.
 
 | Piece | Path |
 |---|---|
-| Figure | `Figures/Fig4.tif` — decoded representation → coverage / export / search (coordinate, sequence, completion-index) / heterozygous locus retrieval |
+| Figure | `Figures/Fig4.tif` — decoded representation → coverage / export / search (coordinate, sequence, FM-index) / heterozygous locus retrieval |
 | Decoder — export / coverage / query | `src/decoder.cpp` — `export`, `coverage`, `query`, and `index` modes |
 | Contig boundaries at encode time | `src/encoder.cpp` — `contig_spans` stream, gated by `CAPS_SPANS` |
-| Result data | `results/claim3/claim3_T3.1_T3.2_T3.3.csv` (export/coverage/range-query timing, all 19 datasets), `results/claim3/claim3_T3.4_locus_fidelity.csv` (original single-individual locus-fidelity trail; superseded numbers now cited from `docs/claim3/t35_locus_retrieval_claim3.md`, see below) |
+| FM-index (exact-match completion) | `include/caps_fmi.h` — suffix array (SA-IS), 2-bit BWT, rank checkpoints, backward search, save/load; hooked into `src/decoder.cpp` (`index` with `CAPS_FMI=1`, `query` with `CAPS_QUERY_CONTAIN=1`) |
+| FM-index tests | `tests/fmi_selftest.cpp` (against a naive sort and a brute-force scan), `tests/fmi_end_to_end.py` (8 synthetic archives built to break it); both run under `ctest` |
+| Table 5 / Table 6 runner | `scripts/claim3_scripts/run_locus_retrieval_capsule.sh`, scorers `score_exact_match_recall.py` and `score_locus_retrieval.py`; run for all four individuals by phase 4 of `scripts/benchmark_scripts/benchmark_1_run.sh` |
+| Result data | `results/claim3/claim3_T3.1_T3.2_T3.3.csv` (export/coverage/range-query timing, all 19 datasets), `results/claim3/claim3_T3.4_exact_match_recall.csv` and `claim3_T3.5_locus_retrieval.csv` (Tables 5 and 6), `results/claim3/claim3_T3.5_locus_fidelity_100site.csv` (original single-individual locus-fidelity trail; superseded numbers now cited from `docs/claim3/t35_locus_retrieval_claim3.md`, see below) |
 | Docs — overview | `docs/claim3/overview_claim3.md` |
-| Docs — per-table detail | `docs/claim3/t31_export_claim3.md`, `t32_coverage_claim3.md`, `t33_range_query_claim3.md`, `t34_exact_match_claim3.md`, `t35_locus_retrieval_claim3.md` |
+| Docs — per-table detail | `docs/claim3/t31_export_claim3.md`, `docs/claim3/t32_coverage_claim3.md`, `docs/claim3/t33_range_query_claim3.md`, `docs/claim3/t34_exact_match_claim3.md`, `docs/claim3/t35_locus_retrieval_claim3.md`, `docs/claim3/t34_t35_multi_individual_claim3.md` |
 | Docs — mechanism, novelty vs PgRC2/BEETL | `docs/claim3/mechanism_insight_claim3.md` |
 | Docs — exact function/line references | `docs/claim3/code_mapping_claim3.md` |
 
@@ -119,7 +122,7 @@ own table numbering is independent of this folder's numbering — it runs
 T3.1 through T3.5 in its own sequence, matching the same underlying five
 operations. `docs/numbers_and_verification_index.md` is the canonical
 source for the final, multi-individual T3.4/T3.5 numbers (1,452/1,452 with
-the completion index, 1,451/1,452 native).
+the FM-index, 1,451/1,452 by position alone).
 
 ---
 
@@ -128,13 +131,15 @@ the completion index, 1,451/1,452 native).
 | File | What it covers |
 |---|---|
 | `docs/central_insight_and_mechanism.md` | The one finding both Claim 2 and Claim 3 rest on: a size-minimizing compressor places the two alleles of a heterozygous site on disconnected pseudogenomic segments, which is why both calling and locus retrieval require reconciliation |
+| `docs/PROJECT_SCOPE.md` | What the tool does and can do, and exactly what input it accepts and refuses (checked against the source) |
 | `docs/technical_architecture.md` | Full architecture description independent of any single claim |
 | `docs/paper_overview.md` | How the paper's sections map onto the three claims |
 | `docs/numbers_and_verification_index.md` | The single canonical source for every final, locked number cited anywhere in this folder |
 | `docs/novelty_and_prior_art.md` | What is and is not novel relative to PgRC2, PgRC, Quip, BEETL-fastq, CIndex, sFASTQ, BFQzip, DiscoSNP++, Kmer2SNP |
 | `docs/honest_limitations_and_scope.md` | Every limitation and scope boundary that must appear in the paper's Discussion |
-| `docs/coverage_manifest.md` | Audit trail proving this folder's completeness against the project's full internal documentation |
-| `docs/extras/` | Background engineering history (PgRC2 reimplementation notes, layer-by-layer profiling, SOTA comparison tables, server setup, locked dataset list) — lower-priority context, not required to verify any single claim |
+| `docs/configuration_reference.md` | Every environment variable and positional argument the programs read, with defaults, taken from the source |
+| `docs/extras/` | Background engineering history (PgRC2 reimplementation notes, layer-by-layer profiling in `docs/extras/LAYER_BY_LAYER_ANALYSIS.md`, SOTA comparison tables, server setup, locked dataset list) — lower-priority context, not required to verify any single claim |
+| `docs/extras/ENGINEERING_NOTES_CODERS.md`, `docs/extras/ENGINEERING_NOTES_ENCODER.md` | Long measurements and rejected approaches that were condensed in the source comments, kept verbatim |
 
 ---
 
@@ -169,6 +174,11 @@ reproducible code+data+docs view, not the full development history.
   equivalent public path (for code and result CSVs) or reworded to say
   plainly that the source is internal and not published, rather than left
   pointing at a path that does not resolve in this repository.
+- **Internal notes named by title.** Some documents cite "the development
+  notes" or another note by title, with no path. Those are the project's
+  working record. They are not part of this repository, nothing in `docs/`
+  depends on reading them, and the result files in `results/` remain the
+  authoritative source for every number.
 
 ---
 

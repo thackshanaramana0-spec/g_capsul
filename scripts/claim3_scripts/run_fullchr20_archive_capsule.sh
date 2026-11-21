@@ -2,7 +2,7 @@
 # FULL-SCALE Claim 2 benchmark: whole chr20 at 30x, not a 400 kb window.
 #
 # WHY THIS EXISTS. Every Claim 2 number in the project so far
-# (docs/CLAIM2_FINAL_VERDICT.md, CLAIM2_TABLES_AND_INDEL_SCAN.md) was measured
+# (see docs/claim2/overview_claim2.md) was measured
 # on a ~75k-read chr20 window, while every Claim 1 number is full-scale. That
 # asymmetry is the largest single exposure in the paper: a reviewer can ask
 # "do the window numbers hold at 12.6M reads?" and until this script runs, the

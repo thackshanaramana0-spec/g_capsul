@@ -83,7 +83,7 @@ needs to redo.
 
 - No correctness trade-off exists to disclose: the depth numbers are exact,
   not estimated, so there is no "2 of N metrics" table needed.
-- No auxiliary structure (like the completion index) is required — the base archive alone
+- No auxiliary structure (like the FM-index) is required — the base archive alone
   is sufficient.
 - No competitor-architecture asymmetry to explain (unlike T3.4's "BWT gets
   this natively, we need an index" story).
@@ -96,7 +96,7 @@ orchestration layer).
 
 ## The architecture claim, made concrete by measurement, not asserted
 
-Verified against `docs/CLAIM3_POSTSPLIT_AUDIT.md` — peak RSS per operation
+Verified against the Claim 3 post-split audit — peak RSS per operation
 on the same archive:
 
 | operation | peak RSS | pseudogenome rebuilds |

@@ -174,7 +174,7 @@ Both classes: CAPSULE wins.
 | DRR976266 | 0.70 | 548.82 | 784.0x |
 | HG002 | 5.67 | 2,678.83 | 472.5x |
 
-## T3.1 — Correctness (E. coli/SRR2584863 only, the one dataset both tools can be fairly compared on). Status: RE-DERIVED this session. Source: `docs/T3.1_CORRECTNESS_FINAL_20260919.md`.
+## T3.1 — Correctness (E. coli/SRR2584863 only, the one dataset both tools can be fairly compared on). Status: RE-DERIVED this session. Source: The T3.1 correctness note.
 
 | Metric | CAPSULE (final, shipping config) | SPAdes | Winner |
 |---|---|---|---|
@@ -221,26 +221,28 @@ Both classes: CAPSULE wins.
 | SRR065390 | 12.11 | 30,458 |
 | SRR10676752 | 118.48 | 4,990 |
 
-## T3.4 — Exact-match recall, 4 individuals. Status: RE-DERIVED this session. Source: `docs/T34_T35_MULTI_INDIVIDUAL_20260919.md`.
+## T3.4 — Exact-match recall, 4 individuals. Status: RE-DERIVED 2026-11-21. Source: `docs/claim3/t34_exact_match_claim3.md`; result file `results/claim3/claim3_T3.4_exact_match_recall.csv`.
 
-| Individual | Recall, plain query (no the completion index) | Recall, with the completion index |
-|---|---|---|
-| HG002 | 1.0000 | 1.0000 (already at ceiling, not re-tested with the completion index) |
-| HG003 | 0.9619 | **1.0000** |
-| HG004 | 0.9612 | **1.0000** |
-| HG005 | 0.8563 | **1.0000** |
+| Individual | Reads with a probe | Recall, archive | Recall, archive + FM-index |
+|---|---:|---:|---:|
+| HG002 | 12,059 | 0.8536 | **1.0000** |
+| HG003 | 9,454 | 0.8457 | **1.0000** |
+| HG004 | 12,455 | 0.8099 | **1.0000** |
+| HG005 | 10,121 | 0.6047 | **1.0000** |
 
-## T3.5 — Locus retrieval, 4 individuals, 2 loci. Status: RE-DERIVED this session. Source: `docs/T34_T35_MULTI_INDIVIDUAL_20260919.md`.
+Measured on a build of the repo source with `scripts/claim3_scripts/run_locus_retrieval_capsule.sh` (the same probes and scorer for every column). The earlier server-run archive-alone values (0.9619, 0.9612, 0.8563) could not be reproduced from the repo and are replaced. A query that also has the decoded read deviations gives 0.9999, 0.9998, 1.0000 and 0.9990. The FM-index gives 1.0000 at mismatch tolerance 0 and 3.
 
-| Individual | Locus | Sites | Native (no the completion index) | With the completion index | Negative-control FP (with the completion index) |
+## T3.5 — Locus retrieval, 4 individuals, 1 locus. Status: RE-DERIVED 2026-11-21. Source: `docs/claim3/t35_locus_retrieval_claim3.md`; result file `results/claim3/claim3_T3.5_locus_retrieval.csv`.
+
+| Individual | Locus | Sites | Position query (tolerance 2) | Archive + FM-index | Negative-control hits, position query / FM-index |
 |---|---|---|---|---|---|
-| HG002 | chr20:3.0-3.6Mb | 400 | 400/400 | 400/400 | 42/400 |
-| HG003 | chr20:3.0-3.6Mb | 335 | 335/335 | 335/335 | 52/400 |
-| HG004 | chr20:3.0-3.6Mb | 400 | 399/400 | **400/400** (miss fixed) | 49/400 |
-| HG005 | chr20:3.0-3.6Mb | 317 | 317/317 | 317/317 | 87/400 |
-| HG005 | chr20:4.0-4.6Mb (new locus) | 400 | 400/400 | 400/400 | 63/400 |
+| HG002 | chr20:3.0-3.6Mb | 400 | 400/400 | 400/400 | 29 / 48 of 400 |
+| HG003 | chr20:3.0-3.6Mb | 335 | 335/335 | 335/335 | 35 / 52 of 400 |
+| HG004 | chr20:3.0-3.6Mb | 400 | 399/400 | **400/400** (miss fixed) | 29 / 49 of 400 |
+| HG005 | chr20:3.0-3.6Mb | 317 | 317/317 | 317/317 | 66 / 87 of 400 |
+| *HG005, additional check (not in the aggregate, earlier k-mer index)* | chr20:4.0-4.6Mb | 400 | 400/400 | 400/400 | 63 of 400 |
 
-**Aggregate: 1,452/1,452 (100%) with the completion index; 1,451/1,452 (99.93%) native.**
+**Aggregate over the four chr20:3.0-3.6Mb rows: 1,452/1,452 (100%) with the FM-index; 1,451/1,452 (99.93%) by position alone.**
 
 ---
 
@@ -248,16 +250,16 @@ Both classes: CAPSULE wins.
 
 | Number | Value | Status | Source |
 |---|---|---|---|
-| PgRC2 sequence-only margin | +1.88%, 6 wins/1 loss | CITED | `BTR_NOTES.md`, `docs/CLAIM1_FINAL_VERDICT.md` §42, `docs/FINAL_HEADROOM.md` |
+| PgRC2 sequence-only margin | +1.88%, 6 wins/1 loss | CITED | the development notes, the Claim 1 final-verdict note §42, the final-headroom note |
 | PgRC2 speed/RAM vs G_CAPSUL | ~1.7x slower, ~2.5x heavier | CITED | same |
 | Ablation: allele-split collapse effect | F1 0.431 → 0.888 | CITED, not re-run this session | manuscript Results, ~line 306 |
-| `contig_spans` archive cost | 0 bytes (18,282,397 B identical with/without) | RE-DERIVED this session | `docs/T3.1_CORRECTNESS_FINAL_20260919.md` |
-| the completion index index size vs archive | 7-13x | RE-DERIVED this session | `docs/T34_T35_MULTI_INDIVIDUAL_20260919.md` |
+| `contig_spans` archive cost | 0 bytes (18,282,397 B identical with/without) | RE-DERIVED this session | the T3.1 correctness note |
+| FM-index size vs archive | 1.9-3.5x (0.9-2.6 MB per individual); the k-mer index it replaces was 7-13x | RE-DERIVED 2026-11-21 | `docs/claim3/t34_exact_match_claim3.md` |
 
 ## Cross-machine / cross-core reproducibility — verified, not assumed
 
 Every number in the paper was produced on one 12-core, 82 GB machine.
-**Confirmed** (`docs/REPRODUCIBILITY.md`, tested 2026-09-10): re-running the
+**Confirmed** (the reproducibility note, tested 2026-09-10): re-running the
 identical encode on E. coli (SRR2584863) at 2, 3, 7, and 12 cores produces
 a **byte-identical archive** at every core count (68,429,027 B, unchanged);
 only wall time varies (36.17 s → 12.38 s, 2.9× range). The encoder derives
@@ -272,9 +274,9 @@ away.
 
 ## The project's own forensic audit — what it checked, what it found, what it admits it cannot establish
 
-Verified against root-level `AUDIT.md` (2026-09-10, tag `v1.0.2-capsule`,
+Verified against the root-level audit notes (2026-09-10, tag `v1.0.2-capsule`,
 the canonical frozen state — read in full this pass, not previously in
-`refer_paper_docs/`). This is the single most rigorous self-verification
+`docs/`). This is the single most rigorous self-verification
 document in the project and belongs here as the methodological backbone
 for every RE-DERIVED/CROSS-CHECKED status above.
 
@@ -319,7 +321,7 @@ weaker tier is actually worth, not asserted as a flaw glossed over.
    flag appeared in **zero** documentation files at the time — a reviewer
    following the documented steps would have hit the identical wall and
    drawn the identical wrong conclusion, three times, exactly as happened
-   here. Now documented in `REPRODUCE_EVERYTHING.md` and `RESULT_CODE.md`.
+   here. Now documented in the full reproduction guide and the result-to-code trace.
 3. **`.gitignore` was silently excluding the audit's own evidence — twice.**
    First `*.log` excluded preserved reproduction logs already cited as
    "in the repository" when they were not; the identical failure mode was

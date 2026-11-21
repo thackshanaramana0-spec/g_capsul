@@ -41,7 +41,7 @@ one site" pattern as T3.3-vs-T3.5 in Claim 3.
 
 ## The category-error correction behind why archive-native calling was worth trying at all
 
-Verified against `docs/COMPRESSION_DERIVED_CALLING.md`. Before building a
+Verified against the compression-derived-calling note. Before building a
 caller from the archive, this project checked the literature on
 assembly-derived variant calling and found a real concession worth citing:
 Xu et al. 2017 (*Scientific Reports* 7:10963), simulating >3M SNVs
@@ -111,7 +111,7 @@ alleles.** T2.5 (tetraploid) generalizes it again, along the ploidy axis
 rather than the allele-count axis — same underlying mechanism, third
 independent confirmation.
 
-## Historical scale gap, and its resolution — verified against `docs/CLAIM2_FINAL_VERDICT.md` in full, not just its superseded-numbers banner
+## Historical scale gap, and its resolution — verified against the Claim 2 final-verdict note in full, not just its superseded-numbers banner
 
 That document's own "Final verdict" section (written before the 2026-09-10
 sweep) states plainly: *"Claim 2 should be described as validated on a
@@ -144,7 +144,7 @@ implying more rigor was applied than actually was.
 
 ## Two indel failure-mode findings, verified from a from-scratch re-scan
 
-`docs/HET_INDEL_FRESH_SCAN.md` (2026-09-03) deliberately re-ran the het-indel
+The het-indel re-scan note (2026-09-03) deliberately re-ran the het-indel
 benchmark and inspected raw FP/FN VCF records by hand, without starting from
 any prior analysis's conclusions — specifically to catch confirmation bias.
 
@@ -188,7 +188,7 @@ across sample sizes was checked rather than trusting one data point. Both
 are good, concrete evidence of the project's actual practice — checking an
 invariant before trusting a number — rather than a claim made once and
 left unexamined. **A third instance, verified against
-`docs/PREFLIGHT_CHECKLIST.md`**: a pre-full-scale-run audit of every tunable
+the pre-flight checklist**: a pre-full-scale-run audit of every tunable
 for accidentally-fitted constants found that the dBG bubble channel's
 multi-polymorphism tolerance (`CAPS_DBG_MAXPOLY`) still defaulted to 3
 (DiscoSNP++'s own `-P` default) in the *compiled binary*, while every
@@ -205,7 +205,7 @@ reproduce the exact previously-reported TP/FP/FN afterward.
 
 **Kmer2SNP**: no indel model, no multi-allelic model, by construction — it
 is a k-mer-graph SNV caller. This is stated as a structural limitation in
-`docs/HET_INDEL_SOTA.md`'s survey and confirmed by its own absence from
+the het-indel literature survey and confirmed by its own absence from
 T2.3/T2.4/T2.5 (`NOT_APPLICABLE`, not a measured 0). No claim is made here
 about whether it *could* be extended — that would require reading its
 source, which has not been done for this project (unlike the PgRC2 check

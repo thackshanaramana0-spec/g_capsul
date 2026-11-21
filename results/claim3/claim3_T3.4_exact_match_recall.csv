@@ -1,0 +1,5 @@
+individual,region,sites,exact_recall_archive,exact_recall_archive_fm_index,source,status
+HG002,chr20:3000000-3600000,400,0.8536,1.0000,"run_locus_retrieval_capsule.sh on a build of the repo source (Ubuntu WSL, 2026-11-20 and 2026-11-21); archive column queried with no index file",MEASURED
+HG003,chr20:3000000-3600000,335,0.8457,1.0000,"run_locus_retrieval_capsule.sh on a build of the repo source (Ubuntu WSL, 2026-11-20 and 2026-11-21); archive column queried with no index file",MEASURED
+HG004,chr20:3000000-3600000,400,0.8099,1.0000,"run_locus_retrieval_capsule.sh on a build of the repo source (Ubuntu WSL, 2026-11-20 and 2026-11-21); archive column queried with no index file",MEASURED
+HG005,chr20:3000000-3600000,317,0.6047,1.0000,"run_locus_retrieval_capsule.sh on a build of the repo source (Ubuntu WSL, 2026-11-20 and 2026-11-21); archive column queried with no index file",MEASURED

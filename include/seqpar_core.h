@@ -1,75 +1,39 @@
 #pragma once
-// STAGE 81 -- encode-only mode on top of stage 75, unchanged otherwise.
+// DNA context-mixing coder. Codes a sequence of 2-bit base codes (A=0, C=1,
+// G=2, T=3) and decodes it again. The encoder uses seq_encode_mem and the
+// decoder seq_decode_mem, both defined here so the model cannot drift between
+// the two. It codes the `literal` stream: the pseudogenome bases that no MEM
+// reference covers.
 //
-// User's bigger-scope question after stage 80: does the earlier "beat
-// SPRING on speed" combined-pipeline comparison fairly compare compress
-// time to compress time? Diagnostic done FIRST across every remaining
-// coder (per user direction: think and understand before executing),
-// measuring encode-only vs full (encode+decode+self-verify) for each:
+// Model, rebuilt from scratch for each chunk (see run_chunk):
+//   * Each base is two binary decisions: the high bit (node 0), then the low bit
+//     given the high bit (node 1 or 2). Probabilities are 12-bit.
+//   * Ten context models, one per order in ORD (the previous 1, 2, 3, 4, 6, 8,
+//     11, 14, 18 and 22 bases). Each hashes its context and the node into a table
+//     of 2^TBITS 16-bit probabilities. The learning rate starts at 1/2 and settles
+//     at 1/32 as a slot's count grows. There are no collision checks.
+//   * A match model: the last MINLEN = 24 bases are hashed to the position that
+//     followed their previous occurrence, and the base found there is the
+//     prediction. Its confidence is learned per match length, capped at 31. It
+//     reaches back only to the start of its own chunk.
+//   * A logistic mixer combines the eleven stretched predictions. The weight set
+//     is chosen by the node and the previous two bases.
+//   * A final APM (secondary estimation) stage refines the mixed probability,
+//     using the node and the previous four bases. The coded probability is one
+//     part mixer output to three parts APM output.
+//   * A 32-bit carry-less binary arithmetic coder (BinEnc, BinDec) codes each
+//     decision.
 //
-//   tool        encode-only   full     verify overhead
-//   seqpar      0.313s        0.729s   0.416s (57%)
-//   namebq      0.203s        1.238s   1.035s (84%)
-//   qualbq      0.219s        1.622s   1.403s (87%)
-//   permcoder   0.028s        0.176s   0.148s (84%)
-//   refcoder    ~0            0.004s   negligible
+// Stream layout from seq_encode_mem: [nchunks:u32][total_symbols:u64], then per
+// chunk [symbols:u32][coded_bytes:u32], then the chunk payloads back to back.
+// Chunks are independent, so they are coded and decoded in parallel. The chunk
+// count (4 by default, env SEQT in the encoder) is a COMPRESSION parameter, not
+// only a threading one: this model's match component exploits long-range repeats,
+// so more chunks mean less context per chunk. On the E. coli literal, 12 chunks
+// gave 1,809,073 B, 4 chunks 1,804,223 B and 1 chunk 1,801,710 B.
 //
-// The percentages look uniformly dramatic, but only ONE of these sits on
-// the real critical path. names/quality (namebq/qualbq) already run
-// CONCURRENT with assembly (stage 76's overlap, ~3.4-3.6s) -- their full
-// 1.2-1.6s runtime finishes comfortably inside that window regardless, so
-// their verify overhead is already fully hidden and cutting it would not
-// change the pipeline's total wall clock at all. permcoder's full time
-// (0.176s) is dwarfed by seqpar's (0.729s) in the post-assembly phase, so
-// fixing permcoder alone would not move the total either -- seqpar would
-// still be the bottleneck. seqpar is the one tool whose 0.416s of
-// self-verification genuinely sits on the critical path (it runs AFTER
-// assembly, not absorbed by the overlap), so it is the one this stage
-// fixes -- not all five, because the diagnostic showed the other four
-// would not move the real number.
-//
-// None of these tools ever wrote a compressed archive to disk (they are
-// measurement instruments throughout this project, confirmed by reading
-// their own main()), so the earlier combined-pipeline comparison against
-// real SPRING/Genozip was, on this specific point, charging itself for
-// internal self-verification work no real archiver performs during normal
-// compression -- SPRING/Genozip don't decode what they just encoded
-// before writing it out.
-//
-// ENCODE_ONLY=1 env var skips the round-trip decode+compare block;
-// default (unset) behavior is UNCHANGED from stage 75, verified: same
-// coded byte count (3,007,051 B) in both modes, encode output is
-// completely unaffected since verify runs strictly after and never
-// touches the encoded bytes.
-//
-// Real, measured, repeated result (3 runs each, real data):
-//   default (with verify): 0.743s / 0.749s / 0.750s
-//   ENCODE_ONLY=1:          0.399s / 0.393s / 0.384s
-// Roughly halves the tool's own time, matching the diagnostic's 0.416s
-// prediction almost exactly.
-//
-//   g++ -O3 -march=native -pthread -o seqpar81 81_seqpar_encode_only.cpp
-// ============================================================================
-//
-// STAGE 75 -- threaded, block-chunked sequence/literal coder. Real,
-// disclosed extension of the same proven pattern already used for names
-// (stage 69) and quality (stage 71): split into fixed blocks, fresh model
-// per block, dispatch across threads. Applied here to stage 74's exact
-// context-mixing model (constexpr orders, fused gather+mixer loop,
-// TBITS=16) -- no algorithm change, only parallel framing, same discipline
-// as every other threaded stage this session.
-//
-// Real, KNOWN, disclosed risk before testing: this model's match component
-// specifically exploits LONG-RANGE repeats (up to the full literal
-// stream's length via a 2^24-slot hash table) -- unlike names/quality
-// where cross-block correlation was already shown to not exist across
-// blocks (X coordinate has no cross-read structure; quality reflects
-// per-read sequencing noise, not cross-read pattern), sequence DOES have
-// real, exploited long-range structure (repeats), so chunking is expected
-// to cost MORE here than it did for names/quality -- tested for real
-// below, not assumed away.
-//
-//   g++ -O3 -march=native -pthread -o seqpar 75_dna_mix_par.cpp
+// The development history of this coder, including the measurement that decided
+// where its verification overhead sits, is in docs/extras/ENGINEERING_NOTES_CODERS.md.
 
 #include <cstdio>
 #include <cstdlib>
@@ -82,6 +46,9 @@
 #include <atomic>
 #include <algorithm>
 
+// Logistic function in fixed point: maps a stretched probability d, clamped to
+// [-2047, 2047] (ln(p/(1-p)) scaled by 256), to a 12-bit probability, by
+// interpolating a 33-point table. STRETCH, filled by initStretch(), is its inverse.
 static short STRETCH[4096];
 static inline int squash(int d){
     if(d>2047) d=2047; if(d<-2047) d=-2047;
@@ -91,6 +58,8 @@ static inline int squash(int d){
     const int w=d&127; d=(d>>7)+16;
     return (t[d]*(128-w)+t[d+1]*w+64)>>7;
 }
+// Builds STRETCH as the inverse of squash. seq_encode_mem and seq_decode_mem call
+// it, so the table is ready before any chunk is coded.
 static void initStretch(){
     int pi=0;
     for(int x=-2047;x<=2047;++x){ const int v=squash(x);
@@ -98,6 +67,10 @@ static void initStretch(){
     for(int p=pi;p<4096;++p) STRETCH[p]=2047;
 }
 
+// Carry-less binary arithmetic coder. The interval [x1, x2] is 32 bits wide and p
+// is the 12-bit probability that the bit is 1, clamped to [1, 4094]. A byte is
+// emitted whenever the top bytes of x1 and x2 agree. flush() writes four bytes.
+// BinDec below is the exact inverse and must see the same probabilities.
 struct BinEnc {
     std::vector<uint8_t> out; uint32_t x1=0,x2=0xFFFFFFFFu;
     void encode(int bit,int p){
@@ -122,30 +95,24 @@ struct BinDec {
     }
 };
 
+// Context orders in bases of history (the 22-base order uses 44 of the 64 bits of
+// `hist`). NM mixer inputs are the NORD orders plus the match model. MCTX is the
+// number of mixer weight sets (3 nodes x the previous two bases), APMN the number
+// of APM contexts (3 nodes x the previous four bases), MINLEN the match model's
+// hashed context length in bases.
 static constexpr int ORD[]={1,2,3,4,6,8,11,14,18,22};
 static constexpr int NORD=(int)(sizeof(ORD)/sizeof(ORD[0]));
 static constexpr int NM=NORD+1;
 static constexpr int TBITS=16; static constexpr size_t TSZ=(size_t)1<<TBITS; static constexpr uint64_t TMASK=TSZ-1;
 static constexpr int MMBITS_MAX=24;   // never worse than before
-// STAGE 101 -- real root cause found via direct code inspection + layer-
-// by-layer profiling (LAYER_BY_LAYER_ANALYSIS.md): mmtab was a FIXED
-// 2^24-slot (16.7M entries x 4B = 64MB) hash table, allocated fresh per
-// CHUNK regardless of that chunk's actual data size. With 12 parallel
-// chunks (this pipeline's default), that is ~768MB, confirmed to match
-// the pipeline's observed ~820MB peak RAM almost exactly -- and confirmed
-// FIXED, not input-scaled, by measuring it unchanged (819,612 KB vs
-// 821,536 KB) across a 5MB and a 7MB literal.txt.
-//
-// Verified safe to resize before touching anything: mmtab is a pure
-// match-finder heuristic (used only to PREDICT a repeat for the context
-// model, lines ~224-227 below) -- on a miss or collision it just falls
-// back to mlen=0, no correctness dependency. Confirmed against a real,
-// established precedent, not invented: zstd's own ZSTD_adjustCParams
-// scales hashLog/chainLog down from a srcSizeHint for exactly this
-// reason (small input doesn't need a hash table sized for a huge one).
-// Same principle as this session's earlier alphabet-adaptive quality-
-// coder fix -- a formula based on a MEASURED property of the actual
-// chunk, not a fixed constant or a per-dataset guess.
+// mmtab, the match model's hash table, has 2^b slots with b = ceil(log2(chunk
+// symbols)), at least 16 (64K slots, 256 KB, so a tiny chunk does not get a
+// degenerate table) and at most MMBITS_MAX. It used to be a fixed 2^24 slots (64 MB)
+// per chunk whatever the chunk's size. With 12 parallel chunks that was about
+// 768 MB, which matched the pipeline's observed ~820 MB peak. The table is only a
+// match-finder heuristic: a miss or collision gives no prediction (mlen = 0), so
+// sizing it to the chunk has no effect on correctness. zstd scales its hash tables
+// from a source-size hint for the same reason (ZSTD_adjustCParams).
 static inline int mmbitsFor(size_t n){
     int b=1; while(((size_t)1<<b) < n && b<MMBITS_MAX) ++b;
     return std::max(16,b);   // floor of 16 (64K slots, 256KB) avoids a degenerately small table on tiny chunks
@@ -154,9 +121,10 @@ static constexpr int MINLEN=24;
 static constexpr int MCTX=3*16;
 static constexpr int APMN=3*256;
 
-// Encode one chunk [sym0, sym0+n) with a FRESH model -- returns coded bytes.
-// If `dec` is non-null, DECODES instead (into `outbuf`) and compares
-// against sym0 for verification; if `dec` is null, ENCODES into `out`.
+// Code one chunk with a FRESH model.
+//   decode == false: ENCODES the n symbols sym0[0..n) into `out`.
+//   decode == true:  DECODES n symbols from in_bytes[0..in_size) into `got`.
+//                    sym0 is not read and may be null, and `out` is untouched.
 static void run_chunk(const uint8_t* sym0, size_t n, bool decode,
                        const uint8_t* in_bytes, size_t in_size,
                        std::vector<uint8_t>& out, std::vector<uint8_t>& got){
@@ -256,12 +224,11 @@ static void run_chunk(const uint8_t* sym0, size_t n, bool decode,
     if(!decode){ enc.flush(); out=std::move(enc.out); }
 }
 
-// ---- in-process wrapper (stage 106): encode a literal buffer already in
-// memory, no file I/O, returning the compressed bytes. Chunking and threading
-// mirror main() in 101_seqpar_adaptive_mm.cpp EXACTLY (chunkSz rounded up,
-// same worker loop), so the produced bytes are identical to the standalone
-// binary; the round-trip verify is omitted because it is a self-check, not
-// part of the archive (same as ENCODE_ONLY=1).
+// ---- in-memory encoder: codes `sym` (values 0..3) as NCHUNKS independent chunks of
+// ceil(n/NCHUNKS) symbols on NTHREADS threads, and returns the chunk table followed
+// by the payloads (layout in the header comment). No file I/O. This function does
+// not decode its own output: round-trip checking belongs to the archive-level
+// verification, not to this stream.
 static std::vector<uint8_t> seq_encode_mem(const std::vector<uint8_t>& sym,
                                            unsigned NCHUNKS, unsigned NTHREADS){
     initStretch();
@@ -286,12 +253,12 @@ static std::vector<uint8_t> seq_encode_mem(const std::vector<uint8_t>& sym,
         for(unsigned t=0;t<NTHREADS;++t) pool.emplace_back(worker);
         for(auto& th:pool) th.join();
     }
-    // CHUNK TABLE. The chunks were concatenated with no boundaries, so a
-    // decoder could not tell where one ended and the next began -- the archive
-    // was undecodable for this stream regardless of the coder. Emit
+    // CHUNK TABLE. Without boundaries a decoder cannot tell where one chunk ends
+    // and the next begins, so the stream would be undecodable whatever the coder.
+    // Emit
     //   [nchunks:u32][total_syms:u64] then per chunk [raw_syms:u32][coded:u32]
-    // before the payloads. 8 + 8*nchunks bytes; at the default 4 chunks that is
-    // 40 B against a literal of 0.6-7.8 MB.
+    // before the payloads: 12 + 8*nchunks bytes, 44 B at the default 4 chunks,
+    // against a literal of 0.6-7.8 MB.
     std::vector<uint8_t> all;
     size_t tot=0; for(auto& b:chunkOut) tot+=b.size();
     all.reserve(tot + 16 + 8*NCHUNKS);

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Claim 2 synthetic regression test — deterministic, no GIAB download needed.
 #
-# Before this, include/caps_caller.h (2132 lines) had ZERO automated tests.
+# Before this, include/caps_caller.h (several thousand lines) had ZERO automated tests.
 # Every existing verification was either a real-data benchmark (needs GIAB
 # downloads, hours to set up) or hand-inspection of one window's VCF. This
 # gives a fast (<1 min), self-contained sanity check that would catch a
@@ -9,12 +9,11 @@
 # SNVs and clean (non-homopolymer) het indels at KNOWN positions, reads
 # simulated from both haplotypes, run through the exact same
 # contig-call -> bwa-align -> lift_vcf.py pipeline the real GIAB benchmark
-# uses (scripts/run_giab_indel_capsule.sh), then checked for recall against
+# uses (scripts/benchmark_scripts/benchmark_1_run.sh, Claim 2 phase), then checked for recall against
 # the truth this script itself generated -- not hand-computed pg bytes.
 #
 # This is NOT a replacement for the real GIAB benchmark (real human
-# homopolymer/STR indel behavior cannot be synthesized honestly -- see
-# docs/HET_INDEL_SOTA.md). It exists to catch "the caller crashed" or "the
+# homopolymer/STR indel behavior cannot be synthesized honestly). It exists to catch "the caller crashed" or "the
 # caller stopped finding anything" regressions cheaply, on every change,
 # without needing real data on hand.
 #
@@ -152,7 +151,7 @@ INDEL_TOTAL=$(grep RESULT_INDEL "$W/result.txt" | awk '{split($2,a,"/"); print a
 
 # Thresholds are deliberately loose (this is a crash/regression detector, not
 # a precision benchmark -- real accuracy numbers come from the GIAB
-# benchmark only, see docs/HET_INDEL_SOTA.md). A healthy caller should find
+# benchmark only). A healthy caller should find
 # nearly all of these clean, well-separated, non-homopolymer variants; the
 # floor exists to catch "the caller stopped finding anything" outright.
 check "$([ "$SNV_TOTAL" -gt 0 ] && [ "$SNV_FOUND" -ge $((SNV_TOTAL*7/10)) ] && echo 1 || echo 0)" \

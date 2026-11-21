@@ -5,7 +5,7 @@
 # chaining + MEM matching that builds it is too complex to hand-verify for
 # arbitrary input). Instead it checks INVARIANTS that must hold regardless of
 # assembly details, chosen specifically because each one is exactly what a
-# past real bug violated (see docs/CLAIM3_LOCKED.md sec 3):
+# past real bug violated (see docs/claim3/overview_claim3.md):
 #
 #   export   : output is non-empty and pure ACGT (no assembly artifact bytes)
 #   coverage : total covered-base-units (sum of depth*width) equals the sum

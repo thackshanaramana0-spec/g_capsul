@@ -43,7 +43,7 @@ threshold — one location plus a growing mismatch list costs more bits than
 two small, separate placements. This is not an implementation quirk; it
 follows from the three preconditions any such compressor meets (builds a
 shared reference, encodes position+mismatches, minimizes total size — see
-`refer_paper_docs/claim3/mechanism_insight_claim3.md` Layer 2 for the full,
+`docs/claim3/mechanism_insight_claim3.md` Layer 2 for the full,
 freestanding argument).
 
 **The same mechanism, measured three separate times, three separate ways —
@@ -55,19 +55,19 @@ coincidences:**
    T2.4 (multi-allelic) and T2.5 (tetraploid) are the same reconciliation
    generalized to N alleles and to non-diploid ploidy respectively — not
    two more separate wins, the same mechanism at higher order (see
-   `refer_paper_docs/claim2/mechanism_insight_claim2.md`).
+   `docs/claim2/mechanism_insight_claim2.md`).
 2. **Claim 3 (retrieval)**: a single pseudogenome coordinate reaches both
    alleles of a het site only a small fraction of the time; bilateral
    anchoring (T3.5) — reconciling both split addresses — recovers
-   1,451/1,452 (99.93%) natively, 100% with the completion index. Same mechanism, applied
+   1,451/1,452 (99.93%) by position alone, 100% with the FM-index. Same mechanism, applied
    to "which reads cover this locus" instead of "what variant is here"
-   (see `refer_paper_docs/claim3/mechanism_insight_claim3.md`).
+   (see `docs/claim3/mechanism_insight_claim3.md`).
 3. **Claim 1 (compression)**: this is where the mechanism is *caused*, not
    fixed. The same overlap-chaining process that produces allele-splitting
    is what makes T1.1's compression ratio possible in the first place, and
    the placement/deviation data it necessarily computes is what Claims 2
    and 3 reuse for free (`CAPS_SPANS`/`contig_spans` measured at zero
-   archive-byte cost — see `refer_paper_docs/claim1/mechanism_insight_claim1.md`).
+   archive-byte cost — see `docs/claim1/mechanism_insight_claim1.md`).
 
 **Additional refutation-based evidence for the same tension, not a fourth
 pillar**: a tempting shortcut (build a de Bruijn graph directly over the
@@ -76,7 +76,7 @@ refuted — 97.7% of anchors have out-degree 1, because greedy overlap
 chaining *linearizes the data on purpose*, which is exactly what makes the
 compression ratio good and exactly what destroys the branch structure a
 bubble caller needs. See
-`refer_paper_docs/claim2/architecture_vs_discosnp_claim2.md`. This is not
+`docs/claim2/architecture_vs_discosnp_claim2.md`. This is not
 counted as a fourth instance of the mechanism above — it is the same
 tension observed from the failure side, confirming by direct measurement
 rather than assumption that Claim 1's compression and graph-branch
@@ -96,7 +96,7 @@ tuned to make one benchmark look good.
 
 ## Why Claim 3's operations are not five bolted-on features — the architectural version of the same point
 
-Verified in code this session (`refer_paper_docs/claim3/code_mapping_claim3.md`):
+Verified in code this session (`docs/claim3/code_mapping_claim3.md`):
 T3.3 and T3.4 are literally the same function in `decoder.cpp`; T3.5
 is not a separate code path at all, only an orchestration layer calling
 T3.4's primitive twice. This is the structural signature of one retained
@@ -118,7 +118,7 @@ be anticipated and hard-coded once.
 
 ## The one-sentence version of this entire file, from the project's own prior verified work
 
-Found this session in `refer_paper_docs/CLAIM3_LOCKED.md` (verified 2026-09-09, still
+Found this session in the Claim 3 locked-results note (verified 2026-09-09, still
 true independent of that document's otherwise-superseded numbers):
 
 *"Everyone else's archive stores what the reads SAY. Ours stores where

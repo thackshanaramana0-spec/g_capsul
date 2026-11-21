@@ -19,7 +19,7 @@ Keywords: limitations, scope, withdrawn numbers, trade-offs, disclosed
 | Withdrawn number | Claim | Correct replacement | Why withdrawn |
 |---|---|---|---|
 | 80.8% genome fraction, 90% unaligned | T3.1 | 98.698% genome fraction | Measured against a broken export (contigs concatenated into 2 fake records) |
-| 345/400 locus retrieval | T3.4/T3.5 | 1,452/1,452 (4 individuals, 2 loci) | Measured with a pre-strand-fix, single-individual query |
+| 345/400 locus retrieval | T3.4/T3.5 | 1,452/1,452 (4 individuals, 1 locus) | Measured with a pre-strand-fix, single-individual query |
 | 0/400 coordinate-only | T3.4/T3.5 | 81/400 (old), or the 96/400-style internal control cited in the current mechanism file | The 0 was our own query emitting consensus, not reads |
 | 21/26 multi-allelic | T2.4 | 17/26 | No supporting raw log; three independent re-derivations all gave 17/26 |
 | 5/111, 11/18 multi-allelic | T2.4 | 17/26 | 5/111 used a check that cannot evaluate indel-bearing sites; 11/18 unreproducible |
@@ -27,7 +27,7 @@ Keywords: limitations, scope, withdrawn numbers, trade-offs, disclosed
 | 0.890 het-SNV F1 | T2.1 | 0.876 | Pre-19-dataset-sweep figure |
 | 0.836 tetraploid SNV F1 | T2.5 | 0.897 | Pre-final-sweep figure |
 | 555-656x export speedup | T3.1 | 129-784x | Pre-final-sweep figure |
-| "plain query alone reaches 1.0000, no completion index needed" | T3.4 | "completion index required in general" | True only on HG002 by chance; HG003/4/5 need it |
+| "plain query alone reaches 1.0000, no completion index needed" | T3.4 | "an index over the reads that deviate from the pseudogenome is required: archive alone 0.6047-0.8536, with the FM-index 1.0000" | The earlier figure held only on HG002 by chance |
 
 ## Real, disclosed trade-offs — not weaknesses to hide, costs to state plainly
 
@@ -36,10 +36,13 @@ Keywords: limitations, scope, withdrawn numbers, trade-offs, disclosed
   independent ways this session (raw CSV recomputation + the manuscript's
   own bold-marking). This is the direct cost of the structure Claims 2/3
   reuse for free — frame it that way, not as an unexplained loss.
-- **the completion index index size: 7-13x the archive itself.** Optional, post-archive,
-  zero cost to Claim 1 — but real disk cost if used.
-- **the completion index false-positive cost: homozygous-control FP rises ~35-75%
-  relative when engaged.** Completeness bought with specificity.
+- **FM-index size: 1.9-3.5x the archive itself** (0.9-2.6 MB per individual), and it
+  grows with the share of reads that deviate from the pseudogenome. Optional,
+  post-archive, zero cost to Claim 1, but a real disk cost if used. The k-mer
+  completion index it replaces was 7-13x.
+- **Locus-retrieval false-positive cost: homozygous-control hits rise from 29/35/29/66
+  to 48/52/49/87 of 400** when the FM-index is added to the position query.
+  Completeness bought with specificity.
 - **T3.1 correctness: wins 2 of ~7 QUAST metrics (genome fraction,
   indels), loses the rest (mismatch rate, duplication, N50, misassembly
   count) to SPAdes.** Structural — closing it needs repeat resolution and
@@ -79,7 +82,7 @@ Keywords: limitations, scope, withdrawn numbers, trade-offs, disclosed
   omitted.
 - **At low coverage (2.6×, outside the locked 19-dataset suite), this
   project loses to SPRING by ~3.97%** — verified against root-level
-  `RECAP.md` §6, a real, investigated, architectural gap, not a tunable
+  the project recap §6, a real, investigated, architectural gap, not a tunable
   parameter. Root cause: at low coverage, most reads fail to chain and are
   instead handled by region-to-region MEM matching, which costs ~21 bits
   per mismatch against SPRING's read-to-read matching cost of ~2 bits — an
@@ -91,7 +94,7 @@ Keywords: limitations, scope, withdrawn numbers, trade-offs, disclosed
   lower-coverage inputs.
 - **`query` is O(archive), not O(range) — no windowed/local decode exists,
   and the reason is structural, not an engineering gap.** Verified against
-  `docs/LOCALITY_TENSION.md`. A self-referential compressor's matcher
+  the locality-tension note. A self-referential compressor's matcher
   optimises match *length* and is blind to match *distance*: on a measured
   E. coli archive, 44% of references point to a copy ~15 MB further away
   than an identical *nearer* copy that exists but was never selected,
@@ -109,20 +112,20 @@ Keywords: limitations, scope, withdrawn numbers, trade-offs, disclosed
   lever is index sampling density, which trades directly against the
   mapping stage's own measured bottleneck (candidate-walk cost), and
   remains an explicitly open, unresolved question, not a plan with a
-  known cost. The current sidecar-index cache (17× faster query) is
+  known cost. The current decoded-index cache (17× faster query) is
   correctly described as a cache that avoids this cost, not a fix that
   removes it.
 - **DiscoSNP++'s multi-allelic limitation is inferred, not source-verified**
   — see `novelty_and_prior_art.md`.
 - **The manuscript's ARCH naming, if adopted, is not yet in the live tex
-  file** — this whole `refer_paper_docs/` tree describes a proposed
+  file** — this whole `docs/` tree describes a proposed
   addition, not a currently-published fact about the manuscript's wording.
 
 ## Why no confidence intervals or significance tests appear anywhere in this project
 
 A deliberate, stated methodological choice, not an oversight — verified
 across all of this project's own research-audit checklists
-(`docs/RESEARCH_CHECKLIST_CLAIM1/2/3.md`): statistical methodology (CIs,
+(the research checklists): statistical methodology (CIs,
 significance testing) is marked N/A throughout, consistent with field
 precedent — no comparable paper in this space (FASTQ compression ratio
 comparisons, or reference-free variant-calling F1 comparisons against
@@ -138,7 +141,7 @@ swept range of inputs, not a p-value on one comparison.
 
 ## Why SARS-CoV-2/ERR5181310 is excluded from T3.1's fair comparison — the mechanism, not just the fact
 
-Verified against `docs/T3.1_ERR5181310_ASSEMBLY_CHECK.md`, itself explicitly
+Verified against the ERR5181310 assembly-check note, itself explicitly
 labeled in-progress and never finalized — cited here only for the
 diagnostic numbers it does report, not as a completed investigation. On
 this one dataset (extreme amplicon-sequencing depth, >1000x PCR-duplicated
@@ -176,8 +179,8 @@ data shape, which it explicitly is not claimed to be.
   Claim 1's compression ratio to chase a Claim 3 metric the paper never
   claims to optimize.
 - **DiscoSNP++'s VCF output has a real off-by-one, found by reading its
-  source, not by assumption.** Verified (`docs/DISCOSNP_INTERNALS.md`):
-  its pipeline's final step (`zero2one.py`) adds `+1` to every `POS` value
+  source, not by assumption.** Verified (the DiscoSNP++ source analysis):
+  its pipeline's final step (the zero-to-one experiment script) adds `+1` to every `POS` value
   as its very last stage, and its own final console message still claims
   the output is "0-based" — stale, misleading, contradicted by its own
   code. Scoring DiscoSNP++'s output without correcting for this is not a

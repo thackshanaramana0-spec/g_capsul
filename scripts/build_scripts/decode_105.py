@@ -5,14 +5,14 @@
 # original FASTQ's sequence column. This is the actual test this project's
 # "round trip: VERIFIED" claims never did until this was built.
 #
-# STAGE 100 REWRITE: matches the simplified encoder that dropped the whole
-# rank/bucket/uidOrder scheme in favor of PgRC2's real design (confirmed
-# from source, SeparatedPseudoGenomePersistence.cpp:446, singleFileMode):
-# position/strand/length are a flat array, indexed DIRECTLY by original
-# read index -- no rank layer, no bucket-of-duplicates, no separate order
-# stream at all. orig2uid.bin (original -> unique-id) survives only to
-# correlate a read with its mismatch data, since mismatches are computed
-# once per unique sequence and shared by any duplicate original reads.
+# Layout decoded, from the stream files the encoder writes when VERIFY_DUMP=1 (the raw
+# streams the archive is made from; see verify_lossless.sh): position, strand
+# and length are flat arrays indexed by UNIQUE read id, with no rank layer, no
+# bucket of duplicates and no separate order stream. orig2uid.bin maps each
+# original read to its unique id, so duplicates share one position and one set of
+# mismatches. The design follows PgRC2's single-file mode
+# (SeparatedPseudoGenomePersistence.cpp:446, a third-party file), except that
+# PgRC2 indexes by original read.
 import sys, struct
 
 WORK = sys.argv[1]           # directory containing the dumped files

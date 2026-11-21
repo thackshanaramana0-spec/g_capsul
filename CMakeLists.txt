@@ -72,3 +72,16 @@ target_link_libraries(best106 PRIVATE Threads::Threads OpenMP::OpenMP_CXX LibLZM
 add_executable(capsule_decode src/decoder.cpp ${PPMD_SRC} ${FSE_SRC} $<TARGET_OBJECTS:htscodecs_obj>)
 target_include_directories(capsule_decode PRIVATE ${COMMON_INCLUDES})
 target_link_libraries(capsule_decode PRIVATE Threads::Threads OpenMP::OpenMP_CXX LibLZMA::LibLZMA)
+
+# Self-test for the FM-index (include/caps_fmi.h): SA-IS against a naive sort
+# and read retrieval against a brute-force scan. Run with `ctest` or directly.
+enable_testing()
+add_executable(fmi_selftest tests/fmi_selftest.cpp)
+target_include_directories(fmi_selftest PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME fmi_selftest COMMAND fmi_selftest)
+# End to end: synthetic archives (variable lengths, containment, duplicates, N,
+# repeats, high error) must give exact-match recall 1.0 through the FM-index.
+add_test(NAME fmi_end_to_end
+         COMMAND python3 ${CMAKE_SOURCE_DIR}/tests/fmi_end_to_end.py
+                 $<TARGET_FILE:best106> $<TARGET_FILE:capsule_decode>
+                 ${CMAKE_BINARY_DIR}/fmi_e2e 200)

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# T3.4 — LOCUS RETRIEVAL FIDELITY: does a locus query return the evidence?
+# T3.5 (100-site) — LOCUS RETRIEVAL FIDELITY: does a locus query return the evidence?
 #
 #   usage: run_locus_fidelity.sh <capsule_decode> <archive> <ref.fa> [IND] [outdir] [N]
 #

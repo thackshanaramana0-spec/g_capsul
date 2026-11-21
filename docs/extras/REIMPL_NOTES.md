@@ -4,7 +4,7 @@ Written from the algorithm, not copied. PgRC2's source was read closely to
 understand what each stage does — and reading it is what found several of the
 results below — but every line here is our own. `method_c/` is the unmodified
 upstream clone used as the measurement target; it is GPL-3 and is never
-vendored (see `.gitignore` and `../PGRC2_COMPARISON.md`).
+vendored (see `.gitignore` and the PgRC2 comparison note).
 
 Purpose: settle whether PgRC2's speed, memory and assembly quality are
 reachable from textbook methods alone, and extract what transfers to ARCS.
@@ -31,7 +31,7 @@ pseudogenomes. That comparison is internally consistent, but it concealed that
 an entire stage was missing rather than merely underperforming. Stage 16 adds
 it.
 
-**The canonical result is in [BEST_METHOD_C_REIMPLEMENTATION.md](BEST_METHOD_C_REIMPLEMENTATION.md)** -- one configuration, one run,
+**The canonical result is in BEST_METHOD_C_REIMPLEMENTATION.md** -- one configuration, one run,
 every number from that run, with what is measured and what is estimated stated
 separately. The table below is the history of how it was reached, including the
 refuted steps, which are the more useful half.
@@ -1415,7 +1415,7 @@ destroyed the suffixes the overlap search depends on and measured the test rathe
 than the code.
 
 Ours runs to completion where theirs refuses, but the quality cost is real and is
-exactly what `VARIABLE_LENGTH_DESIGN.md` predicted: a trimmed read is a strict
+exactly what the variable-length design note predicted: a trimmed read is a strict
 PREFIX of its untrimmed twin, exact-hash dedup cannot see it, and unique reads go
 851,275 -> 918,598 while both-side-overlapped falls 69.8% -> 40.0%.
 
@@ -1471,7 +1471,7 @@ measured 232 MB.
 
 ### The 77 MB was glibc, and ARCS already knew
 
-`src/vodbg_pg.cpp` says it outright: *"malloc_trim is what makes the release
+the de Bruijn pseudogenome experiment says it outright: *"malloc_trim is what makes the release
 visible: glibc keeps freed arenas by default, so an earlier measurement recovered
 only 52 MB of a 312 MB free until the arena was returned explicitly."*
 
@@ -2029,7 +2029,7 @@ standalone fqzcomp's output exactly (after fixing an ASCII-vs-offset alphabet
 issue found while wiring — see the commit) and beats it on one dataset by
 trying all 4 strategies per block. A complete 4-line FASTQ rebuilt from decoder
 output alone has been verified byte-identical (same MD5) to the original file.
-See `BTR_NOTES.md` section 6.3 for the fixes found alongside this work.
+See the development notes section 6.3 for the fixes found alongside this work.
 
 Read stages 67/68/71/73/84/92 and measured stage 92 (current) on the 8
 non-human locked datasets, 500K reads each. Round trip VERIFIED 8/8.

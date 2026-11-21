@@ -6,7 +6,7 @@ Purpose: `mechanism_insight_claim2.md` covers the allele-splitting mechanism
   and T2.1-T2.5 results; this file is the missing layer-by-layer
   architecture comparison against DiscoSNP++ specifically — an 18-row
   correspondence table plus the four real differentiators, condensed and
-  verified against `docs/ARCHITECTURE_VS_DISCOSNP.md` (frozen 2026-09-10),
+  verified against the architecture-versus-DiscoSNP++ note (frozen 2026-09-10),
   not rewritten from memory.
 When to refer to this file: Writing the Methods/Discussion comparison to
   DiscoSNP++ at implementation-level detail (not just result numbers);
@@ -111,7 +111,7 @@ does reference-free SNP calling this way.)
 
 ## Why a de Bruijn graph cannot simply be built over our contigs
 
-A tempting shortcut was tried and refuted (`docs/PG_AS_GRAPH_REFUTED.md`,
+A tempting shortcut was tried and refuted (the pseudogenome-as-graph experiment,
 2026-09-04, on the full-chr20 HG002 run): transform the *existing*
 pseudogenome into a de Bruijn graph rather than re-reading raw reads, since
 DiscoSNP++'s bubble caller could then apply directly (a node with exactly 2
@@ -152,7 +152,7 @@ measurement rather than assumed.
 
 ## A general representational limit, not specific to this project's caller
 
-Verified against `docs/INDEL_BOUND.md`. Tracing every indel this project's
+Verified against the indel-bound note. Tracing every indel this project's
 caller misses into its own k-mer graph found the branching node at each
 missed site has real coverage (12–30 reads) but exactly **one** successor
 base, with no coverage floor at play — raw successor counts return literal
@@ -176,7 +176,7 @@ can be tuned away.
 
 ## Eight precision mechanisms tried against the indel gap — two helped, six did not, in a consistent pattern
 
-Verified against `docs/INDEL_PRECISION_ROOT_CAUSE.md` (2026-09-02), written
+Verified against the indel-precision root-cause note (2026-09-02), written
 after reading DiscoSNP++'s, eBWT2SNP's, and Kmer2SNP's precision mechanisms
 directly from source/paper. Eight distinct precision-improving mechanisms
 were implemented and swept, not merely proposed: (1) read-level junction
@@ -208,7 +208,7 @@ divergence already documented above, not a contradiction of it.
 **A follow-up self-correction, 2026-09-02 (later the same day), kept on the
 record**: the document's own §4 initially pointed at eBWT positional
 clustering as the strongest fix candidate, citing its 99.13% precision
-figure — the same figure `docs/EBWT_LITERATURE_CORRECTION.md` (2026-09-04)
+figure — the same figure the eBWT literature-correction note (2026-09-04)
 later found to be simulated-data-only (real-data figure 66.62%, see
 `novelty_and_prior_art.md`). Running each indel channel in isolation
 (`CAPS_INDEL_ANCH=9999` suppresses the bubble channel, `CAPS_NO_PCLUSTER=1`

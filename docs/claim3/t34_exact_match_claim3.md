@@ -1,15 +1,15 @@
 ---
-Date: 2026-09-19
+Date: 2026-11-21
 Title: T3.4 — Exact-Match Retrieval (Recall vs BWT-Family Tools)
-Purpose: Complete, verified record of what T3.4 measures, the completion index
-  mechanism and why it is a completeness proof (not a lucky statistic), the
-  full multi-individual generalization result, and its real, disclosed
+Purpose: Complete, verified record of what T3.4 measures, how the FM-index
+  completes exact-match search and why that is complete by construction (not
+  a lucky statistic), the four-individual result, and its real, disclosed
   costs.
 When to refer to this file: Writing/checking T3.4's table or text; deciding
   how to frame the comparison to BEETL/CIndex/sFASTQ (capability + cost,
   never head-to-head parity framing); citing any exact-match recall number.
-Keywords: T3.4, exact match, recall, completion index, k-mer index, BWT, BEETL, CIndex,
-  sFASTQ, find_occurrences, completeness proof, CAPS_QUERY_CONTAIN
+Keywords: T3.4, exact match, recall, FM-index, BWT, BEETL, CIndex, sFASTQ,
+  find_occurrences, completeness by construction, CAPS_QUERY_CONTAIN, caps_fmi.h
 ---
 
 # T3.4 — Exact-Match Retrieval
@@ -20,105 +20,132 @@ Given a query DNA string (a "probe"), return every read that literally
 contains it — the same question a BWT/FM-index answers by construction with
 recall 1.0.
 
-## Two-stage mechanism: plain search, then completion
+## Mechanism: search the pseudogenome, then the FM-index
 
-**Stage 1 — plain pg-search (`find_occurrences`)**: searches the 2-bit
-packed pseudogenome for the probe, tolerating up to `k` mismatches via
-pigeonhole seed-and-extend, where `k_max = floor(probe_len / MINSEED) - 1`.
-`MINSEED` is *derived from the haystack size*
-(`clamp(ceil(log4(|pg|))-2, 8, 16)`), not a fitted constant — this matters
-for the generalization argument below.
+Compression has already split the reads into two groups, and exact-match
+retrieval uses that split.
 
-**Why plain search alone cannot reach recall 1.0000 in general**: a read is
-stored as `pg[position] + its own deviations`. If a read's deviations fall
-inside the probe window, the read's actual letters differ from the
-consensus there — searching the *consensus* cannot find that read, even
-though it genuinely contains the probe. Only reads carrying deviations can
-be missed this way (~14% of reads, since a deviation-free read is
-byte-identical to a pg substring and is always findable).
+**Group 1 — reads that match the pseudogenome exactly.** A read with no
+deviations and no N is emitted byte-for-byte as a slice of the pseudogenome,
+so any string it contains also occurs in the pseudogenome inside that read's
+span. The pseudogenome search (`find_occurrences`, `decoder.cpp`) finds it.
+This search is exact: recall for this group does not depend on a mismatch
+tolerance.
 
-**Stage 2 — the completion index completion** (`CAPS_QUERY_CONTAIN=1`): a k-mer index
-built at `capsule_decode index` time, over exactly the deviation-carrying
-reads, indexing their *actual reconstructed sequence* rather than the
-consensus. This is not approximate matching — it is a genuine **completeness
-proof**: a probe of length `P >= k+stride-1` (27bp here) is guaranteed to
-contain at least one stride-aligned indexed k-mer, so any read genuinely
-containing the probe is guaranteed to surface as a *candidate*. Every
-candidate is then verified by reconstructing the read in full (deviations,
-strand, N all applied) and doing a literal substring test — confirmed
-directly in the code this session (`decoder.cpp` ~line 705-720). A
-genuine match cannot be missed, on any dataset, given the code is correct —
-which is a stronger guarantee than "we tested N samples and it worked."
+**Group 2 — reads that deviate from the pseudogenome.** A read stored as
+`pg[position] + its own deviations` (or carrying N, which the pseudogenome
+never holds) can contain the probe where the consensus does not, so searching
+the consensus cannot find it. These are 14–37% of the reads in the four
+individuals here. They are indexed in an **FM-index** (`include/caps_fmi.h`),
+built after compression from the placements and deviations the archive
+already retains, as a separate file `<archive>.qidx.fmi`. Each read is
+indexed exactly as `query` emits it (pseudogenome slice, deviations applied
+at strand-corrected offsets, N restored). A read the archive reproduces
+exactly but that `query` cannot emit as itself — several original reads
+sharing one placement with different lengths, N patterns or deviations,
+which occurs with variable-length input — is stored verbatim in the same
+file and indexed like any other.
 
-The result returned is the **union** of both stages, so one call answers
-both "which reads cover this locus" and "which reads contain this probe."
+**Why this is complete by construction.** Every read is in group 1 or group
+2. Group 1 is reached by an exact search of the pseudogenome, and group 2 by
+an exact FM-index lookup. No tolerance, seed length or minimum probe length
+enters either lookup, so a read that contains the probe cannot be missed, on
+any data. The result is the union of both, so one call answers both "which
+reads cover this locus" and "which reads contain this probe".
 
-## Results — locked, multi-individual, generalized
+**Index.** The index is a BWT over the group-2 reads, built with SA-IS in
+linear time (Nong, Zhang and Chan 2009), stored as 2 bits per base with rank
+checkpoints every 512 rows, and searched by backward search. The index grows
+with the number of reads that deviate from the pseudogenome, not with the
+number of reads.
 
-Source: `docs/T34_T35_MULTI_INDIVIDUAL_20260919.md`.
+## Results — four individuals, chr20:3.0-3.6 Mb
 
-**First pass, plain query alone (no the completion index)** — this revealed a real
-generalization gap:
+Reads containing a probe, found by scanning every decoded read:
 
-| Individual | Recall, plain query |
-|---|---|
-| HG002 | 1.0000 |
-| HG003 | 0.9619 |
-| HG004 | 0.9612 |
-| HG005 | 0.8563 |
+| Individual | Reads with a probe | Recall, archive | Recall, archive + FM-index |
+|---|---:|---:|---:|
+| HG002 | 12,059 | 0.8536 | **1.0000** |
+| HG003 | 9,454 | 0.8457 | **1.0000** |
+| HG004 | 12,455 | 0.8099 | **1.0000** |
+| HG005 | 10,121 | 0.6047 | **1.0000** |
 
-HG002's clean 1.0000 was **luck specific to that test set** — no read in it
-happened to exceed the tolerance ceiling. HG003/4/5 were not so lucky.
+"Archive" queries the archive alone: each query decodes the pseudogenome and
+searches it (mismatch tolerance 2). The archive stores each read as a
+pseudogenome position plus its own deviations, and without the decoded
+read-level information `query` returns the consensus under each read, not the
+read itself. A read that carries deviations is therefore returned as a
+different sequence, which does not count as recovering it. With the
+FM-index, recall is 1.0000 at mismatch tolerance 0 and at tolerance 3 alike. The result files are
+`results/claim3/claim3_T3.4_exact_match_recall.csv` and are produced by phase
+4 of `scripts/benchmark_scripts/benchmark_1_run.sh`.
 
-**With the completion index completion (`CAPS_QUERY_CONTAIN=1`) — the general, correct
-configuration:**
+For reference, a query that also has the decoded read deviations, strand and
+N positions (tolerance 2, no FM-index) reaches 0.9999, 0.9998, 1.0000 and
+0.9990, because it returns each read as the read. What it still misses is a
+read whose own deviations spell the probe where the consensus does not, and
+those few reads, 1, 2, 0 and 10 for HG002 to HG005, are what the FM-index
+adds.
 
-| Individual | Recall |
-|---|---|
-| HG002 | 1.0000 |
-| HG003 | 1.0000 |
-| HG004 | 1.0000 |
-| HG005 | 1.0000 |
+## Tests
 
-Confirmed by directly ruling out confounds first (binary choice, mismatch
-tolerance setting each moved recall by ~0.0001 — not the explanation).
+- `tests/fmi_selftest.cpp`: the suffix-array construction against a naive
+  sort on 415 texts (single-symbol runs, periodic strings, tiny alphabets),
+  and every FM-index lookup against a brute-force scan on 15,256 queries over
+  63 read sets, including reads with N, reads longer than the locate sample
+  interval, empty reads, and a save/load round trip.
+- `tests/fmi_end_to_end.py`: eight synthetic archives built to break the
+  index (variable lengths, contained reads, duplicates, N, repeats, high
+  error). Each is compressed, checked lossless, indexed, and queried with
+  probes of every length from 4 to 80 bp, on both strands, including probes
+  with N and random strings. Every read containing a probe is returned, zero
+  missed in all eight.
+- Both run under `ctest`, and the self-test also runs inside
+  `benchmark_0_preflight.sh`, so a broken index is a NO-GO before any table
+  is produced.
 
-## The real, disclosed cost of the completion index — do not omit
+## The real, disclosed cost — do not omit
 
-1. **Index size: 7-13x the archive itself.** HG005: archive 748,892 B,
-   the completion index 9,925,044 B. This is a real number to put in a cost table, not
-   hide. It is optional and built post-archive (`CAPS_XMI=1` at `index`
-   time), so it never affects Claim 1's compression numbers.
-2. **False positives on homozygous negative controls rise ~35-75%
-   relative** when the completion index is engaged (HG002 31→42, HG003 38→52, HG004
-   28→49, HG005 71→87 — measured in the T3.5 bilateral test, which shares
-   the same underlying mechanism). Completeness goes up; specificity goes
-   down. Real trade-off, not a free win.
-3. **Minimum probe length 27bp.** Shorter probes are refused loudly rather
-   than silently degraded.
+1. **Index size.** 0.9 to 2.6 MB per individual: 928,092 B for HG002 and
+   2,640,919 B for HG005, against archives of 480,627 B and 748,892 B. It is
+   optional and built after compression (`CAPS_FMI=1` at `index` time), so it
+   never affects Claim 1's compression numbers. It is 3.5 to 3.8 times
+   smaller than the k-mer completion index it replaces (3.3 to 9.9 MB).
+2. **Size scales with the share of reads that deviate from the pseudogenome.**
+   Noisier data, or data where compression absorbs fewer reads, gives a
+   larger index. This has not been measured beyond these four individuals and
+   the synthetic archives.
+3. **Build and query time.** The FM-index adds 0.2 to 0.6 s to the `index`
+   step here. 800 queries take 7 to 12.6 s with the FM-index, against 13 to
+   18 s with the k-mer index, at 8 queries in parallel. A first query
+   without the decoded pseudogenome (`archive` above) decodes the archive
+   each time: 90 to 208 s for 800 queries.
+4. **False positives on homozygous negative controls.** Tolerant locus
+   search also returns reads at homozygous negative-control sites (48, 52, 49
+   and 87 of 400 for HG002 to HG005; see T3.5). That belongs to the locus
+   query's mismatch tolerance, not to exact-match search, which is exact.
 
 ## How to frame the comparison to BEETL/CIndex/sFASTQ — do this, not that
 
 **Do**: "The archive answers both retrieval types — reads covering a locus
-(native) and reads containing a string (recall 1.0000, via an index derived
-from the archive after compression)." State capability and the real
-the completion index cost. This matches the reciprocity argument the paper already makes
-(see `mechanism_insight_claim3.md`).
+(by position) and reads containing a string (recall 1.0000, via an FM-index
+built from the archive after compression)." State capability and the real
+cost. A BWT index answers the exact-match question by construction because
+it is built from every read at compression time. Here the pseudogenome has
+already absorbed the reads that match it, so the FM-index covers only the
+rest.
 
 **Do not**: claim head-to-head parity with BWT-family tools as if in
-competition. That framing invites "why not just use a BWT then," which has
-a real answer (see file 06) but is better made in discussion, not implied
-by table framing. **No speed comparison and no index-size comparison against
-BEETL/CIndex/sFASTQ has been measured.** Both are explicitly future work,
-not claimed.
+competition, or call the FM-index free. **No speed comparison and no
+index-size comparison against BEETL/CIndex/sFASTQ has been measured.** Both
+are explicitly future work, not claimed.
 
 ## What generalizes and why — not "we tested enough samples"
 
-The completeness proof (stage 2 above) is architectural: any dataset, any
-individual, given the code is correct, a genuinely-containing read cannot
-be missed once the probe clears the length bound. The 4-individual result
-above is confirmation of that proof holding in practice, not the source of
-confidence in it — this distinction matters when writing the generalization
-claim in the paper (see `mechanism_insight_claim3.md` for the same
-point made about T3.5, where the underlying argument is geometric rather
-than a completeness proof, and is honestly weaker in that specific sense).
+The completeness argument above is architectural: any dataset, any
+individual, a read containing the probe is either a pseudogenome substring or
+in the FM-index. The four-individual result is confirmation that it holds in
+practice, and the synthetic suite probes the cases real data rarely produces
+(contained reads, duplicates, N, repeats, 5% error). See
+`mechanism_insight_claim3.md` for the same point made about T3.5, where the
+argument is geometric and honestly weaker in that specific sense.

@@ -45,7 +45,7 @@ mechanism should still hold even if a line moves.
   the calling substrate from raw contig sequences plus `CallData`; this is
   the function whose presence/absence is almost certainly what the
   manuscript's ablation (F1 0.431 without collapse/re-placement, 0.888
-  with both) is measuring — verify against `docs/HET_INDEL_SOTA.md` or the
+  with both) is measuring — verify against the het-indel literature survey or the
   git history around commit `301d1a5` ("Close the indel_pass accounting:
   build_substrate is 54% and is not waste") before stating this as fully
   confirmed rather than strongly inferred.
@@ -65,12 +65,12 @@ mechanism should still hold even if a line moves.
   behind both T2.4 (ploidy=2, multi-allelic within that ploidy) and T2.5
   (ploidy=4, via `CAPS_PLOIDY=4`).
 
-## Flag dependency, confirmed against `PIPELINE.md`
+## Flag dependency, confirmed against the pipeline notes
 
 - `CAPS_CALL_INDELS=1` — required for T2.3/T2.4/T2.5. Without it,
   `capsule_decode call` silently takes the graph-only SNV path (a
   different, narrower configuration, not an error) — documented in
-  `PIPELINE.md`'s flags table (committed prior to this session, re-verified
+  the pipeline notes' flags table (committed prior to this session, re-verified
   present and correct this session).
 - `CAPS_PLOIDY=N` — required for T2.5 specifically (`N=4`); defaults to 2.
 
@@ -86,10 +86,10 @@ mechanism should still hold even if a line moves.
 | T2.4 (multi-allelic, 17/26) | `results/claim2/claim2_T2.4_multiallelic.csv` |
 | T2.5 (tetraploid, all rows) | `results/claim2/claim2_T2.5_tetraploid.csv` |
 | Withdrawn multi-allelic numbers (5/111, 11/18, 21/26) and why | Internal reproduction log, not included in this public repo; the surviving, correct number (17/26) is the one reported in this folder and in `results/claim2/claim2_T2.4_multiallelic.csv` |
-| Withdrawn het-indel numbers (0.637, 0.666) and why | `docs/CLAIM2_FINAL_VERDICT.md` (marked SUPERSEDED at top) |
-| Full session-by-session history of Claim 2's development | `docs/CLAIM2_RESULTS.md`, `docs/CLAIM2_RESULTS_V2.md`, `docs/CLAIM2_TABLES_AND_INDEL_SCAN.md`, `docs/HET_INDEL_FRESH_SCAN.md` |
-| Literature survey justifying DiscoSNP++/Kmer2SNP as comparators | `docs/HET_INDEL_SOTA.md` |
-| Ablation numbers (F1 0.431 vs 0.888) | Manuscript body text (verify against `docs/CLAIM2_DATA_AND_TOOLS.md` or `docs/INDEL_LOSS_SKELETAL.md` for the underlying run before citing in a new context) |
+| Withdrawn het-indel numbers (0.637, 0.666) and why | the Claim 2 final-verdict note (marked SUPERSEDED at top) |
+| Full session-by-session history of Claim 2's development | the first Claim 2 results note, the second Claim 2 results note, the Claim 2 tables and indel-scan note, the het-indel re-scan note |
+| Literature survey justifying DiscoSNP++/Kmer2SNP as comparators | the het-indel literature survey |
+| Ablation numbers (F1 0.431 vs 0.888) | Manuscript body text (verify against the Claim 2 data-and-tools inventory or the indel-loss analysis for the underlying run before citing in a new context) |
 
 ## What was verified this session vs cited from earlier work
 

@@ -57,10 +57,10 @@ three purposes:
 ## Key Features
 
 - **Byte-exact lossless reconstruction**: sequence, read order, identifiers, quality scores, and line-3 mode are preserved, with every reported archive verified against the original input.
-- **Smallest complete lossless archive** across 19 real datasets totaling 55.0 GB of FASTQ, with **19/19 wins against SPRING and 19/19 against Genozip**. Across all three tools, **57/57 archives reconstructed to byte-identical input**.
+- **Smallest complete lossless archive** across 19 real datasets totaling 59.1 GB of FASTQ, with **19/19 wins against SPRING and 19/19 against Genozip**. Across all three tools, **57/57 archives reconstructed to byte-identical input**.
 - **Reference-free variant calling from the archive** without returning to the original FASTQ, using a reference genome, or building a second assembly. Across four GIAB individuals, heterozygous-SNV mean F1 reached **0.876**, compared with 0.853 for DiscoSNP++ and 0.475 for Kmer2SNP.
 - **Multi-allelic and higher-ploidy support**: G_CAPSUL recovered **17/26** multi-allelic sites in the complete chromosome-20 census, while DiscoSNP++ produced no complete multi-allelic records. On a tetraploid dataset formed from real HG003 and HG004 reads, G_CAPSUL achieved SNV F1 **0.897** versus 0.782.
-- **Archive-level addressability**: pseudogenome export was **129–784×** faster than SPAdes, and per-base coverage was **16–54×** faster than BWA+mosdepth. The `query` operation also recovers both allelic read sets at heterozygous loci even when compression separates them across different pseudogenome coordinates, succeeding at **1,452 of 1,452** tested sites across four individuals and two loci.
+- **Archive-level addressability**: pseudogenome export was **129–784×** faster than SPAdes, and per-base coverage was **16–54×** faster than BWA+mosdepth. The `query` operation also recovers both allelic read sets at heterozygous loci even when compression separates them across different pseudogenome coordinates, succeeding at **1,452 of 1,452** tested sites across four individuals at one chr20 locus. An FM-index built from the archive after compression returns every read containing a query sequence (exact-match recall **1.0000** on all four), without changing the archive.
 
 ---
 
@@ -112,7 +112,7 @@ explains that split in full. **Where a document and a result CSV disagree, the C
 ### Compression (COMPACT)
 
 **Table 1.** Whole-file lossless archive (sequence + names + quality + line 3) on the 19
-locked datasets, 55.0 GB of FASTQ spanning bacteria, archaea, viruses, fungi, protists,
+locked datasets, 59.1 GB of FASTQ spanning bacteria, archaea, viruses, fungi, protists,
 plants, animals and human. Every archive decoded back to byte-identical input **before**
 being counted. All 57/57 archives across the three tools verified LOSSLESS.
 
@@ -236,7 +236,7 @@ summarized as a win or a loss. Coverage carries no such caveat: the depth number
 exact, not estimated.
 
 **`query` is not a speed claim, and we say so.** `genocat --head=100` extracts in 0.19 s
-against our 0.46 s without an index, dropping to ≈0.03 s once an optional sidecar caches
+against our 0.46 s without an index, dropping to ≈0.03 s once the post-processing index step keeps
 the decoded pseudogenome and placements. What `query` does that nothing else can is resolve
 a **locus**, not just a coordinate or a matching string.
 
@@ -248,32 +248,38 @@ pseudogenomic regions, so querying a single stored coordinate can recover only p
 biological evidence. G_CAPSUL reconciles these separated regions and retrieves the read sets
 belonging to the same locus:
 
-| individual | locus | sites | archive alone | with completion index |
-|---|---|---:|---:|---:|
-| HG002 | chr20:3.0–3.6 Mb | 400 | 400/400 | 400/400 |
-| HG003 | chr20:3.0–3.6 Mb | 335 | 335/335 | 335/335 |
-| HG004 | chr20:3.0–3.6 Mb | 400 | 399/400 | **400/400** |
-| HG005 | chr20:3.0–3.6 Mb | 317 | 317/317 | 317/317 |
-| HG005 | chr20:4.0–4.6 Mb | 400 | 400/400 | 400/400 |
-| **all** | two loci | **1,452** | **1,451/1,452 (99.93%)** | **1,452/1,452 (100%)** |
+| individual | locus | sites | both alleles recovered (archive + FM-index) |
+|---|---|---:|---:|
+| HG002 | chr20:3.0–3.6 Mb | 400 | 400/400 |
+| HG003 | chr20:3.0–3.6 Mb | 335 | 335/335 |
+| HG004 | chr20:3.0–3.6 Mb | 400 | 400/400 |
+| HG005 | chr20:3.0–3.6 Mb | 317 | 317/317 |
+| **all** | chr20:3.0–3.6 Mb | **1,452** | **1,452/1,452 (100%)** |
+
+The 1,452 sites are four individuals at one locus. The count differs between individuals because a site is tested only if both 40-bp flanks are unambiguous and the upstream flank occurs in the pseudogenome, the same rule everywhere. A separate HG005 run at chr20:4.0–4.6 Mb (400/400) is recorded in [`docs/claim3/t35_locus_retrieval_claim3.md`](docs/claim3/t35_locus_retrieval_claim3.md) and is not part of this total. This table and the exact-match recall table are phase 4 of `scripts/benchmark_scripts/benchmark_1_run.sh`, which runs it by default (see [Reproducibility](#reproducibility)). `PHASES=4` runs that phase alone, and needs `samtools`, `tabix`, `curl` and `python3`. One individual alone: `bash scripts/claim3_scripts/run_locus_retrieval_capsule.sh HG003 3000000 3600000 <workdir>`. Results land in `claim3_T3.4_exact_match_recall.csv` and `claim3_T3.5_locus_retrieval.csv`, and committed reference copies are in [`results/claim3/`](results/claim3/).
 
 A heterozygous locus is **not one place** in a compression-optimal pseudogenome: reads
 carrying the two alleles are routinely placed on different, disconnected pseudogenomic
 segments, occasionally many megabases apart. `query` resolves this by probing each site
-from both upstream and downstream and combining the two retrieved read sets, recovering
-both alleles at every site but one using the archive alone. The single native miss, in
-HG004, was diagnosed rather than left unexplained: the alternate-allele reads differed from
-the pseudogenome consensus by an indel rather than a substitution, so they were placed
-elsewhere at compression time, beyond a positional query's reach at any tolerance. An
-optional **completion index**, built after compression from placements and deviations the
-archive already retained, matches by reconstructed read content instead of position and
-closes exactly this gap, at a real, disclosed cost: false positives on homozygous
-negative-control sites rise measurably wherever it is applied.
+from both upstream and downstream and combining the two retrieved read sets. Position
+alone leaves one HG004 site unresolved: its alternate-allele reads differ from the
+pseudogenome consensus by an indel rather than a substitution, so they were placed
+elsewhere at compression time, beyond a positional query's reach at any tolerance. The
+**FM-index**, built after compression from the placements and deviations the archive
+already retains, matches by read content instead of position and recovers that site, so
+both alleles are found at all 1,452 sites. The cost is disclosed: tolerant locus search
+also returns reads at homozygous negative-control sites (48, 52, 49 and 87 of 400 for
+HG002 to HG005).
 
-Same exact-match question against BWT-family tools (BEETL, CIndex): archive-alone recall
-was 1.0000 on HG002 but only 0.86–0.96 on the other three individuals, confirming that
-completeness there is not free either without the same completion index, which restores it
-to 1.0000 on all four.
+Same exact-match question against BWT-family tools (BEETL, CIndex). Searching the archive
+gives recall 0.8536, 0.8457, 0.8099 and 0.6047 for HG002 to HG005, because a read that
+differs from the pseudogenome is not a substring of it. Compression has already split the
+reads in two: those that match the pseudogenome exactly, which the pseudogenome search
+reaches, and those that deviate from it. The FM-index covers only the second group (14–37%
+of reads here), so pseudogenome search plus the FM-index returns every read containing the
+probe **by construction**: recall **1.0000** on all four individuals, at mismatch tolerance
+0, the completeness a BWT index gives. It is 0.9–2.6 MB per individual, 3.5–3.8× smaller
+than the k-mer completion index it replaces (`include/caps_fmi.h`; tests in `tests/`).
 
 This is distinct from exact-sequence search: finding a matching sequence does not
 necessarily identify other disconnected pseudogenomic regions representing the same
@@ -374,7 +380,10 @@ important point that the default is sequence-only, not a FASTQ:
 | `CAPS_NAMES=1` | + names/read-ID column | `<outreads>.names` in addition |
 | `CAPS_QUAL=1` | + quality scores | `<outreads>.qual` in addition |
 | `CAPS_NAMES=1 CAPS_QUAL=1` | full FASTQ content | a full 4-line FASTQ, verified byte-identical (same MD5) to the original |
-| `CAPS_CALL=1` | no archive change, writes a VCF as a side effect | `$CALL_VCF` gets heterozygous SNV/indel calls, combinable with any of the above |
+| `CAPS_CALL=1` | + `contig_spans` stream (as `CAPS_SPANS=1`), and writes a VCF as a side effect | `$CALL_VCF` gets heterozygous SNV/indel calls, combinable with any of the above |
+
+Every other switch and every positional argument is listed, with its default, in
+[`docs/configuration_reference.md`](docs/configuration_reference.md).
 
 ---
 
@@ -423,7 +432,30 @@ downstream analysis rather than constructing a second assembly.
 
 All results reported for G_CAPSUL are reproducible from the material provided in this
 repository. The benchmark scripts are available in `scripts/`, and the corresponding raw
-results are stored in [`results/`](results/). [`docs/REPO_MAP.md`](docs/REPO_MAP.md) links
+results are stored in [`results/`](results/).
+
+Every manuscript table comes from one command, run after a pre-run check:
+
+```bash
+bash scripts/benchmark_scripts/benchmark_0_preflight.sh   # tools, data, network, binaries, FM-index self-test -> GO / NO-GO
+bash scripts/benchmark_scripts/benchmark_1_run.sh         # phases 1-4: Tables 1-6, multi-allelic and tetraploid
+```
+
+| manuscript | benchmark_1 phase | result file |
+|---|---|---|
+| Table 1, archive size | 1 | `results/claim1/claim1_T1.1_T1.2.csv` |
+| Table 2, heterozygous SNV | 2 | `results/claim2/claim2_T2.1_snv.csv` |
+| Table 3, heterozygous indel | 2 | `results/claim2/claim2_T2.3_indel.csv` |
+| text, multi-allelic (17/26) | 2 | `results/claim2/claim2_T2.4_multiallelic.csv` |
+| text, tetraploid | 2 | `results/claim2/claim2_T2.5_tetraploid.csv` |
+| Table 4, export and coverage | 3 | `results/claim3/claim3_T3.1_T3.2_T3.3.csv` |
+| Table 5, exact-match recall | 4 | `results/claim3/claim3_T3.4_exact_match_recall.csv` |
+| Table 6, locus retrieval | 4 | `results/claim3/claim3_T3.5_locus_retrieval.csv` |
+
+`PHASES=1,3` (any comma list) runs selected phases. The FM-index has its own tests,
+`ctest` in the CMake build: a self-test against brute force, and an end-to-end test on
+synthetic archives built to break it (variable lengths, contained reads, duplicates, N,
+repeats, high error). [`docs/REPO_MAP.md`](docs/REPO_MAP.md) links
 each claim to its benchmark, result files, implementation, figures, and supporting
 documentation.
 
@@ -461,11 +493,12 @@ the released repository. **For all reported numerical results, the raw CSV files
   shows that heterogeneous read lengths can reduce calling accuracy, while some indels
   remain inaccessible when the required alternative sequence structure is not exposed
   during candidate generation.
-- **Some query modes use optional downstream structures.** A sidecar can accelerate
-  repeated queries, while a separate completion index recovers deviation-based matches that
-  consensus-only search can miss. These structures are built after compression and are not
-  part of the reported archive size. The completion index can also increase matches at
-  homozygous negative-control sites.
+- **Exact-match and locus retrieval use one optional post-processing step.** It builds an
+  FM-index over the reads the pseudogenome cannot represent and keeps the decoded
+  pseudogenome for repeated queries. Together these are larger than the archive, are not
+  part of the reported archive size, and grow with the share of reads that deviate from
+  the pseudogenome. Tolerant locus search also returns reads at homozygous
+  negative-control sites.
 - **The sequence coder assumes an ACGTN alphabet and does not gate on it.** Input outside
   that alphabet (lowercase bases, IUPAC ambiguity codes, protein or RNA sequence, corrupted
   data) is not refused the way an oversize read or a quality-length mismatch is. It is

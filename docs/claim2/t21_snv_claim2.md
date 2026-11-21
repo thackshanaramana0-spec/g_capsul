@@ -46,7 +46,7 @@ stated plainly in the paper — do not average it away or omit the row.
 
 ## Why DiscoSNP++ and Kmer2SNP are the right comparators, not a weak set
 
-Verified against the literature survey in `docs/HET_INDEL_SOTA.md`:
+Verified against the het-indel literature survey:
 DiscoSNP++ is the only other general-purpose reference-free caller handling
 heterozygous variants from a single diploid sample with zero reference.
 Everything else considered (DeepVariant, GATK, Strelka2, ska lo, eBWT2SNP)

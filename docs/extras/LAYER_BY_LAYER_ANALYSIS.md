@@ -2,7 +2,7 @@
 
 Pure analysis, no code touched. Real numbers from real runs, both sides, same
 file (E. coli, `ecoli_test.fq`, 1,000,000 reads, 150bp, byte-identical
-verified on our side — see `LOCKED_SEQORDER_SCOPE.md` for that proof).
+verified on our side — see the locked-scope note for that proof).
 
 ## 1. Our pipeline, per-stage real profiling
 
@@ -373,7 +373,7 @@ our combined pos_abs+orig2uid (now 1,491,080 B combined, down from
 ## 3e. Novel-kingdom expansion — real results, 2026-08-31
 
 Real PgRC2 comparisons attempted on the 7 new accessions from
-`DATASET_LOCKED.md`'s Extended Set. Honest status, not spun:
+the locked-dataset list's Extended Set. Honest status, not spun:
 
 | Dataset | Our total | PgRC2 (real, `-o`) | Result | Notes |
 |---|---|---|---|---|
@@ -480,7 +480,7 @@ the set is P. aeruginosa at −3.0%.
 - `103_no_predup.cpp` -- helps H. salinarum (+4.2%) and E. coli, hurts
   slightly elsewhere; keep both binaries and take the min per file until the
   rule for which wins is understood.
-- The disk-architecture analysis in `PGRC2_DISK_ARCHITECTURE.md` §1-4
+- The disk-architecture analysis in the PgRC2 disk-architecture note §1-4
   (dead-code finding, RAM parity) -- independent of this error, unaffected.
 
 **Methodology rule going forward: compare against the real archive size on
@@ -492,12 +492,12 @@ disk, never against a hand-summed subset of the opponent's log.**
 **The bug.** `decode_locked_seqorder.py` requires FOUR mismatch streams to
 reconstruct a read: `mm_ref`, `mm_obs`, `mm_pos` (where each mismatch is) and
 `mm_count_per_read` (how many per read). But `mmcoder` only ever takes two
-arguments (`ref.bin obs.bin`), and `run_locked_seqorder.sh` only counted that.
+arguments (`ref.bin obs.bin`), and the locked sequence-order script only counted that.
 **`mm_pos.bin` and `mm_count_per_read.bin` were never in
 LOCKED_SEQORDER_TOTAL** despite being mandatory for decode.
 
 This is the same omitted-mandatory-stream error caught on PgRC2's side in 3f.
-I checked theirs and did not check ours. Fixed in `run_locked_seqorder.sh`
+I checked theirs and did not check ours. Fixed in the locked sequence-order script
 (L5b/L5c).
 
 **Corrected real-full-file results (vs PgRC2's real archive):**
@@ -778,7 +778,7 @@ bucketing. **An earlier prototype of this at 100k-read scale showed it HURT
 amortize; at real scale it is a solid win.** Prototypes on subsamples cannot
 be trusted for anything bucket-structured.
 
-**Shipped** in `106_inprocess.cpp` with an encoder-side round-trip self-check
+**Shipped** in `src/encoder.cpp` with an encoder-side round-trip self-check
 (invertibility is a correctness claim, so it is proven at runtime, not
 asserted; falls back to the flat stream if it ever fails).
 
@@ -1157,8 +1157,8 @@ deliberately.
 among xz / bzip2 / zstd. That is selection in name only: PgRC2's advantage on
 the streams where it still beat us never came from a different general-purpose
 compressor, it came from **PPMd7, FSE/Huff0, and range coders with
-per-position models** (`coders/PpmdCoder.cpp`, `FSECoder.cpp`,
-`RangeCoder.cpp`, `rangecoder/simple_model.h`; selected per stream in
+per-position models** (PgRC2's PPMd coder source, `FSECoder.cpp`,
+`RangeCoder.cpp`, PgRC2's range-coder model source; selected per stream in
 `PropsLibrary.cpp`). Measuring xz-vs-bzip2-vs-zstd and reporting "0.49%, not
 decisive" was measuring the wrong thing.
 
@@ -1418,7 +1418,7 @@ independently assembled and self-matched, so positions index into a ~2.5 MB
 span rather than one 13-18 MB span. We build a single pg plus an appended
 second region, and never compact the result.
 
-This is the same 3-way split noted in `PGRC2_DISK_ARCHITECTURE.md` §5 and
+This is the same 3-way split noted in the PgRC2 disk-architecture note §5 and
 dismissed there because the mismatch-layer reasoning that motivated it was
 based on a measurement error. **It is now re-identified from the opposite
 direction -- span and volume, not mismatches -- and this time the evidence is

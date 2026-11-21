@@ -1,7 +1,7 @@
 # G_CAPSUL — the locked dataset set: 15 non-human + 4 human = 19
 
-**This file, not `DATASET_LOCKED.md`, is the source of truth for this repo.**
-`DATASET_LOCKED.md` is the outer ARCS project's 17-accession list; it is
+**This file, not the locked-dataset list, is the source of truth for this repo.**
+The locked-dataset list is the outer ARCS project's 17-accession list; it is
 unchanged and does not govern G_CAPSUL/CAPSULE. This file records one
 deliberate swap made 2026-09-02, why, and the resulting exact set.
 
@@ -16,7 +16,7 @@ nobody has to derive it:
 The four human sets are the **Claim 2** individuals (het-SNV, het-indel,
 multi-allelic, and the coverage sweep). They also carry Claim 1 compression
 numbers, because the same archive serves both claims — that is the whole point
-of the architecture — so they appear in `claim1_T1.1_T1.2.csv` as well. They
+of the architecture — so they appear in `results/claim1/claim1_T1.1_T1.2.csv` as well. They
 are **not** part of the 15-dataset SPRING/Genozip *organism* comparison and
 should not be counted into it.
 
@@ -52,7 +52,7 @@ Verified live via NCBI eutils 2026-09-02, not guessed:
 **Second swap, 2026-09-03: Removed Campylobacter jejuni, added C. elegans (Animalia).**
 The 15-set as first locked had ZERO Animalia representation (Drosophila was
 removed in the first swap above, and C. elegans/T. cacao were excluded from
-this repo's set as "the big datasets" per `DATASET_LOCKED.md`). Auditing
+this repo's set as "the big datasets" per the locked-dataset list). Auditing
 kingdom coverage found Bacteria over-represented at 6 of 15 while Animalia
 had none. C. jejuni (SRR40402583, an "extended set" addition, not one of
 the original primary-10 accessions) was the least structurally necessary of
@@ -60,24 +60,24 @@ the 6 Bacteria entries to drop.
 
 - **Removed:** SRR40402583, Campylobacter jejuni, Bacteria, ~162x.
 - **Added:** SRR065390, C. elegans N2 WGS, Animalia — one of the ORIGINAL
-  primary-10 accessions (`DATASET_LOCKED.md` #6), not a new discovery. Was
+  primary-10 accessions (the locked-dataset list #6), not a new discovery. Was
   already on disk at `/data/fastq/SRR065390_1.fq` (11,282,985,734 B,
   135,234,184 lines = 33,808,546 reads) from the outer project's own
   earlier work — verified present, not re-downloaded. 100 bp reads, ~34×
   coverage (_1 only).
   **No auto-chunk env var applies here** -- `ARCS_AUTOCHUNK_MB` is the
   OUTER ARCS binary's own mechanism; checked directly against this repo's
-  encoder (`stages/106_inprocess.cpp`, `grep -rn AUTOCHUNK`) and confirmed
+  encoder (`src/encoder.cpp`, `grep -rn AUTOCHUNK`) and confirmed
   it has no auto-chunking behavior at all, so there is nothing to suppress.
   The only real implication of this file's size for THIS encoder is that
   it is simply a large single-pass input like any other -- expect
   proportionally higher RAM/time than the smaller datasets, not a special
-  flag. (`DATASET_LOCKED.md`'s ~18 GB peak RAM figure for this accession is
+  flag. (the locked-dataset list's ~18 GB peak RAM figure for this accession is
   measured on the OUTER `arcs` binary and is not assumed to transfer
   unchanged to this repo's own encoder -- if this dataset's peak RAM here
   needs stating, it should be measured fresh, not copied.)
 - SRR40402583 is NOT deleted from disk or from history — it remains a
-  valid, already-measured dataset (`results/phase_a/allphases_14dataset.csv`
+  valid, already-measured dataset (the earlier 14-dataset results
   row `SRR40402583`), just no longer one of the current 15 headline
   accessions. Its number stays on record, marked superseded, not erased.
 
@@ -133,7 +133,7 @@ BAMs via samtools, then downsampled.
 | 16 | `HG002_pooled.fq` | NA24385 | Ashkenazi son | 30x chr20 | **also** the sole subject of the T2.2 coverage sweep (10/15/20/30x) |
 | 17 | `HG003_pooled.fq` | NA24149 | Ashkenazi father | 30x chr20 | **also** half of the T2.5 synthetic tetraploid |
 | 18 | `HG004_pooled.fq` | NA24143 | Ashkenazi mother | 30x chr20 | **also** the other half of the T2.5 tetraploid |
-| 19 | `HG005_pooled.fq` | NA24631 | Han Chinese son | 30x chr20 | **the published loss** — see `paper/LIMITATIONS.md` §2 |
+| 19 | `HG005_pooled.fq` | NA24631 | Han Chinese son | 30x chr20 | **the published loss** — see the limitations draft §2 |
 
 All four appear in T2.1 (het-SNV), T2.3 (het-indel) and T3.4 (locus fidelity,
 100 sites each = the 400). The "also" column is what is *additional* to that.
@@ -157,7 +157,7 @@ archive with no reference; both are evaluation-side only.
 2026-09-03** (verified by direct file check, not assumed): the two
 originally queued (SRR32429602 HCMV, SRR10676752 Utricularia gibba) were
 completed and relocated from `/tmp/newdl/` — a non-persistent location,
-moved into place specifically so `scripts/run_claim1_bench.sh` (which reads
+moved into place specifically so `scripts/benchmark_scripts/benchmark_1_run.sh` (which reads
 from `$CAPSULE_DATA_DIR`, i.e. `/data/fastq/`) can find them — and
 SRR065390 (C. elegans, added in the second swap above) was already present
 from earlier work.
@@ -170,7 +170,7 @@ This paragraph is kept because this project marks retractions in place:
 > SPRING/Genozip comparison yet. SRR065390 (C. elegans) has never been run
 > through this repo's own comparison at all.~~
 
-Both were run in full. From `benchmark/results/claim1/claim1_T1.1_T1.2.csv`:
+Both were run in full. From `results/claim1/claim1_T1.1_T1.2.csv`:
 
 | accession | CAPSULE | SPRING | Genozip | lossless |
 |---|---|---|---|---|

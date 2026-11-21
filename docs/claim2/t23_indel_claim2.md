@@ -50,7 +50,7 @@ pattern on the same individual. Not hidden, not averaged away.
 
 ## Critical flag dependency — every number above requires `CAPS_CALL_INDELS=1`
 
-Verified in `PIPELINE.md`'s flags table (committed this session, but the
+Verified in the pipeline notes' flags table (committed this session, but the
 flag itself and its necessity predate tonight): without
 `CAPS_CALL_INDELS=1`, `capsule_decode call` silently takes the graph-only
 SNV path instead of erroring — producing a different, narrower
@@ -60,7 +60,7 @@ those files).
 
 ## Withdrawn numbers — history, kept per this project's own retraction rule
 
-`docs/CLAIM2_FINAL_VERDICT.md` records that earlier het-indel figures
+The Claim 2 final-verdict note records that earlier het-indel figures
 (0.637, then 0.666, both measured on 8 chr20 WINDOWS, not full chromosomes)
 are **superseded** by the final 0.621 figure above (full chr20, 4
 individuals, from the 2026-09-09/10 sweep). The 0.621 figure in this file

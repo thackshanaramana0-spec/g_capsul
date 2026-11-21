@@ -4,8 +4,16 @@
 // Ltd -- see thirdparty/htscodecs/LICENSE.md). Namespaced `qlc`, following the
 // project's per-coder convention (mmc, refc, pgc, nmc).
 //
-// WHY VENDOR RATHER THAN REIMPLEMENT (measured, see docs/REIMPL_NOTES.md):
-// our own quality coder (stages 67-92) beats SPRING 7/8 and Genozip 8/8 but
+// What it writes (struct Encoded), which become two archive streams:
+//   body   qual_body   fqzcomp payloads of the blocks, concatenated
+//   index  qual_index  per block, as varints: payload byte length, read count, and
+//                      the offset that was subtracted from the quality bytes
+// A block holds up to QBLOCK_BYTES of quality, cut at a read boundary. When
+// decoding, record boundaries come from the archive's read_lengths stream (see note 2
+// below for the copy fqzcomp keeps of its own).
+//
+// WHY VENDOR RATHER THAN REIMPLEMENT (measured, see docs/extras/REIMPL_NOTES.md):
+// our own earlier quality coder beats SPRING 7/8 and Genozip 8/8 but
 // loses to real fqzcomp on 8/8 by 1.1-4.5%, while fqzcomp is also 2x faster
 // single-threaded than ours is on 12 threads at the same RAM. htscodecs is BSD,
 // unlike PgRC2 (GPL-3) which is why THAT had to be reimplemented. Every
@@ -107,6 +115,9 @@ struct BlockJob {
     size_t                            qbytes = 0;
 };
 
+// Sets up a block's trials: the two candidate offsets (the block's own minimum
+// quality byte, and 33), the shifted copy of the quality for each, and the
+// strategy count (4, or fewer under CAPS_QSTRAT).
 static void prep_block(const std::string& qbuf, const std::vector<uint32_t>& lens,
                        BlockJob& J){
     J.lens = lens; J.qbytes = qbuf.size();
@@ -130,6 +141,8 @@ static void prep_block(const std::string& qbuf, const std::vector<uint32_t>& len
     J.ok.assign(J.ntrial, 0);
 }
 
+// Runs trial t of a block, where t = offset index * nstrat + strategy. Trials of
+// one block (and of different blocks) are independent, so they can run in parallel.
 static void run_trial(BlockJob& J, int t){
     const int ci = t / J.nstrat, strat = t % J.nstrat;
     // fqz_compress MUTATES the slice (flags at fqzcomp_qual.c:655, len at :790),
@@ -148,6 +161,8 @@ static void run_trial(BlockJob& J, int t){
     if(c){ J.res[t].assign((uint8_t*)c,(uint8_t*)c+osz); J.ok[t]=1; free(c); }
 }
 
+// Keeps the smallest successful trial of a block. Ties go to the lowest trial
+// index, and qmin_out is that trial's offset. Returns false if every trial failed.
 static bool select_block(BlockJob& J, std::vector<uint8_t>& out, uint8_t& qmin_out){
     bool got=false; size_t best=0;
     for(int t=0; t<J.ntrial; ++t){
@@ -160,6 +175,9 @@ static bool select_block(BlockJob& J, std::vector<uint8_t>& out, uint8_t& qmin_o
     return got;
 }
 
+// Single-block form of prep_block, run_trial and select_block. Currently unused:
+// encode_from_fastq runs those three so that trials from several blocks can share
+// one parallel loop. The trial grid and the selection rule are the same.
 static bool encode_block(const std::string& qbuf,
                          const std::vector<uint32_t>& lens,
                          std::vector<uint8_t>& out,
@@ -186,50 +204,15 @@ static bool encode_block(const std::string& qbuf,
     uint8_t cands[2] = { qmin, 33 };
     const int ncand = (qmin!=33 && qmin>=33) ? 2 : 1;
 
-    // ── THE 8 TRIALS RUN CONCURRENTLY ────────────────────────────────────
-    // This tries every (offset, strategy) pair and keeps the smallest, which
-    // is 2 x 4 = 8 FULL compressions of the same block. That is why this coder
-    // measured 16.6 MB/s where fqzcomp alone runs an order of magnitude faster
-    // -- the throughput was never the coder, it was doing the coder's work
-    // eight times.
-    //
-    // The eight trials are completely independent: each reads a shifted copy
-    // of the block and writes its own buffer. Running them concurrently is
-    // therefore FREE SPEED WITH NO SIZE COST -- the same eight candidates are
-    // evaluated and the same one wins.
-    //
-    // DETERMINISM. The serial loop kept the first STRICTLY smaller result, so
-    // ties resolved to the lowest (ci, strat). Results are collected into a
-    // fixed-index array and scanned in that same order, so the selection is
-    // identical regardless of completion order -- verified byte-identical.
-    // CAPS_QSTRAT / CAPS_QOFF limit the trial grid, for measuring what the 8
-    // trials actually buy. Unset, both are the full grid and the output is
-    // bit-identical to before. Strategy order matters: the scan below keeps the
-    // first strictly-smaller result, so restricting to the first k strategies
-    // evaluates a PREFIX of the same ordered candidate list.
-    // ── ONE STRATEGY, NOT FOUR. MEASURED 2026-09-05 ─────────────────────
-    // The four fqzcomp strategies were being tried in full on every block and
-    // buy NOTHING. Measured by varying the trial grid and comparing archives:
-    //
-    //   E. coli   2 offsets x 4 strategies  68,677,977   2 x 2  68,677,977  (same)
-    //             1 offset  x 4 strategies  68,771,735   1 x 2  68,771,735  (same)
-    //             1 offset  x 1 strategy    68,771,735               (same)
-    //   HG002     2 x 4  574,014,786        2 x 2  574,014,786       (same)
-    //
-    // So strategy contributes 0.000% on both, while the OFFSET dimension is
-    // worth 0.137% and is kept. That turns 8 full compressions of every 256 MB
-    // block into 2 -- this coder's own comment already identified the 8x as why
-    // it ran at 16.6 MB/s when fqzcomp alone is an order of magnitude faster.
-    //
-    // CAPS_QSTRAT=4 restores the full strategy search.
-    // REVERTED TO 4 AFTER MEASUREMENT. Dropping to one strategy looked free on
-    // E. coli and HG002 (both 0.000%) and is NOT: on S. acidocaldarius it costs
-    // +476 B (+0.003%), isolated exactly --
-    //     reference            15,159,145
-    //     new code, QSTRAT=4   15,159,145  IDENTICAL  (mext + pipelining clean)
-    //     new code, QSTRAT=1   15,159,621  DIFFERS
-    // Two datasets are not evidence for a default that touches 82% of the
-    // archive. CAPS_QSTRAT=1 remains available for anyone accepting that cost.
+    // Trial grid: every (offset, fqzcomp strategy) pair is compressed and the
+    // smallest kept, up to 2 offsets x 4 strategies = 8 full compressions of the
+    // block. The trials are independent and run concurrently, and the results are
+    // scanned in a fixed order (ties go to the lowest offset index, then the lowest
+    // strategy), so the winner does not depend on completion order. The strategy
+    // dimension is worth 0.000% on E. coli and HG002 but 0.003% (476 B) on
+    // S. acidocaldarius, so all four stay by default. The offset dimension is worth
+    // about 0.14% on E. coli. CAPS_QSTRAT=1..4 and CAPS_QOFF=1..2 shrink the grid,
+    // for measurement. The measurements are in docs/extras/ENGINEERING_NOTES_CODERS.md.
     int nstrat = 4;
     if(const char* e=getenv("CAPS_QSTRAT")){ int v=atoi(e); if(v>=1&&v<=4) nstrat=v; }
     int nc = ncand;
@@ -323,7 +306,7 @@ static Encoded encode_from_fastq(const char* fq_path, size_t BLOCK_BYTES=QBLOCK_
         int nstrat_est = 4;
         if(const char* e=getenv("CAPS_QSTRAT")){ int v=atoi(e); if(v>=1&&v<=4) nstrat_est=v; }
         const unsigned trials = (unsigned)(2*nstrat_est);        // 2 offsets, worst case
-        // ONE BLOCK. MEASURED AND REVERTED 2026-09-06. Filling the idle cores
+        // ONE BLOCK. MEASURED AND REVERTED. Filling the idle cores
         // with a second block looked obviously right and LOSES once quality is
         // overlapped with the assembly (which it now is): the worker already
         // shares the machine with round 1, so a second block only doubles its

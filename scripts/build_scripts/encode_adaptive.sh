@@ -1,7 +1,7 @@
 #!/bin/bash
 # Adaptive mapping-ceiling selection.
 #
-# VERIFIED FINDING (PLAN_PG_VOLUME.md 1.4): the optimal mapping ceiling varies
+# MEASURED FINDING: the optimal mapping ceiling varies
 # 5.6x across datasets (halo ~8 = L/19, sulfo ~45 = L/5.6) while read length
 # varies only 1.66x, so NO constant and no fixed ratio of read length can
 # express it -- including the MAXMAP=Lmax/13 currently compiled in. The driver
@@ -96,8 +96,8 @@ C3=$(( LMAX / 19 )); [ "$C3" -lt 6 ] && C3=6
 C4=$(( LMAX / 8  )); [ "$C4" -lt 6 ] && C4=6
 # ── DEFAULT IS THE 4-POINT GRID, MEASURED ON 14 DATASETS 2026-09-05 ─────────
 # The 8-point grid costs 56% of encoder runtime (HG002: 497 s for 8 candidates
-# against 221 s for one) and buys almost nothing. Full measurement in
-# docs/GRID_COST_MEASURED.txt -- archive cost of the 4-point grid vs 8-point:
+# against 221 s for one) and buys almost nothing. Measured archive cost of
+# the 4-point grid vs 8-point:
 #
 #   +0.000% on 10 of 14 (incl. HG002, S. cerevisiae, S. aureus, P. falciparum,
 #                        HCMV, L. major, M. tuberculosis, P. aeruginosa,

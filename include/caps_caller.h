@@ -1,30 +1,84 @@
 #pragma once
-// ── CAPSULE Claim-2 caller ──────────────────────────────────────────────────
-// A faithful port of the outer ARCS project's reference-free bubble caller
-// (/root/arcs-clean/src/caller.cpp), retargeted at CAPSULE's own assembly
-// output instead of ARCS's build_vodbg_pg / CallData.
+// ── CAPSULE Claim-2 caller ───────────────────────────────────────────────────
+// Reference-free heterozygous SNV and indel caller that works on the reads of a
+// G_CAPSUL archive, with no reference genome. It is a port of the ARCS project's
+// bubble caller (a separate codebase, not in this repository), retargeted at
+// CAPSULE's own assembly output instead of ARCS's build_vodbg_pg / CallData.
 //
-// Frozen parameters (do not re-tune — these are ARCS's own validated,
-// held-out-tested values, ported verbatim; see
-// /root/arcs-clean/docs/VARIANT_ANALYSIS_MASTER.md):
+// ENTRY POINT. capscall::run_variant_call(seqs, quals, cd, out_vcf) writes a VCF
+// to out_vcf and returns the number of records written, or -1 on failure (cd.valid
+// false, or the output file cannot be opened). `seqs` and `quals` are the original
+// reads in file order. `cd` (struct CallData) says where each read sits: its contig,
+// its offset in that contig, its strand, its left clip and its global pg offset.
+// Two callers exist:
+//   * `capsule_decode call` (src/decoder.cpp, capsule_call_from_archive) builds
+//     CallData from an archive compressed with CAPS_SPANS=1 or CAPS_CALL=1 (which
+//     store the contig spans). By default it runs the GRAPH-ONLY path: it sets
+//     CAPS_DBG=1 and CAPS_DBG_ONLY=1, packs the reads with capspack (include/caps_pack.h)
+//     and passes a quality bitmap. With CAPS_CALL_INDELS=1 it unsets both and runs the
+//     FULL caller on plain-text reads. The packed or plain input format depends on
+//     those two variables (SEQ_PACKED below), so they must agree with how the reads
+//     were prepared.
+//   * the encoder, when CAPS_CALL=1, calls it at the end of compression, with the
+//     in-memory reads and no DBG variables set unless the user sets them.
+//
+// PIPELINE inside run_variant_call (the banner comments below carry these names):
+//   substrate   build_substrate: drop contigs that are near-duplicates of a longer
+//               one (collapse_contigs, off with CAPS_NO_COLLAPSE), then re-place the
+//               reads on the surviving contigs (off with CAPS_NO_REMAP). SNVs are
+//               called on this collapsed substrate. Indel bubbles use it too by default.
+//   1. kc       canonical 31-mer counts of all reads. Spills to disk past a memory
+//               ceiling (CAPS_MAXRAM_MB), see the LAYER 2 / LAYER 3 comments.
+//   2-6a.       per-contig pileup, SNV candidates, flank pass, filters, SNV records.
+//   DBG channel de Bruijn bubble channel (CAPS_DBG=1, and only on a sample that looks
+//               diploid or with CAPS_DBG_FORCE), DiscoSNP++'s algorithm run on the graph
+//               already built. With CAPS_DBG_ONLY=1 it is the ONLY channel: the pileup, the
+//               second substrate and the indel pass are skipped (see DBG-ONLY MODE).
+//   5. filters  the frozen filters (parameters below) turn candidates into kept calls.
+//   6b. indels  het indels are BUBBLES between two haplotype contigs. Channels: the
+//               contig-pair bubble scan (with closing anchor, junction support and
+//               maximum-weight matching), 6b3 positional clustering (off with
+//               CAPS_NO_PCLUSTER), 6b4 link-scan (CAPS_LINKSCAN), 6b2 cross-contig SNVs
+//               (off with CAPS_NO_XSNV).
+//   6c. VCF     sort and write. Records from the SNV pass and from the bubble pass use
+//               different contig spaces (contig_N and bcontig_N), see CAPS_DUMP_CONTIGS.
+// The switches are listed with their defaults in docs/configuration_reference.md.
+// The stages are all inside one function, so a reader should follow the banner
+// comments, not function boundaries.
+//
+// Frozen parameters (do not re-tune: these are ARCS's own validated, held-out-tested
+// values, ported verbatim):
 //   HDMAX=2, MAF=0.20, DHI=2.5, KHI=1.1, MC=3, TRI=0.12, HALF=15.
+// They are described where they are used. The long-tail tuning and diagnostic
+// switches (CAPS_DBG_*, CAPS_PCLUSTER_*, CAPS_TRACE and so on) are experiments that
+// do not change the default result. The measured outcomes of those experiments are
+// quoted next to the code that was tried.
 //
-// Structural note: ARCS's Method B assembler (vodbg_pg) keeps reads in
-// several DISCRETE contigs by construction. CAPSULE's own assembler stitches
-// everything into one (or two) long pg buffers via MEM references, which
-// would erase the haplotype separation the indel-bubble mechanism needs. The
-// fix (see stages/106_inprocess.cpp, CAPS_CALL gate): every chain emitted in
-// round-1/round-2 (main pg) and in the second-region sweep is its own
-// contiguous span of `pg`, captured as a contig BEFORE the MEM self-match
-// stage runs (MEM never mutates `pg` itself, only which of its bytes get
-// literal-encoded — so contig boundaries captured pre-MEM are still valid
-// after MEM completes). Pigeonhole-mapped reads land inside an
-// already-emitted span by construction (they only match against already-
-// appended pg content), so they inherit that span's contig id for free.
+// WHY THE CONTIGS COME FROM THE ENCODER. ARCS's assembler keeps reads in several
+// DISCRETE contigs by construction. CAPSULE's own assembler stitches everything
+// into one (or two) long pg buffers via MEM references, which would erase the
+// haplotype separation the indel-bubble mechanism needs. The fix (src/encoder.cpp,
+// CAPS_CALL / CAPS_SPANS gate): every chain emitted in round 1 and round 2 (main
+// pg) and in the second-region sweep is its own contiguous span of `pg`, captured as
+// a contig BEFORE the MEM self-match stage runs. MEM never mutates `pg` itself, only
+// which of its bytes get literal-encoded, so contig boundaries captured pre-MEM are
+// still valid after MEM completes. Pigeonhole-mapped reads land inside an
+// already-emitted span by construction (they only match against already-appended pg
+// content), so they inherit that span's contig id for free.
 //
-// This header owns ONLY the caller logic; contig-span capture and CallData
-// population live in 106_inprocess.cpp, gated on CAPS_CALL=1, zero cost when
-// unset (matches the CAPS_NAMES / CAPS_QUAL convention).
+// This header owns ONLY the caller logic. Contig-span capture and CallData
+// population live in src/encoder.cpp (gated, zero cost when unset, like CAPS_NAMES
+// and CAPS_QUAL) and in src/decoder.cpp (`call`).
+//
+// CITATIONS TO WORKING NOTES. Comments below cite analysis notes by file name, for
+// example HOW_DISCOSNP_WINS.md or INDEL_LOSS_SKELETAL.md. Those notes are not part of
+// this repository. The numbers quoted beside each citation are the evidence, and the
+// reported results are in docs/claim2/. "DiscoSNP++" source files that are named
+// (Bubble.cpp, Graph.cpp and so on) are the third-party DiscoSNP++ and gatb-core code.
+//
+// The numeric results of this caller are produced by the code below. This header has
+// no unit tests of its own. scripts/claim2_scripts/test_claim2.sh is the fast synthetic
+// check and the benchmark scripts are the real-data check.
 
 #include <unordered_map>
 #include <unordered_set>
@@ -86,6 +140,10 @@ constexpr int HDMAX = 2, MC = 3, HALF = 15;
 constexpr double MAF = 0.20, DHI = 2.5, KHI = 1.1, TRI = 0.12;
 constexpr int MAXINDEL = 30;
 
+// Base helpers. b2i maps A,C,G,T to 0..3 and anything else (N, lowercase) to -1.
+// compl_base complements a base and returns 'N' for a non-ACGT character. rc_str is
+// the reverse complement of a string. pack31 packs 31 bases into the low 62 bits
+// (first base in the high bits) and returns false if any base is not ACGT.
 inline int b2i(char c) {
     switch (c) { case 'A': return 0; case 'C': return 1; case 'G': return 2; case 'T': return 3; }
     return -1;
@@ -164,6 +222,10 @@ inline bool is_str_event(const std::string& seq, const std::string& flank) {
     return false;
 }
 
+// One indel read off a pair of contigs A and B that diverge. type 0: A has bases that
+// B lacks (a deletion in B), len bases long. type 1: B has bases that A lacks (an
+// insertion in B), with the inserted bases in `ins`. apos is the position in A where
+// they diverge. ok is false when no bubble was found.
 struct Bubble { int type = 0; uint32_t apos = 0; int len = 0; std::string ins; bool ok = false; };
 
 inline bool flank_match(const std::string& A, size_t ai, const std::string& B, size_t bi, int F) {
@@ -193,6 +255,13 @@ inline bool flank_match_tol(const std::string& A, size_t ai, const std::string& 
     return true;
 }
 
+// Looks for an indel between contig A (from position pA) and contig B (from qB), the
+// positions where the comparison starts. It first extends the exact match to the
+// point d where they differ. A bubble is accepted only if the two sequences then re-converge
+// exactly, over FLANK identical bases, after an indel of at most `maxindel` bases. Tried in
+// order: the homopolymer run-length branch, the short-tandem-repeat branch (opt-in,
+// CAPS_STRBUBBLE), then the generic shift search, insertion before deletion. Returns ok=false
+// when nothing closes.
 inline Bubble extract_bubble(const std::string& A, uint32_t pA, const std::string& B, uint32_t qB,
                               int maxindel, int FLANK) {
     Bubble r;
@@ -203,7 +272,7 @@ inline Bubble extract_bubble(const std::string& A, uint32_t pA, const std::strin
     if (pA + d >= la || qB + d >= lb) return r;
 
     // ── HOMOPOLYMER RUN-LENGTH BRANCH ────────────────────────────────────────
-    // MEASURED MOTIVATION (docs/INDEL_LOSS_SKELETAL.md): every one of the 9
+    // MEASURED MOTIVATION (working note INDEL_LOSS_SKELETAL.md): every one of the 9
     // truth indels DiscoSNP++ finds on HG002 r2 that we miss is a 1 bp indel
     // inside a homopolymer run of 7-8 identical bases. The generic path below
     // cannot represent them: a 1 bp change in an 8-mer run shifts its LENGTH
@@ -252,7 +321,7 @@ inline Bubble extract_bubble(const std::string& A, uint32_t pA, const std::strin
 
     // ── SHORT TANDEM REPEAT (STR) RUN-LENGTH BRANCH ──────────────────────────
     // Generalizes the homopolymer branch above from unit length 1 to unit
-    // lengths 2..6. MEASURED MOTIVATION (docs/HET_INDEL_FRESH_SCAN.md, 2026-09-03):
+    // lengths 2..6. MEASURED MOTIVATION (working note HET_INDEL_FRESH_SCAN.md, 2026-09-03):
     // a fresh scan of the raw FP/FN records found a real disagreement at
     // chr20:3332481-3332512, a (TTTA)n tetranucleotide repeat that GIAB's own
     // truth annotates `difficultregion=AllTandemRepeats_lt51bp_slop5`. The
@@ -285,7 +354,7 @@ inline Bubble extract_bubble(const std::string& A, uint32_t pA, const std::strin
     // ways). So the STR loci it reaches were already being resolved
     // equivalently by the generic loop, or its candidates die in the same
     // downstream filters every other candidate dies in -- consistent with the
-    // standing structural finding (docs/HOW_DISCOSNP_WINS.md sec 4) that the
+    // standing structural finding (working note HOW_DISCOSNP_WINS.md sec 4) that the
     // indel gap is not in bubble GEOMETRY but in what the substrate can offer
     // a filter to reject. Kept behind a flag, not deleted, per this project's
     // rule that refuted ideas stay on the record with their measurement.
@@ -335,7 +404,7 @@ inline Bubble extract_bubble(const std::string& A, uint32_t pA, const std::strin
 }
 
 // ── Whole-pair gapped alignment scan ─────────────────────────────────────────
-// MEASURED MOTIVATION (docs/INDEL_LOSS_SKELETAL.md §8): both allele-contigs
+// MEASURED MOTIVATION (working note INDEL_LOSS_SKELETAL.md §8): both allele-contigs
 // DO exist (84% of placed reads match their contig perfectly), but the two are
 // never paired at the event, because near a homopolymer every 25-mer
 // overlapping the run differs between haplotypes, so the shared anchors that
@@ -455,6 +524,9 @@ struct Roll25 {
     inline uint64_t canon() const { return f < r ? f : r; }
 };
 
+// Log-likelihood of the observed (base, quality) pairs `rl` under a pileup whose
+// alleles are al[0..m). Each observation is explained by an allele chosen uniformly: it
+// matches with probability 1-e and mismatches with e/3, where e = 10^(-Q/10).
 inline double loglik(const std::vector<std::pair<int,int>>& rl, const int* al, int m) {
     double ll = 0.0;
     for (auto& bq : rl) {
@@ -493,6 +565,9 @@ inline double loglik(const std::vector<std::pair<int,int>>& rl, const int* al, i
 // behaviour exactly, so every measurement has a revert.
 struct GapEvent;
 
+// The contigs and read placements the caller works on after build_substrate has
+// collapsed redundant contigs and re-placed the reads. Same fields as CallData
+// (placement per original read), plus the optional read-level gapped evidence.
 struct Substrate {
     std::vector<std::string> contigs;
     std::vector<uint32_t> read_cid, read_pos;
@@ -1370,7 +1445,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
     // contains the whole fragment. That is precisely our false-positive class.
     //
     // THE FLIP: this index was already recorded as near-vacuous for us
-    // (docs/INDEL_PRECISION_ROOT_CAUSE.md, "Group B -- read-support tests
+    // (working note INDEL_PRECISION_ROOT_CAUSE.md, "Group B -- read-support tests
     // are near-vacuous for us": every candidate we emit is read-supported BY
     // CONSTRUCTION, since it was built FROM reads in the first place -- the
     // test EBWT2SNP needs to reject chimeras built from a GRAPH has nothing
@@ -2651,11 +2726,11 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
     // This is a faithful port of Bubble.cpp:300-347 (start: branching node,
     // every successor PAIR) and Bubble.cpp:509-527 (expand: lockstep walk,
     // close on node equality), not an approximation of it. Two earlier attempts
-    // this session failed precisely because they lacked this closure test:
+    // failed precisely because they lacked this closure test:
     // chaining ties are exact-match and so blind to heterozygosity
-    // (docs/GRAPH_HARVEST_REFUTED.md), and near-miss pairs have no graph to
+    // (the GRAPH HARVEST block in docs/extras/ENGINEERING_NOTES_ENCODER.md), and near-miss pairs have no graph to
     // walk against so they fall back on a string-flank test that was already
-    // measured net-negative (flank_match_tol, line ~132).
+    // measured net-negative (flank_match_tol).
     //
     // Opt-in while it is being measured: CAPS_DBG=1.
     // min1/min2 = the WEAKEST k-mer count along each path. DiscoSNP++ obtains
@@ -3128,7 +3203,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         size_t ab_tip = 0, ab_cycle = 0, ab_budget = 0, ab_exhaust = 0, ab_ok = 0;
         // Independent indel discovery (their start_indel_prediction).
         // OPT-IN (CAPS_DBG_IBFS=1) and never on by default. The indel claim is
-        // withdrawn -- see docs/CLAIM2_FINAL.md -- so this path is kept for the
+        // withdrawn -- see working note CLAIM2_FINAL.md -- so this path is kept for the
         // record and for future work, but it is unmeasured at scale and must
         // not be able to affect a shipped number. IBFS_MAXINDEL mirrors D=100.
         const bool WANT_IBFS = std::getenv("CAPS_DBG_IBFS") != nullptr;
@@ -5450,7 +5525,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
             // MULTI-START EXTRACTION. `extract_bubble` walks right from the
             // anchor to the FIRST divergence, so it can only ever see the
             // nearest difference. Measured on the 9 indels DiscoSNP++ finds and
-            // we miss (docs/INDEL_LOSS_SKELETAL.md §6): usable shared anchors
+            // we miss (working note INDEL_LOSS_SKELETAL.md §6): usable shared anchors
             // are ABUNDANT for these loci (49-1133 per contig pair), but the
             // nearest one lies 213-135,453 bp from the event -- so the walk
             // always terminates on some other difference first and the event is
@@ -5513,7 +5588,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 // on one side, so R[ra..] and Aalt[rb..] are misaligned by
                 // exactly that amount. Every one of the 9 truth indels
                 // DiscoSNP++ finds and we miss is such an event
-                // (docs/INDEL_LOSS_SKELETAL.md). Slide the alt side by up to
+                // (working note INDEL_LOSS_SKELETAL.md). Slide the alt side by up to
                 // the event length and re-test; a genuine run-length change
                 // closes exactly there.
                 if (!same && !std::getenv("CAPS_NO_HPCLOSE")) {
@@ -5542,7 +5617,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
                 // observed in the READS (kcount >= MC). DiscoSNP++'s design is
                 // exactly this -- propose permissively from the graph, then
                 // let kissreads2 reject against reads -- and the standing
-                // finding of this project (docs/HOW_DISCOSNP_WINS.md sec 4) is
+                // finding of this project (working note HOW_DISCOSNP_WINS.md sec 4) is
                 // that OUR read-validation has nothing to reject because our
                 // proposals are already read-derived and strict. Loosening the
                 // proposal is what gives the read test something to do.
@@ -6026,7 +6101,7 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         // Why it should succeed where every filter failed: our false bubbles
         // come from SPLICING one contig's flank onto another's allele, and no
         // read-support test, context test or matching can detect a chimera
-        // whose pieces are all read-derived (see docs/INDEL_PRECISION_ROOT_CAUSE.md).
+        // whose pieces are all read-derived (see working note INDEL_PRECISION_ROOT_CAUSE.md).
         // Here the evidence is a real read carrying a real gap against the
         // contig; the contig only supplies coordinates and the REF allele.
         // Anchoring on the RIGHT context is also what makes this different from
@@ -6880,8 +6955,8 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
         // Four fprintf loops over ~1.05M contigs, one call each, measured at
         // ~61 s -- comparable to the whole pcluster scan. It is benchmark-only
         // (CAPS_DUMP_CONTIGS exists so the lift can map calls to the genome; a
-        // production call does not set it), but it inflated every measurement
-        // in this session and is one setvbuf away from free.
+        // production call does not set it), but it inflated the timing
+        // measurements it was present in, and one setvbuf makes it nearly free.
         static std::vector<char> dumpbuf;
         if (df) { dumpbuf.resize(1u << 22); setvbuf(df, dumpbuf.data(), _IOFBF, dumpbuf.size()); }
         if (df) {
@@ -6932,11 +7007,10 @@ inline int run_variant_call(const std::vector<std::string>& seqs,
     g_ipsum += elapsed_s(g_ip_last, clk::now());
     fprintf(stderr, "[CAPS-CALL] contigs=%zu H=%u candidates=%zu SNVs=%zu indels=%zu -> %s\n",
             cd.contigs.size(), H, total_candidates, n_snv, n_indel, out_vcf.c_str());
-    // RECONCILIATION. Six timers previously summed to 75.6 s inside a stage
-    // that ran 1000+ s, and I reported both numbers as findings without
-    // noticing they contradict. A stage total that does not match its parts
-    // means the parts are mis-placed -- which had already happened twice in
-    // this file today. Print the check so it cannot be skipped again.
+    // RECONCILIATION. Six timers once summed to 75.6 s inside a stage that ran
+    // 1000+ s, two numbers that contradict each other. A stage total that does not
+    // match its parts means the parts are mis-placed, so the check is printed on
+    // every run.
     fprintf(stderr, "[INDEL-PROF] === accounted %.2fs of stage; if this differs "
                     "from the indel_pass total below, the timers are WRONG ===\n",
             g_ipsum);

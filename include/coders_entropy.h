@@ -1,8 +1,12 @@
 #pragma once
 // Per-stream entropy coders: PPMd7, FSE/Huff0, and an adaptive range coder
-// with per-position models, used where general-purpose xz/bzip2/zstd
-// selection alone left compression on the table for mismatch and position
-// streams.
+// with per-position models, used where xz alone left compression on the table
+// for mismatch and position streams. Which coder a stream uses is decided per
+// stream by best_encode() in coders_inproc.h, which tries every candidate and
+// keeps the smallest. This header holds only the coders and their inverses.
+// Each encoder returns an EMPTY vector when it cannot or should not code the
+// input (zero length, allocation failure, no gain), and the caller then falls
+// back to another method.
 //
 // PPMd7 (LZMA SDK, public domain) and FSE/Huff0 (Yann Collet, BSD) are
 // standard third-party libraries, vendored under thirdparty/ and called
@@ -24,6 +28,10 @@ extern "C" {
 namespace pgc {
 
 // ---------------- PPMd7 ----------------
+// Coded form: [order u8][model memory in bytes u32, little-endian][PPMd7z range-coded
+// bytes]. The decoder reads order and memory size back from these five bytes.
+// ppmd_write below is the byte sink the library calls; it sets `overflow` instead
+// of writing past the buffer, which makes ppmd_encode return empty.
 struct OutBuf { IByteOut vt; uint8_t* cur; uint8_t* lim; size_t written=0; bool overflow=false; };
 static void ppmd_write(const IByteOut* p, Byte b){
     OutBuf* o = (OutBuf*)((char*)p - offsetof(OutBuf, vt));
@@ -56,6 +64,8 @@ static std::vector<uint8_t> ppmd_encode(const uint8_t* src, size_t n,
 }
 
 // ---------------- FSE / Huff0 ----------------
+// Both return empty when the library reports an error, when the result is not
+// smaller than the input, or when it is the 1-byte RLE form (see below).
 static std::vector<uint8_t> fse_encode(const uint8_t* src, size_t n){
     if(!n) return {};
     std::vector<uint8_t> out(FSE_compressBound(n)+16);
@@ -73,6 +83,9 @@ static std::vector<uint8_t> fse_encode(const uint8_t* src, size_t n){
     if(FSE_isError(r) || r<=1 || r>=n) return {};
     out.resize(r); return out;
 }
+// Huff0 variant of fse_encode. No caller uses it today: best_encode tries FSE
+// (method 3) and has no Huff0 method id, so a stream coded this way could not be
+// decoded by capsule_decode_stream.
 static std::vector<uint8_t> huf_encode(const uint8_t* src, size_t n){
     if(!n) return {};
     std::vector<uint8_t> out(HUF_compressBound(n)+16);
@@ -85,6 +98,12 @@ static std::vector<uint8_t> huf_encode(const uint8_t* src, size_t n){
 // Interleaves `period` independent models so that column k of a
 // fixed-stride record gets its own statistics, a transpose applied inside
 // the coder itself rather than as a separate preprocessing pass.
+// Coded form: the carry-propagating range coder's bytes, with no header. The
+// first byte is always the initial carry cache (zero) and the decoder skips it.
+// The decoder needs the raw length and the same `period`. The framing in
+// coders_inproc.h stores the length. Period is 1 when the coder is chosen through
+// best_encode (method 4), and equals the bucket's mismatch count for the mm_pos
+// buckets (mmpos_encode_buckets), where column k of each read gets its own model.
 struct RC {
     std::vector<uint8_t> out; uint64_t low=0; uint32_t range=0xFFFFFFFFu;
     uint8_t cache=0; uint64_t cacheSize=1;
@@ -101,6 +120,10 @@ struct RC {
     }
     void flush(){ for(int i=0;i<5;++i) shiftLow(); }
 };
+// Adaptive order-0 byte model. Every symbol starts at frequency 1, each coded
+// symbol adds 32, and when the total passes 60000 all frequencies are halved
+// (kept at least 1). RCD/Model256D below must apply exactly the same updates in
+// the same order, or encoder and decoder drift apart.
 struct Model256 {
     uint16_t f[256]; uint32_t tot;
     Model256(){ for(int i=0;i<256;++i) f[i]=1; tot=256; }
@@ -128,10 +151,15 @@ static std::vector<uint8_t> range_encode(const uint8_t* src, size_t n, unsigned 
 // through the raw dumped streams, never through the entropy layer.
 
 struct InBuf { IByteIn vt; const uint8_t* cur; const uint8_t* lim; };
+// Byte source for the PPMd7 library. Past the end of the input it returns zeros
+// instead of failing, so a truncated stream decodes to wrong bytes, not an
+// error; callers rely on the stored raw length and the archive's own checks.
 static Byte ppmd_read(const IByteIn* p){
     InBuf* b = (InBuf*)((char*)p - offsetof(InBuf, vt));
     return b->cur < b->lim ? *b->cur++ : 0;
 }
+// rawlen is the decoded length, which PPMd7 cannot recover from its own output.
+// Returns empty on a short header, allocation failure or a decode error.
 static std::vector<uint8_t> ppmd_decode(const uint8_t* src, size_t n, size_t rawlen){
     if(n<5 || !rawlen) return {};
     const unsigned order = src[0];
@@ -156,11 +184,14 @@ static std::vector<uint8_t> ppmd_decode(const uint8_t* src, size_t n, size_t raw
 static std::vector<uint8_t> fse_decode(const uint8_t* src, size_t n, size_t rawlen){
     if(!n || !rawlen) return {};
     // FSE_compress returns 1 for RLE -- a single repeated symbol, emitted as one
-    // byte. fse_encode accepts that (its own comment says "1 = RLE" but only
-    // excludes 0 and r>=n), and FSE_decompress cannot read it: it expects a
-    // table header. A constant stream therefore encoded fine and decoded to
-    // nothing. Measured: orig2uid_flags, 57,563 zero bytes -> 1 byte -> decode
-    // failure -> zero reads reconstructed.
+    // byte -- and FSE_decompress cannot read it: it expects a table header. An
+    // earlier fse_encode accepted that form, so a constant stream encoded fine and
+    // decoded to nothing. Measured: orig2uid_flags, 57,563 zero bytes -> 1 byte ->
+    // decode failure -> zero reads reconstructed. fse_encode now rejects the 1-byte
+    // result (see above), so the current encoder never produces it. This branch
+    // remains for archives written before that change, and it is correct only when
+    // the repeated symbol is zero, which was the case for the stream it was written
+    // for. For any other constant it returns the wrong byte.
     if(n==1){ return std::vector<uint8_t>(rawlen, src[0]); }
     std::vector<uint8_t> out(rawlen);
     size_t r = FSE_decompress(out.data(), rawlen, src, n);
@@ -194,6 +225,7 @@ struct Model256D {
         return (uint8_t)s;
     }
 };
+// Inverse of range_encode; rawlen and period must match the encoder's.
 static std::vector<uint8_t> range_decode(const uint8_t* src, size_t n, size_t rawlen,
                                          unsigned period=1){
     if(!n || !rawlen) return {};

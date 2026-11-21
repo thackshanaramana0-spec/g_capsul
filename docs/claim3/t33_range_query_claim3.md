@@ -70,7 +70,7 @@ populated by design).
 
 Representative range: `SRR29296997` at 0.15s up to `SRR10676752` at 118.48s
 (the latter is a large plant genome dataset with a correspondingly large
-pseudogenome to search through without the optional sidecar index).
+pseudogenome to decode before searching, without the post-processing index).
 
 ## The critical code-level fact: T3.3 and T3.4 are NOT two mechanisms
 
@@ -79,14 +79,15 @@ T3.4 are the same `mode=="query"` code path in `decoder.cpp`.** The
 only difference is what populates `rr`:
 
 - T3.3: `rr` = literal parsed integers.
-- T3.4: `rr` = output of `find_occurrences()` (pg-search), optionally
-  unioned with the completion index k-mer completion.
+- T3.4: `rr` = output of `find_occurrences()` (pg-search), unioned with the
+  reads the FM-index finds (`CAPS_QUERY_CONTAIN=1`).
 
 Once `rr` is populated, the exact same emit loop serves both — deviations
 applied, strand corrected, N restored, FASTA written. There is no separate
 "T3.3 engine" and "T3.4 engine." This matters for how the paper's
-architecture diagram should be drawn (see `docs/CLAIM3_ARCHITECTURE_DIAGRAM.md`)
-and for correctly answering "why doesn't T3.3 need the completion index but T3.4 does" —
-the answer is that the completion index only helps when `rr` comes from a *search*
-(T3.4), because search has a tolerance ceiling that literal-coordinate
-lookup (T3.3) never encounters in the first place.
+architecture diagram should be drawn (see the Claim 3 architecture-diagram draft)
+and for correctly answering "why doesn't T3.3 need the FM-index but T3.4 does" —
+the answer is that the FM-index only helps when `rr` comes from a *search*
+(T3.4), because a search of the consensus cannot see a read whose own
+deviations spell the probe, which literal-coordinate lookup (T3.3) never
+encounters in the first place.

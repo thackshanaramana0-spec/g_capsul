@@ -23,11 +23,11 @@ is what appears in the title and what the abstract introduces as the thing
 being evaluated.
 
 **ARCH** (Construct, Retain, Compress, Harness — exact wording still being
-finalized, see `refer_paper_docs/claim3/mechanism_insight_claim3.md` for
+finalized, see `docs/claim3/mechanism_insight_claim3.md` for
 the fullest current draft) is a proposed name for the underlying design
 pattern G_CAPSUL implements. **As of this session, ARCH has NOT been added
 to the live manuscript** (`capsul_paper/capsul_manuscript.tex`) — it exists
-only in draft discussion and in this `refer_paper_docs/` folder set. Do not
+only in draft discussion and in this `docs/` folder. Do not
 treat ARCH as already-published terminology; it is a proposed addition,
 pending the user's decision on final wording and placement.
 
@@ -79,9 +79,9 @@ Biology's actual submission guidelines this session, not assumed).
 
 | Claim | Section name | What it tests | Folder |
 |---|---|---|---|
-| 1 | COMPACT | Is the archive smaller than general-purpose FASTQ compressors, losslessly? | `refer_paper_docs/claim1/` |
-| 2 | FAITHFUL | Does the retained structure still support reference-free variant calling? | `refer_paper_docs/claim2/` |
-| 3 | ADDRESSABLE | Can the same archive serve export, coverage, range query, exact match, and locus retrieval? | `refer_paper_docs/claim3/` |
+| 1 | COMPACT | Is the archive smaller than general-purpose FASTQ compressors, losslessly? | `docs/claim1/` |
+| 2 | FAITHFUL | Does the retained structure still support reference-free variant calling? | `docs/claim2/` |
+| 3 | ADDRESSABLE | Can the same archive serve export, coverage, range query, exact match, and locus retrieval? | `docs/claim3/` |
 
 **The three are not independent achievements stacked side by side.** Claim
 1 builds the structure; Claims 2 and 3 are two different, separately-
@@ -94,26 +94,18 @@ useful as a computational substrate rather than serving only as an
 intermediate for reconstruction"*) — full argument in
 `central_insight_and_mechanism.md`.
 
-## What "new/main" vs "old/waste" means in this repo, for navigation purposes
+## Which documents are authoritative
 
-`refer_paper_docs/` contains 111 files as of this session — the large majority are
-historical working notes, many explicitly marked SUPERSEDED or WITHDRAWN
-in their own text (per this project's own stated rule: retractions stay in
-place, never deleted). **The authoritative, current sources are**:
-`BTR_NOTES.md` (top-level, always the first thing to read), the three
-`refer_paper_docs/CLAIM{1,2,3}_FINAL_VERDICT.md` files (each explicitly marks its own
-superseded sections), `results/*.csv` (the actual numeric ground
-truth), and this `refer_paper_docs/` folder tree (built and verified this
-session specifically to be the current, navigable synthesis layer). When in
-doubt about whether a `refer_paper_docs/` file is current, check whether `BTR_NOTES.md`
-or a `refer_paper_docs/` file cites it as a live source — if not, treat it
-as historical record, not something to draw new numbers from.
+For every number, `results/*.csv` is the authoritative source: where a document in
+`docs/` disagrees with a result file, the result file wins. The per-claim folders
+`docs/claim1/`, `docs/claim2/` and `docs/claim3/` are the current explanation of each
+claim. Some documents refer by title to the project's internal development notes (for
+example "the development notes" or a named note). Those notes are the project's working
+record. They are not part of this repository, and nothing in `docs/` depends on reading
+them.
 
 ## File index — where to go next
 
-- `coverage_manifest.md` — the mechanical proof: every one of `docs/`'s 108
-  files, its disposition, and exactly where its content landed (or why it
-  didn't need to)
 - `technical_architecture.md` — the container format and the assembly
   pipeline itself (chaining, pigeonhole mapping, MAXMAP ramp, second
   region, MEM self-match) — HOW the archive is built, independent of any

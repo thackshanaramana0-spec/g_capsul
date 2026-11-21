@@ -30,20 +30,20 @@ against a specialized tool built to do only that one thing.
 
 - **Not a claim that the pseudogenome is a correct standalone genome
   assembly.** T3.1's correctness numbers are honestly mixed (2 of 5-7
-  QUAST metrics won, see `04_T3.1_EXPORT.md`). This was never the point —
+  QUAST metrics won, see `t31_export_claim3.md`). This was never the point —
   see `mechanism_insight_claim3.md` for why "is it a good assembly"
   is the wrong question to ask of this archive.
 - **Not a claim to beat BEETL/CIndex/sFASTQ at exact-match search on their
   own terms.** T3.4 reaches the same recall (1.0000) they get by
-  construction, using an auxiliary index (the completion index) built from the archive
-  after compression. No speed or index-size comparison against them has
-  been measured or is claimed. See `01_T3.4_EXACT_MATCH.md`.
+  construction, using an FM-index over only the reads that deviate from the
+  pseudogenome, built from the archive after compression. No speed or index-size comparison against them has
+  been measured or is claimed. See `t34_exact_match_claim3.md`.
 - **Not five independent mechanisms.** Architecturally there are four real
   code paths, not five (T3.3 and T3.4 are the *same* function in
   `decoder.cpp`, differing only in how one variable gets filled; T3.5
   is not a distinct C++ path at all, it is an orchestration pattern built by
   calling T3.4's primitive twice). See `code_mapping_claim3.md` and
-  the architecture diagram at `docs/CLAIM3_ARCHITECTURE_DIAGRAM.md`.
+  the Claim 3 architecture-diagram draft.
 
 ## The five tables, one line each
 
@@ -52,12 +52,12 @@ against a specialized tool built to do only that one thing.
 | T3.1 | How fast can the pseudogenome be recovered as a standalone FASTA, and how correct is it as a genome? | SPAdes (de novo assembler) | Speed: dominant (129-784x). Correctness: 2 of ~7 QUAST metrics won (genome fraction, indels), rest disclosed as SPAdes's. |
 | T3.2 | How fast can per-base coverage be computed from the archive? | bwa+samtools+mosdepth | Dominant win, 16-54x, identical numbers (not approximated). |
 | T3.3 | Can an arbitrary coordinate range be retrieved directly? | None exists | Native, all 19 datasets, no baseline column applies. |
-| T3.4 | Can every read containing a query string be retrieved (exact match)? | BWT-family (BEETL, CIndex, sFASTQ) | Recall 1.0000, 4 individuals, via completion index (an index derived from the archive, built after compression). |
-| T3.5 | Can both alleles of a heterozygous site be recovered even though compression may have split them onto different pseudogenome coordinates? | None exists | 99.93% native (1,451/1,452), 100% with the completion index, 4 individuals, 2 loci. This is the paper's actual novel claim. |
+| T3.4 | Can every read containing a query string be retrieved (exact match)? | BWT-family (BEETL, CIndex, sFASTQ) | Recall 1.0000, 4 individuals, via an FM-index derived from the archive and built after compression. |
+| T3.5 | Can both alleles of a heterozygous site be recovered even though compression may have split them onto different pseudogenome coordinates? | None exists | 1,452/1,452 (100%) with the FM-index (1,451/1,452, 99.93%, by position alone), 4 individuals, 1 locus. This is the paper's actual novel claim. |
 
 ## Why T3.1 and T3.2 matter beyond the benchmark numbers — the real applications
 
-Verified against `docs/CLAIM3_APPLICATIONS.md`. Claim 3 is fundamentally an
+Verified against the Claim 3 applications note. Claim 3 is fundamentally an
 **amortization argument**: the pseudogenome is built once, during
 compression, so analyses that normally need a separate tool run are served
 directly from stream decodes instead —
@@ -89,7 +89,7 @@ Do not think of T3.1-T3.5 as five separate feature checkboxes. Think of it as:
 2. **T3.3 is "can you address an arbitrary span."** The simplest form of the
    archive's internal coordinate system working as advertised.
 3. **T3.4 is "can you also do what a totally different architecture (BWT)
-   does natively."** Answering yes, at a real cost (the completion index), demonstrates
+   does natively."** Answering yes, at a real cost (the FM-index), demonstrates
    the archive is not *limited* to positional queries — it can be extended.
 4. **T3.5 is "can you use the coordinate system to answer a question T3.3's
    plain version structurally cannot."** At heterozygous sites, compression
@@ -118,7 +118,7 @@ Do not think of T3.1-T3.5 as five separate feature checkboxes. Think of it as:
 ## Source-of-truth rule for this whole folder
 
 Where any file in this folder disagrees with `results/`, the
-result file wins. Where it disagrees with `docs/T3.1_CORRECTNESS_FINAL_20260919.md`
-or `docs/T34_T35_MULTI_INDIVIDUAL_20260919.md`, those (dated, more recent,
+result file wins. Where it disagrees with the T3.1 correctness note
+or `docs/claim3/t34_t35_multi_individual_claim3.md`, those (dated, more recent,
 more thoroughly gated) win. This folder is a *navigation and synthesis*
 layer over those sources, not a replacement source of truth.

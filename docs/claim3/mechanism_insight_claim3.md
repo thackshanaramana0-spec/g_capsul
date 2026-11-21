@@ -3,7 +3,7 @@ Date: 2026-09-19
 Title: How Claim 3 Connects to the Paper's Central Insight — Mechanism,
   Not a Bolt-On Feature. Honest PgRC2/BEETL Comparison.
 Purpose: The single most important synthesis file in this folder. Answers
-  precisely why Claim 3 (and T3.5/the completion index specifically) is architecturally
+  precisely why Claim 3 (and T3.5/the FM-index specifically) is architecturally
   earned rather than an API tacked onto an unrelated compressor, and gives
   an honest, source-checked answer to "could PgRC2 or BEETL do this with a
   small addition."
@@ -36,7 +36,7 @@ mismatches. This is not a bug or an accident of this implementation; it
 follows from precondition (a) building a shared reference, (b) encoding
 position+mismatches, (c) minimizing total size — any compressor meeting
 those three preconditions is subject to the same pressure by construction
-(argued and measured in `docs/PGRC2_EXTENSION_ANALYSIS.md` Layer 2).
+(argued and measured in the PgRC2 extension analysis Layer 2).
 
 **Do not confuse the insight with the mechanism.** The insight is the
 general architectural claim (retained structure is reusable). The
@@ -45,7 +45,7 @@ Claim 2 (F1 0.431→0.888 when reconciled), Claim 3/T3.5 (99.93%→100% when
 reconciled) — because it is where the general insight has the most visible,
 measurable bite. It is not itself the paper's thesis.
 
-**A worked example, verified against `docs/CLAIM3_MECHANISM.md`** (GIAB
+**A worked example, verified against the Claim 3 mechanism note** (GIAB
 `20:3001343`, a real het SNV, C>T): a 40 bp probe ending 6 bp before the
 variant occurs **four times** in the pseudogenome, and the consensus base at
 the variant offset genuinely disagrees between occurrences —
@@ -93,19 +93,21 @@ collapse this way is itself evidence the underlying structure (placement +
 deviations, stored once) is genuinely general-purpose, not five special
 cases dressed up as one story.
 
-## the completion index specifically — extension, not rescue
+## The FM-index specifically — extension, not rescue
 
-the completion index deserves its own paragraph because it is the part most likely to be
-mistaken for a bolt-on API. The honest framing: the completion index is a capability added
+The FM-index deserves its own paragraph because it is the part most likely to be
+mistaken for a bolt-on API. The honest framing: the FM-index is a capability added
 to a **finished archive**, after compression, without re-encoding, without
 touching raw reads, without a second assembly — discovered as *possible*
 only because the archive already stores placement and deviation information
-for an unrelated reason (reconstructing reads exactly). It is evidence the
+for an unrelated reason (reconstructing reads exactly). It also indexes only
+the reads that deviate from the pseudogenome, because the pseudogenome
+already holds the others. It is evidence the
 substrate is general, not proof it was designed with foresight for this
 exact use. State it that way; do not imply premeditation the project cannot
 verify.
 
-## A real, measured number that directly proves T3.3/T3.5's distinction from substring search — found in `docs/CLAIM3_LOCKED.md`, not yet in this file until now
+## A real, measured number that directly proves T3.3/T3.5's distinction from substring search — found in the Claim 3 locked-results note, not yet in this file until now
 
 **50 random 40bp probes from the E. coli pseudogenome, measuring what
 fraction of returned reads do NOT contain the probe substring**: median
@@ -127,8 +129,8 @@ interface). The correct, precise claim is that PgRC2 lacks the
 **interface**, not the data — a reviewer who knows PgRC2's internals would
 check exactly this distinction.
 
-**Honesty flag on the source of the above**: `docs/CLAIM3_FINAL_VERDICT.md`
-and `docs/CLAIM3_LOCKED.md` (both read in full this session) are more
+**Honesty flag on the source of the above**: The Claim 3 final-verdict note
+and the Claim 3 locked-results note (both read in full this session) are more
 deeply superseded than Claim 1/2's equivalent docs — they predate T3.4 and
 T3.5 entirely (locus retrieval and exact-match completion did not exist as
 concepts when they were written), and their T3.1/T3.2/T3.3 numbers differ
@@ -147,9 +149,9 @@ reference-free variant calling all come out of the same structure."*
 
 ## Honest, source-checked comparison to PgRC2
 
-Full analysis, with confirmed-vs-inferred kept strictly separate: `docs/PGRC2_EXTENSION_ANALYSIS.md`. Summary, preserving that separation:
+Full analysis, with confirmed-vs-inferred kept strictly separate in the PgRC2 extension analysis. Summary, preserving that separation:
 
-**Confirmed by reading PgRC2's actual source (`pgrc/pgrc-decoder.cpp`):**
+**Confirmed by reading PgRC2's actual decoder source:**
 - PgRC2's decoder computes per-read position and strand during decompression.
 - No query, extraction, region, or single-read interface exists anywhere in
   PgRC2 — compress-whole-file / decompress-whole-file only.
@@ -186,8 +188,8 @@ not claimed as done.
 
 ## Honest comparison to BEETL/CIndex/sFASTQ
 
-Full novelty trail: `BTR_NOTES.md`'s "Novelty, corrected after a literature
-survey 2026-09-16" section and `docs/CLAIM3_LOCUS_ADDRESSABILITY.md`.
+Full novelty trail: The project's development notes' "Novelty, corrected after a literature
+survey 2026-09-16" section and the Claim 3 locus-addressability write-up.
 
 **Confirmed**: content retrieval from a compressed archive is not novel —
 BEETL-fastq (2014), CIndex (2022), sFASTQ (2022) all do it via BWT/FM-index,
@@ -206,7 +208,7 @@ at all. This was checked against how BWT/BEETL actually operates (see
 of the technique.
 
 **Could BEETL add position retrieval with a small addition?** Checked
-structurally, not guessed: our completion index addition was cheap specifically
+structurally, not guessed: our FM-index addition was cheap specifically
 because position data already existed as a free byproduct of *how this
 compressor works* (overlap chaining necessarily computes placement to
 function at all). BWT's compression step (sorting) never computes anything
@@ -219,11 +221,11 @@ method actually computes, not assumed from which one "feels" more capable.
 
 **What is not claimed**: no speed or index-size benchmark against
 BEETL/CIndex/sFASTQ has been run. Stated as the single most valuable
-missing experiment in `BTR_NOTES.md`, not silently omitted.
+missing experiment in the development notes, not silently omitted.
 
 ## The native-pileup fast path — an unexploited layer, found by audit
 
-Verified against `docs/CLAIM3_LOCUS_ADDRESSABILITY.md` §M4. `capsule_decode
+Verified against the Claim 3 locus-addressability write-up §M4. `capsule_decode
 index` was already computing `tally[(pg position, observed base)] -> count`
 over every read and writing it to `<sidecar>.sites` — a complete
 allele-resolved pileup, 124 KB for a 2.15 Mb pseudogenome — and `query` never
@@ -272,7 +274,7 @@ from the existing decode path, one shared query primitive used three ways,
 and one orchestration layer built on that primitive — a structure that
 falls out of retaining placement and deviation data for read reconstruction,
 not one designed piecemeal per table. The one genuinely added structure
-(the completion index) was built after compression, from data the archive already held for
+(the FM-index) was built after compression, from data the archive already held for
 an unrelated reason, which is itself evidence the substrate generalizes
 rather than proof it was anticipated. Whether the closest architectural
 relative (PgRC2) could add the same capability is, on the evidence available,

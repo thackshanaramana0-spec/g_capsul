@@ -89,7 +89,7 @@ reconstruction.
 
 ### Final, locked correctness numbers (E. coli, shipping/archive-optimal config)
 
-Source: `docs/T3.1_CORRECTNESS_FINAL_20260919.md`, "SUPERSEDES" section (the
+Source: The T3.1 correctness note, "SUPERSEDES" section (the
 final, authoritative numbers in that file — read the whole file for the full
 trail, including two withdrawn intermediate configurations).
 
@@ -113,7 +113,7 @@ free; the export flag is post-archive, changes no bytes of the archive).
 
 This matters for the paper's discussion section: the gap was not left open
 by omission. It was searched for from four different angles this session,
-documented in full in `docs/T3.1_CORRECTNESS_FINAL_20260919.md`:
+documented in full in the T3.1 correctness note:
 
 1. **Region-split test** (exclude the "second region" appended pool):
    genome fraction and mismatch rate identical with or without it — refuted,
@@ -145,7 +145,7 @@ algorithmic content of a dedicated assembler like SPAdes (multi-k de Bruijn
 graph, bubble-popping, BayesHammer-style correction). The pseudogenome is
 built by **greedy overlap-chaining optimized to minimize compressed size**,
 not optimized for assembly correctness. Both are genuinely "assembly" in the
-mechanical sense (confirmed against the project's own `paper/METHODS.md`,
+mechanical sense (confirmed against the project's own methods draft,
 which says "the compressor assembles reads into a pseudogenome by greedy
 suffix-prefix overlap") — they simply optimize for different objective
 functions, and that objective difference is the entire, sufficient

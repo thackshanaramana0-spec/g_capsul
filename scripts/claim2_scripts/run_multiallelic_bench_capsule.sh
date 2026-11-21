@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # T5.2 — real multi-allelic benchmark, one command.
 #
-# KEY FINDING THIS REPLICATES (docs/POLYPLOID_BENCHMARK.md sec 1/1b): pooling
+# KEY FINDING THIS REPLICATES (docs/claim2/t24_multiallelic_claim2.md): pooling
 # multiple GIAB individuals does NOT create multi-allelic sites -- human SNPs
 # are essentially always biallelic in the population (measured: 1 site in 763
 # pooling all four samples). The real source of multi-allelic sites is a
@@ -56,7 +56,7 @@ awk -v c="$CHROM" -v lo="$LO" -v hi="$HI" '$1==c && $3>lo && $2<hi{
 #
 #   N_MULTI     every GT=1/2 record (both haplotypes non-reference, alleles
 #               differ). chr20:1-6Mb gives 111, which is exactly the figure
-#               docs/POLYPLOID_BENCHMARK.md records for this setup.
+#               docs/claim2/t24_multiallelic_claim2.md records for this setup.
 #   N_MULTI_SNV those whose BOTH alt alleles are single bases: 7 of the 111.
 #
 # The recovery check below compares a single BASE at the variant position, so
