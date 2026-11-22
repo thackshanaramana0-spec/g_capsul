@@ -6,6 +6,11 @@
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://en.cppreference.com/w/cpp/17)
 [![Lossless](https://img.shields.io/badge/lossless-byte--exact-brightgreen.svg)](#results)
 
+<p align="center">
+  <a href="Figures/graphical_abstract.pdf"><img src="Figures/graphical_abstract.png" alt="Graphical abstract: Assemble, Retain, Compress and Harness. Reads are chained into a pseudogenome, the placements and deviations are retained, G_CAPSUL compresses them losslessly, and the archive is used for heterozygous variant calling and biological locus retrieval." width="100%"></a>
+</p>
+<p align="center"><sub>Graphical abstract. The ARCH principle, Assemble, Retain, Compress and Harness. <a href="Figures/graphical_abstract.pdf">Vector version (PDF)</a>.</sub></p>
+
 ---
 
 ## Overview
