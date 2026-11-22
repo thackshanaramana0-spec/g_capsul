@@ -1,19 +1,6 @@
----
-Date: 2026-09-19
-Title: T3.1 — Pseudogenome Export vs De Novo Assembly (SPAdes)
-Purpose: Complete, verified record of what T3.1 measures, how, the real bug
-  found and fixed this session, the final locked numbers, and every attempt
-  made (and refuted) to close the remaining correctness gap.
-When to refer to this file: Writing/checking T3.1's table or text in the
-  manuscript; answering "is our export correct"; deciding what correctness
-  language is defensible; before citing any T3.1 genome-fraction/mismatch
-  number anywhere.
-Keywords: T3.1, export, SPAdes, QUAST, genome fraction, contig_spans,
-  CAPSULE_EXPORT_CONTIGS, assembly, MAXMAP, MINOV, indels, mismatch rate,
-  N50, duplication ratio
----
-
 # T3.1 — Export
+
+> Record of what T3.1 measures, the bug found and fixed, the final numbers, and the attempts to close the remaining correctness gap.
 
 ## What it measures
 
@@ -23,9 +10,9 @@ Two independent things, kept separate throughout:
 2. **Correctness**: how well that exported FASTA scores as a genome assembly
    against the true reference (QUAST), compared to SPAdes's own assembly.
 
-These are independent axes. A tool can be honestly reported as faster
+These are independent axes. A tool can be reported as faster
 without implying it is also more correct — standard field practice, not a
-project-specific excuse (verified against real precedent this session: no
+project-specific excuse (verified against real precedent: no
 paper claims speed implies correctness, and correctness is always reported
 separately when claimed at all).
 
@@ -103,8 +90,8 @@ trail, including two withdrawn intermediate configurations).
 | Unaligned length | 1,895,813 | 9,582 | SPAdes |
 | Misassemblies | 7 | 1 | SPAdes |
 
-**This is the number to cite. Not "2 of 5" as a headline — state each metric
-plainly, this table format, in the paper.** SPAdes wins the majority of
+**This is the number to cite. Not "2 of 5" as a headline — state each metric,
+in this table format, in the paper.** SPAdes wins the majority of
 metrics; ours wins genome fraction and indel rate. Both true simultaneously.
 Archive cost of reaching this configuration: **zero** (`contig_spans` is
 free; the export flag is post-archive, changes no bytes of the archive).
@@ -112,7 +99,7 @@ free; the export flag is post-archive, changes no bytes of the archive).
 ### Why the remaining gap is structural, not a tuning miss — four independent attempts, all refuted
 
 This matters for the paper's discussion section: the gap was not left open
-by omission. It was searched for from four different angles this session,
+by omission. It was searched for from four different angles,
 documented in full in the T3.1 correctness note:
 
 1. **Region-split test** (exclude the "second region" appended pool):
@@ -121,7 +108,7 @@ documented in full in the T3.1 correctness note:
 2. **Full parameter search** (`MAXMAP`, `MINOV`, `MAXMM` — all three exposed
    knobs, properly controlled after finding and fixing a bug in the first
    attempt at this): a real lever (`MAXMAP`) was found and pushed to its
-   measured plateau, buying a real, kept improvement (mismatch rate halved
+   measured plateau, buying a kept improvement (mismatch rate halved
    at one earlier configuration) — but the archive-optimal shipping config
    turned out to already be as good or better, so no retuning survives in
    the final recommendation. `MAXMM` had zero effect across its whole range.
@@ -134,7 +121,7 @@ documented in full in the T3.1 correctness note:
    *worse* (11.86→407/100kbp at one config), because placement in this
    archive is chosen to minimize encoded bits, not to reflect homology, so
    reads from a different genomic copy can vote with their own bases at a
-   repeat-collapsed position. This is a real, non-obvious structural finding
+   repeat-collapsed position. This is a non-obvious structural finding
    worth stating in discussion: **this pileup is not a biological pileup.**
 
 ### Why full parity is out of reach without new algorithm work
@@ -144,7 +131,7 @@ require explicit repeat resolution and read error correction — the actual
 algorithmic content of a dedicated assembler like SPAdes (multi-k de Bruijn
 graph, bubble-popping, BayesHammer-style correction). The pseudogenome is
 built by **greedy overlap-chaining optimized to minimize compressed size**,
-not optimized for assembly correctness. Both are genuinely "assembly" in the
+not optimized for assembly correctness. Both are "assembly" in the
 mechanical sense (confirmed against the project's own methods draft,
 which says "the compressor assembles reads into a pseudogenome by greedy
 suffix-prefix overlap") — they simply optimize for different objective

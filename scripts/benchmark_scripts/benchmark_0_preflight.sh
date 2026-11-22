@@ -101,7 +101,7 @@ chk_cmd  "rtg (vcfeval)"  rtg        req
 # Kmer2SNP needs FOUR things, and the arm silently vanishes if any is absent:
 # the tool, networkx (which lives in the conda env, not system python3), a
 # k-mer counter (its own DSK wrapper hardcodes a path that does not exist), and
-# our runner. Checked separately so a failure names the missing piece.
+# the project's runner. Checked separately so a failure names the missing piece.
 chk_cmd  "KMC (k-mer counter)" kmc req
 if [ -x "$HOME/miniconda3/envs/kmer2snp_r/bin/python" ]; then
     if "$HOME/miniconda3/envs/kmer2snp_r/bin/python" -c "import networkx" 2>/dev/null

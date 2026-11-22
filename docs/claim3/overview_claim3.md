@@ -1,18 +1,6 @@
----
-Date: 2026-09-19
-Title: Claim 3 (ADDRESSABLE) — Overview, What It Is And Is Not
-Purpose: Entry point for anyone needing to understand what
-  Claim 3 claims, what it does not claim, and how the five sub-tables relate
-  to each other before reading any single table's detail file.
-When to refer to this file: Before writing/reviewing any Claim 3 paper
-  section, before answering "is Claim 3 locked," before deciding what belongs
-  in the main tables vs discussion, or when confused about how T3.1-T3.5
-  relate to each other.
-Keywords: ADDRESSABLE, Claim 3, G_CAPSUL, pseudogenome, export, coverage,
-  query, locus retrieval, exact match, coordinate-range, overview, scope
----
-
 # Claim 3 — ADDRESSABLE. What it is, what it is not.
+
+> Entry point for Claim 3: what it claims, what it does not claim, and how its five sub-tables relate.
 
 ## What Claim 3 actually claims, in one sentence
 
@@ -29,7 +17,7 @@ against a specialized tool built to do only that one thing.
 ## What Claim 3 is NOT
 
 - **Not a claim that the pseudogenome is a correct standalone genome
-  assembly.** T3.1's correctness numbers are honestly mixed (2 of 5-7
+  assembly.** T3.1's correctness numbers are mixed (2 of 5-7
   QUAST metrics won, see `t31_export_claim3.md`). This was never the point —
   see `mechanism_insight_claim3.md` for why "is it a good assembly"
   is the wrong question to ask of this archive.
@@ -108,7 +96,7 @@ Do not think of T3.1-T3.5 as five separate feature checkboxes. Think of it as:
 - `t34_exact_match_claim3.md`
 - `t35_locus_retrieval_claim3.md`
 - `mechanism_insight_claim3.md` — how Claim 3 connects to the paper's
-  central insight; honest, verified (not guessed) comparison to PgRC2 and
+  central insight; verified (not guessed) comparison to PgRC2 and
   BEETL on whether they could replicate this with a small addition.
 - `code_mapping_claim3.md` — exact function/line references in
   `src/decoder.cpp` for every operation above, and exactly which

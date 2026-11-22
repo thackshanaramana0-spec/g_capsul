@@ -1,19 +1,6 @@
----
-Date: 2026-09-19
-Title: Claim 3 — Code-to-Table Mapping and Result File Index
-Purpose: Exact function/line references in src/decoder.cpp for
-  every Claim 3 operation, and the exact file path for every number cited
-  anywhere in this folder. Traced directly from the actual repo this
-  session, not recalled from memory.
-When to refer to this file: Verifying a claim in another file of this
-  folder against the real code; onboarding to the codebase; before citing
-  any number, to find its exact source file; when a diagram or paper
-  section needs a precise line reference.
-Keywords: code mapping, decoder.cpp, line numbers, function trace,
-  contig_spans, find_occurrences, FM-index, benchmark results, file index
----
-
 # Code-to-table mapping
+
+> Functions and files in src/decoder.cpp behind each Claim 3 operation, and the source file of every number cited in this folder.
 
 All line numbers are from `src/decoder.cpp` as committed at
 `e2be4e5` ("Claim 3 multi-individual generalization + T3.1 export-bug fix,
@@ -113,14 +100,14 @@ prose describing the mechanism should still hold even if a line shifts.
 | Raw CSVs behind the HG002 real-data trail | `results/T34_REALDATA_20260915/` (BILATERAL.csv, BOTH_FULL.csv, QUERY_ALONE_FULL.csv, GENERALIZATION_FIXED.csv, etc.) |
 | PgRC2 comparison (confirmed vs inferred) | the PgRC2 extension analysis |
 | Flags reference (`CAPS_SPANS`, `CAPSULE_EXPORT_CONTIGS`, `CAPS_QUERY_CONTAIN`, etc.) | the pipeline notes, flags table |
-| Session-level findings summary, dated | the development notes, "2026-09-19 session" section |
+| Findings summary, dated 2026-09-19 | the development notes, 2026-09-19 section |
 | Architecture diagram source (Mermaid) | the Claim 3 architecture-diagram draft |
 | Future work: BEETL speed/size comparison, not yet run | the T3.4 speed-benchmark plan |
 
-## What was actually benchmarked this session vs what is documentation-only
+## What was benchmarked in the final verification vs what is documentation-only
 
-**Actually run, with real output captured this session** (not just cited
-from prior sessions): T3.1 at multiple configurations (archive-optimal,
+**Run, with output captured** (not just cited
+from earlier work): T3.1 at multiple configurations (archive-optimal,
 tuned, dedup, consensus-polish, strand-fixed consensus-polish) via QUAST
 against `NC_012967.1`; T3.4/T3.5 on HG003/HG004/HG005 and a second HG005
 locus, via `scripts/claim3_scripts/run_locus_retrieval_capsule.sh` +
@@ -129,10 +116,10 @@ locus, via `scripts/claim3_scripts/run_locus_retrieval_capsule.sh` +
 (`tests/fmi_selftest.cpp`, `tests/fmi_end_to_end.py`) and its size check across all
 four individuals; a `.sites` strand-fix build-and-gate cycle (reverted).
 
-**Not run this session, cited from earlier work**: the original T3.1/T3.2/T3.3
+**Not run, cited from earlier work**: the original T3.1/T3.2/T3.3
 CSV (`results/claim3/claim3_T3.1_T3.2_T3.3.csv`) and the original
-single-individual T3.4/T3.5 real-data trail — both pre-date this session and
-were read, not regenerated.
+single-individual T3.4/T3.5 real-data trail — both pre-date the final
+verification and were read, not regenerated.
 
 **Not run at all, anywhere, explicitly future work**: any benchmark against
 BEETL, CIndex, or sFASTQ (speed or index size).

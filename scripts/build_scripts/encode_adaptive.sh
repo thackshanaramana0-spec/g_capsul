@@ -67,7 +67,7 @@ M2=$(( LMAX * 35 / 100 )); [ "$M2" -lt 16 ] && M2=16
 # A3: all four candidates now run inside ONE process off a shared prefix.
 # MINOV first takes effect at the round-2 sweep and MAXMAP not until mapping,
 # so load + seed index + round 1 -- measured at 24.8% of runtime -- is identical
-# for every candidate and was previously recomputed four times. The binary forks
+# for every candidate and would otherwise be recomputed four times. The binary forks
 # after round 1, so each candidate gets an exact copy-on-write snapshot and the
 # result is byte-identical to running them separately (verified on E. coli,
 # H. salinarum and S. acidocaldarius, three different winning candidates).
@@ -103,7 +103,7 @@ C4=$(( LMAX / 8  )); [ "$C4" -lt 6 ] && C4=6
 #                        HCMV, L. major, M. tuberculosis, P. aeruginosa,
 #                        S. acidocaldarius, SARS-CoV-2)
 #   +0.012% E. coli   +0.028% H. salinarum   +0.032% H. pylori
-#   +0.357% A. fumigatus   <-- the one real outlier, disclosed not hidden
+#   +0.357% A. fumigatus   <-- the one outlier
 #   mean +0.031%
 #
 # A SINGLE point was measured too and is NOT acceptable: +0.028% to +0.782%,
@@ -122,7 +122,7 @@ C4=$(( LMAX / 8  )); [ "$C4" -lt 6 ] && C4=6
 #    M. tuberculosis, E. coli, HCMV, L. major, P. falciparum, A. fumigatus,
 #    H. pylori, P. aeruginosa)
 #   keeping ONLY C2 costs +0.444% on H. salinarum -- the ONE dataset that
-#   prefers C1, disclosed rather than hidden.  mean +0.032%
+#   prefers C1.  mean +0.032%
 #   (keeping only C1 instead costs +0.056% .. +0.782% on 13 of 14 -- far worse)
 #
 # MINOV is NOT reducible and both values stay: MINOV=16 wins on 7 of 12 and the
@@ -137,6 +137,6 @@ CANDIDATES="$CANDS" ARCHIVE="$OUT" \
     DUMP_LIT=1 DUMP_PERM=1 DUMP_MM=1 "$BEST" "$IN" 3 16 16 22 16 16 1 24 64 1 \
     > /dev/null 2>"${OUT}.log"
 sz=$(grep -o 'ARCHIVE_TOTAL=[0-9][0-9]*' "${OUT}.log" | sed 's/ARCHIVE_TOTAL=//' | tail -1)
-[ -z "$sz" ] && { echo "[adaptive] all candidates failed" >&2; exit 1; }
+[ -z "$sz" ] && { grep -a -h -m3 "FATAL" "${OUT}.log" >&2; echo "[adaptive] all candidates failed (log: ${OUT}.log)" >&2; exit 1; }
 sed -n 's/.*\[a3\] chose //p' "${OUT}.log" >&2
 echo "ARCHIVE_TOTAL=$sz"

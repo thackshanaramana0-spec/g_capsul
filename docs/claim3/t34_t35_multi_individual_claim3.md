@@ -20,7 +20,7 @@
 >   alone gives 0.8536 / 0.8457 / 0.8099 / 0.6047.
 > - The k-mer index was 7-13 times the archive's size. The FM-index is 1.9-3.5 times.
 
-**Status: DONE, 2026-09-19. Real data, real runs, this session. Closes the
+**Status: done, 2026-09-19. Real data and real runs. Closes the
 single-individual scope gap identified during Claim 3 finalization: every
 prior 400/400-style number for locus retrieval was measured on HG002 alone
 (one region, replicated across 3 independently-built archives of that SAME
@@ -56,11 +56,11 @@ than accepting them:
    reach (was 0), flipping the site from apparent-REF-only to a correct
    het call. The real cause was the *same* structural ceiling as T3.4's
    gap (see below), not allele absence. This correction is important
-   enough to say plainly: **do not repeat the withdrawn "subsampling
+   enough to say: **do not repeat the withdrawn "subsampling
    variance, nothing to fix" explanation anywhere else** — it was
    incomplete and has been superseded by this finding.
 
-**The honest cost, not hidden:** `.xmi` completion is not a free win. It
+**The cost:** `.xmi` completion is not free. It
 recovers real reads that plain query structurally misses, but by the same
 mechanism it also recovers more spurious matches at homozygous
 (true-negative) sites — false positives on the negative-control panel rose
@@ -69,10 +69,10 @@ across every individual (HG002 31->42, HG003 38->52, HG004 28->49, HG005
 time. Any statement of the 100%/1.0000 numbers above must carry this cost
 alongside it, not stand alone.
 
-## Closing the last real gap: a genuinely new individual x locus combination
+## Closing the last real gap: a new individual x locus combination
 
 Everything above tests "new individuals, same locus" (chr20:3,000,000-
-3,600,000, every time). That leaves one honest, unaddressed question: does
+3,600,000, every time). That leaves one unaddressed question: does
 this generalize across a **new locus** too, not just new people at a fixed
 one? Untested until now.
 
@@ -89,13 +89,13 @@ Both tables hold clean at the new locus. **A third useful finding here,
 not the thing being tested for but worth keeping:** the FP rate dropped
 substantially at the new window (87 -> 63) even though it's the same
 individual. That is evidence the elevated FP rate flagged earlier is
-**locus-specific, not an inherent property of HG005** — a real, partial
+**locus-specific, not an inherent property of HG005** — a partial
 answer to the open question raised above, though not a full diagnosis (the
 FP rate is still the highest of any single result recorded in this file,
 so "which locus properties drive it" remains open).
 
 **With this, the generalization claim is no longer bounded to "new people,
-same place."** It now covers a genuinely new individual-times-locus
+same place."** It now covers a new individual-times-locus
 combination, on both tables, with the same architecture, same formulas, and
 nothing tuned for this specific test.
 
@@ -120,7 +120,7 @@ guessed:
 | HG005 (son, Chinese trio) | `.../ChineseTrio/HG005_NA24631_son/HG005_NA24631_son_HiSeq_300x/NHGRI_Illumina300X_Chinesetrio_novoalign_bams/HG005.hs37d5.300x.bam` | `.../release/ChineseTrio/HG005_NA24631_son/NISTv4.2.1/GRCh37/HG005_GRCh37_1_22_v4.2.1_benchmark.vcf.gz` |
 
 All three are real, distinct individuals from two different GIAB trios (not
-resampled/resimulated HG002 data) — a genuinely independent test of whether
+resampled/resimulated HG002 data) — an independent test of whether
 the mechanism (bilateral anchoring recovering both alleles of a het locus)
 generalizes across people, not just across re-assemblies of one person.
 
@@ -178,7 +178,7 @@ This is the final, correct T3.5 result. The number above it in this file
 (399/400 style tables elsewhere) reflects the plain-`query`-only
 intermediate step and should not be cited as the final answer.
 
-**The cost, not hidden:** false positives on homozygous negative controls
+**The cost:** false positives on homozygous negative controls
 rose with `.xmi` everywhere (HG002 31->42, HG003 38->52, HG004 28->49, HG005
 71->87 — see "Bottom line" above for the full comparison against plain
 query). `.xmi` trades some specificity for completeness. The 100% numbers
@@ -204,10 +204,10 @@ correct configuration (see "Bottom line"):
 | HG005 | **71/400** | **87/400** |
 
 **HG005's false-positive rate is notably higher than the other three under
-both conditions — flagged, not hidden, and not yet diagnosed.** Possible
+both conditions, and the cause is not yet diagnosed.** Possible
 candidates: HG005's pseudogenome is the largest of the four at 3.92 Mb for a
 similar-sized window, suggesting a higher-complexity or higher-duplication
-local assembly; or genuine population-level differences between the Chinese
+local assembly; or population-level differences between the Chinese
 and Ashkenazim trio samples in this specific chr20 region. This is a real,
 open question, not resolved by this run — recorded here so it isn't lost.
 
@@ -215,7 +215,7 @@ open question, not resolved by this run — recorded here so it isn't lost.
 
 The first pass at this (using plain `query`, no `.xmi` index — matching how
 HG002's published 1.0000 was described in the earlier HG002 query-alone results's "no .xmi
-index" header) gave a real, unpleasant surprise:
+index" header) gave an unpleasant surprise:
 
 | individual | exact-match recall, plain `query` (no `.xmi`) |
 |---|---|
@@ -351,10 +351,10 @@ with the proof.
 ## The one missing number that would settle the `.xmi` cost objection
 
 `.xmi` is 7-13x the archive size (HG005: archive 748,892 B, index
-9,925,044 B). Stated plainly, that invites "your index dwarfs your archive."
+9,925,044 B). Stated directly, that invites "your index dwarfs your archive."
 
 The answer is that **BEETL has no separate archive -- the index IS the
-archive**, since BWT retrieval requires building the BWT. So the honest
+archive**, since BWT retrieval requires building the BWT. So the like-for-like
 comparison is:
 
     ours    0.75 MB archive + 9.9 MB optional index (only for exact match)

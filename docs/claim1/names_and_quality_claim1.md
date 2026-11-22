@@ -1,23 +1,6 @@
----
-Date: 2026-09-20
-Title: Names, Quality, and Line 3 — the Three Non-Sequence Columns of Claim 1
-Purpose: `mechanism_insight_claim1.md` covers Claim 1's DNA-sequence stream
-  and its novel-insight comparison to PgRC2 in depth, but treats names and
-  quality as a single passing table row ("Full columns — SPRING-derived
-  tokenizer; vendored fqzcomp"). This file is the missing depth: how the
-  names tokenizer, the quality coder, and line 3 actually work, condensed
-  and verified against `docs/technical_architecture.md` §5-6 (the project's
-  own from-scratch reference), not rewritten from memory.
-When to refer to this file: Writing the Materials and Methods description
-  of the full 4-column FASTQ reconstruction (sequence + names + quality +
-  line 3); explaining why quality is vendored rather than reimplemented;
-  explaining the two real named/token-coding contributions
-  (`ID_ZDELTA`, `ID_SEQLEN`) that are this project's own, not SPRING's.
-Keywords: names, read IDs, tokenizer, ID_SEQLEN, ID_ZDELTA, quality,
-  fqzcomp, htscodecs, vendored, line 3, CAPS_NAMES, CAPS_QUAL
----
-
 # Names, quality, and line 3
+
+> The names and quality columns of Claim 1: what is stored, how it is coded and what it costs.
 
 Claim 1's scope, precisely: **sequence + read order + names + line 3** are
 this project's own implementation; **quality** is the one column vendored
@@ -29,8 +12,8 @@ sequence-only number.
 
 ## Names — `include/names_coder.h`, namespace `nmc`
 
-**Tokenizer**: ported from SPRING's real algorithm (the ID-compression experiment,
-read line by line, not inferred). Each FASTQ header is split left-to-right
+**Tokenizer**: follows SPRING's read-identifier coder (its source was read to confirm
+the algorithm, see `THIRD_PARTY_NOTICES.md`). Each FASTQ header is split left-to-right
 into typed tokens by character class, and each token is compared
 positionally against the same slot in the *previous* read's header — a
 `ID_MATCH` token (byte-identical to the previous read, one symbol, no

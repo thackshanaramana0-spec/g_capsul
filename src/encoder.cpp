@@ -44,7 +44,7 @@
 // sort-and-merge takes 1.5 s. The algorithm was not slow, the indexing was. Here each
 // read is scanned once. A 32-base seed packs exactly into a uint64 (2 bits per base),
 // so seed comparison is integer equality with no hash false positives, and sliding the
-// seed one base is a shift-or. For a read A we walk its suffix offsets outward from the
+// seed one base is a shift-or. For a read A the suffix offsets are walked outward from the
 // longest overlap, and the first offset whose seed hits a read B and whose full
 // suffix-prefix span verifies is A's longest overlap, so the search stops there:
 // O(n * offsets actually tried) instead of O(n * L^2).
@@ -88,7 +88,7 @@ static const uint64_t SEEDMSK = ~0ULL;            // 32 bases * 2 bits = 64
 // both the load-time guard and the input-scope check that runs before it.
 // The 19 locked benchmark datasets max out at 301 bases; every real Illumina
 // short-read run is far under this. It is a real ceiling on the archive
-// format as it exists today, not a placeholder -- lifting it means making
+// format as it currently exists, not a placeholder -- lifting it means making
 // those buffers dynamic, not raising a number.
 static const uint32_t MAX_READ_LEN = 1023;
 
@@ -323,7 +323,9 @@ static Streams STR;
 //   Reads with N
 //     n_indices       original index of each N-containing read, uint32
 //     n_cnt           number of Ns in each such read, one byte
-//     n_pos           offset of each N within its read, one byte
+//     n_pos           offset of each N within its read, one byte (KNOWN LIMIT: an offset
+//                     above 255 is stored as 255, so an N past base 255 of a longer
+//                     read is not restored; at most 255 Ns per read are counted)
 //   Original reads
 //     read_lengths    uint16 per ORIGINAL read (a constant length is stored as one value and a count)
 //     orig2uid_flags  bitmap, most significant bit first, set when an original read is not simply
@@ -454,7 +456,7 @@ static void phase(const char* name){
 }
 
 #ifndef CAPS_VERSION
-#define CAPS_VERSION "1.1.1"
+#define CAPS_VERSION "1.2.0"
 #endif
 
 // COMMAND LINE. argv[1] is the input FASTQ. The positional arguments below follow it,
@@ -538,6 +540,11 @@ int main(int argc,char** argv){
         std::string a1,b1,c1,d1;
         size_t tot=0, dup=0, toolong=0; uint32_t longest=0; std::string longest_hdr;
         size_t malformed_lines=0;
+        // Input-format violations that would otherwise be encoded wrongly with exit 0.
+        // Only the first offending record of each kind is kept for the message.
+        struct Viol { size_t n=0; size_t rec=0; std::string what; };
+        Viol v_cr, v_chr, v_npos, v_l3;
+        bool l3_all_plus=true, l3_all_copy=true;
         size_t qmismatch=0; std::string qmismatch_hdr;
         uint32_t qmismatch_seq_len=0, qmismatch_qual_len=0;
         // Names, independently of read length: `nmc`'s tokenizer indexes
@@ -562,6 +569,27 @@ int main(int argc,char** argv){
             }
             if(a1.empty()||a1[0]!='@'||c1.empty()||c1[0]!='+'){ ++malformed_lines; continue; }
             ++tot;
+            {
+                auto note=[&](Viol& v,const char* w){ if(!v.n){ v.rec=tot; v.what=w; } ++v.n; };
+                if((!a1.empty()&&a1.back()=='\r')||(!b1.empty()&&b1.back()=='\r')||
+                   (!c1.empty()&&c1.back()=='\r')||(!d1.empty()&&d1.back()=='\r'))
+                    note(v_cr,a1.c_str());
+                // Sequence alphabet is ACGTN. Any other byte, including lowercase and
+                // IUPAC codes, is not represented and would corrupt neighbouring bases.
+                // An N is stored as a one-byte offset (0..255) with a one-byte count per read.
+                size_t nN=0; bool badc=false, nfar=false;
+                for(size_t j=0;j<b1.size();++j){
+                    const char ch=b1[j];
+                    if(ch=='N'){ ++nN; if(j>255) nfar=true; }
+                    else if(ch!='A'&&ch!='C'&&ch!='G'&&ch!='T') badc=true;
+                }
+                if(badc) note(v_chr,a1.c_str());
+                if(nfar||nN>255) note(v_npos,a1.c_str());
+                if(CAPS_NAMES){
+                    if(!(c1.size()==1)) l3_all_plus=false;
+                    if(!(c1.size()==a1.size() && c1.compare(1,std::string::npos,a1,1,std::string::npos)==0)) l3_all_copy=false;
+                }
+            }
             if((uint32_t)b1.size()>longest){ longest=(uint32_t)b1.size(); longest_hdr=a1; }
             if(CAPS_NAMES && (uint32_t)a1.size()>longest_hdr_len){
                 longest_hdr_len=(uint32_t)a1.size(); longest_hdr_line=a1;
@@ -600,6 +628,30 @@ int main(int argc,char** argv){
                 "record(s) seen). Refusing to write an archive rather than emit an "
                 "empty one that reports success.\n", argv[1], malformed_lines);
             return 2;
+        }
+        {
+            auto refuse=[&](const Viol& v,const char* msg)->bool{
+                if(!v.n) return false;
+                fprintf(stderr,"FATAL: %zu record(s) in '%s' %s (first: record %zu, '%.80s').\n"
+                        "  Refusing rather than writing an archive that does not reproduce the input. "
+                        "See 'Input requirements' in README.md.\n",
+                        v.n, argv[1], msg, v.rec, v.what.c_str());
+                return true;
+            };
+            if(malformed_lines){
+                fprintf(stderr,"FATAL: %zu malformed or truncated record(s) in '%s' (a record needs "
+                        "'@' header, sequence, '+' line and quality line). Refusing rather than "
+                        "dropping them silently.\n",malformed_lines,argv[1]);
+                return 2;
+            }
+            if(refuse(v_cr,"use CRLF line endings (convert with `tr -d '\\r'`)")) return 2;
+            if(refuse(v_chr,"contain sequence bytes other than A, C, G, T, N (lowercase and IUPAC codes are not supported)")) return 2;
+            if(refuse(v_npos,"have an N at a read offset above 255 or more than 255 Ns; N positions are stored in one byte")) return 2;
+            if(CAPS_NAMES && !l3_all_plus && !l3_all_copy){
+                fprintf(stderr,"FATAL: line 3 of the records in '%s' is neither always '+' nor always '+' followed by the "
+                        "header; mixed line-3 content is not stored. Refusing.\n",argv[1]);
+                return 2;
+            }
         }
         // READ-COUNT CEILING. Found by direct comparison against SPRING's own
         // pre-flight validation (preprocess.cpp), which checks its analogous
@@ -655,7 +707,7 @@ int main(int argc,char** argv){
         // exactly this. The quality coder (include/quality_coder.h, wrapping
         // fqzcomp) assumes per-record seq/qual length parity by construction;
         // a truncated download or disk-corrupted FASTQ with a short/long
-        // quality line for its sequence would previously pass this pre-flight
+        // quality line for its sequence would otherwise pass this pre-flight
         // silently and reach the quality coder unguarded, risking a
         // corrupted or desynchronized quality stream rather than a refusal.
         if(qmismatch>0){
@@ -810,8 +862,8 @@ int main(int argc,char** argv){
     // words (~222 MB at full chr20). Built ONLY when the near-miss VCF is
     // requested, so no default-path run pays for it.
     std::vector<uint64_t> qmask;
-    // STAGE 22 (their stage 6, OrderInfo): to restore the original file order we
-    // need, for every ORIGINAL read, where its sequence sits in the pg. Dedup
+    // STAGE 22 (PgRC2's stage 6, OrderInfo): restoring the original file order
+    // needs, for every ORIGINAL read, where its sequence sits in the pg. Dedup
     // collapses duplicates, so the original->unique map has to be kept too.
     std::vector<uint32_t> orig2uid;       // original read (N-filtered out) -> unique id
     std::vector<uint16_t> origlen;        // TRUE length of each ORIGINAL read (see containment note)
@@ -819,22 +871,11 @@ int main(int argc,char** argv){
     // ADAPTIVE DEDUP: the measured-duplicate-fraction reasoning that decides
     // NODEDUP is documented where NODEDUP is now computed, above, alongside
     // the scope check that shares its streaming pass over the file.
-    // STAGE 100 -- real, previously-undisclosed data-loss bug: N-containing
-    // reads were `continue`'d here with NO storage anywhere, in every stage
-    // from 87 through 98. Caught only because a direct question ("how can
-    // this be byte-identical if reads are being dropped") forced a check of
-    // what "round trip: VERIFIED" actually meant throughout this project --
-    // it was always coder-level (does the entropy coder correctly decode ITS
-    // OWN dumped intermediate file), never a genuine original-FASTQ-to-
-    // decoded-FASTQ comparison. Two different builds both silently dropping
-    // the same reads still match each other byte-for-byte; that was mistaken
-    // for correctness against the source file, which was never actually
-    // tested. Fixed here for real: N-containing reads are stored (full raw
-    // sequence text, since 2-bit packing can't represent a 5th symbol) in
-    // n_reads.txt, one per line, plus their ORIGINAL read index (needed to
-    // splice them back into the right position on decode) in n_indices.bin
-    // as raw LE uint32 -- gated on DUMP_LIT since this is a literal-sequence
-    // sibling stream, following the project's existing DUMP_* convention.
+    // STAGE 100 -- N-containing reads must be STORED, not skipped. Skipping them is
+    // silent data loss that a coder-level round trip (decoding the coder's own
+    // intermediate file) cannot detect; only comparing the decoded FASTQ with the
+    // original input does. Each N is replaced by 'A' for the 2-bit pipeline (see
+    // STAGE 105 below) and recorded in three side streams:
     // n_pos.bin: byte position of each N within its read (concatenated)
     // n_indices.bin: original index of each N-containing read
     // n_cnt.bin: how many Ns in each N-containing read
@@ -844,7 +885,7 @@ int main(int argc,char** argv){
     FILE* ncf = STR.n_cnt.f;
     {
         std::ifstream f(argv[1]); std::string a,b,c,d;
-        // Dedup index. This used to be
+        // Dedup index. The obvious form
         //     unordered_map<uint64_t, vector<uint32_t>>
         // which costs a 48 B hash node PLUS a separately heap-allocated inner
         // vector (~32 B of malloc header before a single id is stored) for every
@@ -913,14 +954,14 @@ int main(int argc,char** argv){
         };
         while(std::getline(f,a)&&std::getline(f,b)&&std::getline(f,c)&&std::getline(f,d)){
             ++n_in;
-            // STAGE 105 -- STRUCTURAL: N-containing reads used to bypass
-            // assembly entirely and get dumped as raw text. Measured on real
+            // STAGE 105 -- STRUCTURAL: N-containing reads that bypass
+            // assembly and are stored as raw text are costly. Measured on real
             // P. aeruginosa that cost 586,364 B (567,140 seqpar + 19,224
-            // indices) for 24,350 reads -- 70% of our whole gap to PgRC2 on
+            // indices) for 24,350 reads -- 70% of the whole gap to PgRC2 on
             // that file -- and it is NOT a coder problem (seqpar 1 1 already
             // beats xz 567,140 vs 644,304). The reads themselves are fine:
-            // mean 1.23 N characters each, max 8, none all-N. They were being
-            // excluded from overlap assembly over one or two ambiguous bases.
+            // mean 1.23 N characters each, max 8, none all-N. Excluding them would
+            // remove them from overlap assembly over one or two ambiguous bases.
             // PgRC2 gives them a dedicated nPg so they still get assembled
             // (pgrc-encoder.cpp:184-204, runNPgGeneration). Here they are
             // substituted N->A and sent through the SAME pipeline as every
@@ -941,7 +982,7 @@ int main(int argc,char** argv){
                 if(ncf) fputc((int)ncnt,ncf);
             }
             if(b.size()>1023) continue;                       // uint16 length field, matches ubuf/b_ buffer size
-            // NODEDUP=1: skip pre-assembly dedup entirely. orig2uid is our
+            // NODEDUP=1: skip pre-assembly dedup entirely. orig2uid is the
             // single biggest remaining loss to PgRC2 (+427,060 B on real
             // P. aeruginosa, where they pay nothing because a duplicate is
             // just a 100%-length overlap in their chain mechanism). Retested
@@ -994,7 +1035,7 @@ int main(int argc,char** argv){
         // VERIFY THE HINT ACTUALLY TOOK. The first version of this work shipped
         // completely inert and was only caught by reading smaps -- a madvise()
         // call in the source proves nothing. Print what the kernel actually gave
-        // us so a regression is visible in every log rather than inferred.
+        // so a regression is visible in every log rather than inferred.
         if(FILE* sm=fopen("/proc/self/smaps_rollup","r")){
             char ln[256]; unsigned long hp=0, rss=0;
             while(fgets(ln,sizeof ln,sm)){
@@ -1011,7 +1052,7 @@ int main(int argc,char** argv){
                     rlen.size()*sizeof(rlen[0])/1048576);
         }
         // INVARIANT: read_lengths is indexed by ORIGINAL read, always.
-        // It used to be indexed by unique id, which silently breaks whenever a
+        // Indexing it by unique id would silently break whenever a
         // read's uid is later rewritten -- containment aliasing folds a shorter
         // read into a longer container (rlen[a] < rlen[b]), so the contained
         // read would inherit the container's length and decode too long.
@@ -1466,7 +1507,7 @@ int main(int argc,char** argv){
     // PgRC2 needs no such pass and no such threshold: a duplicate is simply a
     // 100%-length overlap in their chain mechanism, contributing zero bases.
     // Measured on S. acidocaldarius, they remove 48,694 duplicates this way
-    // while our dedup threshold (9.4% < 15%) turned dedup OFF and carried all
+    // while this encoder's dedup threshold (9.4% < 15%) turned dedup OFF and carried all
     // 48,694 into the pseudogenome.
     //
     // At L = rlen[a] the offset is 0, so the seed is the read's own prefix and
@@ -1790,7 +1831,7 @@ int main(int argc,char** argv){
     // suffix into a re-runnable function. fork() gives each candidate an exact
     // copy-on-write snapshot of the post-prefix state, so no variable can leak
     // between candidates and the code path is bit-for-bit the one that runs
-    // today -- the output is identical by construction rather than by review.
+    // now -- the output is identical by construction rather than by review.
     // Children run one at a time, so peak RSS is unchanged.
     // ── TWO-LEVEL CANDIDATE FORK: state carried from level 1 to level 2 ─────
     // Level 1 forks per distinct MINOV; level 2, after `emit chains`, forks per
@@ -1920,17 +1961,13 @@ int main(int argc,char** argv){
                 char cwdbuf[4096]; if(!getcwd(cwdbuf,sizeof cwdbuf)) cwdbuf[0]='\0';
                 const std::string ab = (!base.empty()&&base[0]=='/')?base:(std::string(cwdbuf)+"/"+base);
                 const std::string dd = ab+".cand"+std::to_string(probe)+".d";
-                // A failed mkdir/chdir here previously only perror()'d and
-                // continued -- this candidate would then run in whatever
-                // directory the process was already in, silently writing its
-                // dump/archive files into another candidate's directory (or
-                // the caller's cwd) instead of failing. Found by comparison
-                // against PgRC2's pgrc-encoder.cpp, which treats an
-                // equivalent mkdir failure as fatal. The parent already
-                // tolerates a failed candidate (waitpid/WEXITSTATUS, excludes
-                // it from the size comparison) -- exiting this child cleanly
-                // routes into that existing, already-correct handling instead
-                // of silently corrupting where output lands.
+                // A failed mkdir/chdir is fatal for this candidate: otherwise it would
+                // run in whatever directory the process is in and write its dump and
+                // archive files into another candidate's directory (or the caller's
+                // cwd). PgRC2's pgrc-encoder.cpp also treats an equivalent mkdir
+                // failure as fatal. The parent already tolerates a failed candidate
+                // (waitpid/WEXITSTATUS, excluded from the size comparison), so the
+                // child exits and that handling applies.
                 if(mkdir(dd.c_str(),0755)!=0 && errno!=EEXIST){
                     perror("mkdir"); return 1;
                 }
@@ -2273,8 +2310,8 @@ int main(int argc,char** argv){
         // BOTH sides (getBothSidesOverlappedReads, AbstractOverlapPseudoGenome
         // Generator.cpp:64-85): a read with both a predecessor and a successor
         // stays; everything else moves to the LQ set and is mapped instead. We
-        // emit whole chains, endpoints included, which is why our pseudogenome
-        // is 2.65x theirs on S. acidocaldarius -- 6,757,250 bases against
+        // emit whole chains, endpoints included, which is why this pseudogenome
+        // is 2.65x PgRC2's on S. acidocaldarius -- 6,757,250 bases against
         // 2,546,054 -- and every read position costs log2(span) more.
         //
         // The rule is uniform; its EFFECT is data-dependent. On long chains it
@@ -2533,12 +2570,12 @@ int main(int argc,char** argv){
         // path entirely, so the break-even point shifts. Measured directly on
         // Drosophila SRR40104920 (leftover_frac=0.812): sweeping MAXMAP with
         // everything else fixed gives a clean interior optimum at 30 (150/5),
-        // not at our break-even ESTIMATE of 39 -- 36,982,418 -> 36,836,970 B
+        // not at the break-even ESTIMATE of 39 -- 36,982,418 -> 36,836,970 B
         // (-145,448 B, -0.393%), 250,841 reads placed against 158,351 before.
         // Worse on both sides (24: 36,856,348; 39: 36,873,742; 50: 37,050,398,
         // above the untouched baseline) -- a real optimum, not "more is
         // better". Calibrated on this one dataset; the ramp's SHAPE (linear
-        // in leftover_frac) is the honest part, its endpoint is not yet
+        // in leftover_frac) is the supported part, its endpoint is not yet
         // cross-validated on a second low-coverage file.
         {
             const double lf = n ? (double)leftovers.size()/n : 0.0;
@@ -2556,7 +2593,7 @@ int main(int argc,char** argv){
         fprintf(stderr,"  [maxmap] Lmax=%u -> MAXMAP=%u (L/%u)\n", Lmax, MAXMAP, MAXMAP_DIV);
         // Sensitivity is SEEDW + SEEDSTRIDE - 1: the shortest exact read/pg
         // stretch guaranteed to be found. copMEM's K is 28 with k1*k2 = 10, so
-        // theirs is 28+10-1 = 37 against our 32+8-1 = 39. A SHORTER seed with a
+        // copMEM's is 28+10-1 = 37 against 32+8-1 = 39 here. A SHORTER seed with a
         // WIDER stride therefore improves sensitivity and shrinks the index at
         // the same time -- unlike shortening the stride, which improves
         // sensitivity and inflates the index (measured: stride 4 mapped 262 more
@@ -2590,7 +2627,7 @@ int main(int argc,char** argv){
         // peak RSS is already 233 MB against PgRC2's 232 MB. At EQUAL index size
         // the flip is 80% worse. So their mapping advantage is not orientation
         // but a denser index -- copMEM at their parameters samples the pg every
-        // 5, giving ~4.3M entries against our 1.85M inside the same footprint.
+        // 5, giving ~4.3M entries against 1.85M here inside the same footprint.
         // The way to afford density is a smaller entry, which is this.
         //
         // Was: mkey(8) + mrid(4) + mpart(1) = 13 B/entry, built through a
@@ -2891,8 +2928,8 @@ int main(int argc,char** argv){
                         // Stage 20 took it for sensitivity (sampling the reads)
                         // but still probed every one of the pg's 21.6M positions,
                         // i.e. k2 = 1. Their k1*k2 <= L-K+1 with BOTH sides
-                        // sampled is what makes their matching 0.41 s against our
-                        // 1.06 s. Sampling the query every K2 and the reads every
+                        // sampled is what makes their matching 0.41 s against
+                        // 1.06 s here. Sampling the query every K2 and the reads every
                         // SEEDSTRIDE keeps the same floor as long as the product
                         // is unchanged, so K2=2 with stride halved is free
                         // sensitivity-wise and halves the probes.
@@ -3101,7 +3138,7 @@ int main(int argc,char** argv){
             }
         }
         // grandchild: adopt one candidate. Everything per-candidate that the
-        // level-1 fork used to set is set HERE instead, including the chdir --
+        // level-1 fork might set is set HERE instead, including the chdir --
         // which is why level 1 must not chdir, and why it was verified that
         // nothing is written to the cwd between the two fork points.
         const size_t ci = g_l2_members[mine2];
@@ -3169,7 +3206,7 @@ int main(int argc,char** argv){
     // lengths were computed beside it and then explicitly dropped as
     // "diagnostics only". Nothing else carried them: the literal stream holds
     // ACGT and nothing else, so unlike PgRC2 -- whose destinations ride in-band
-    // as a MATCH_MARK inside the literal -- ours cannot be implicit. The
+    // as a MATCH_MARK inside the literal -- these cannot be implicit. The
     // archive was therefore missing the data needed to place a single
     // reference, and every reported size was understated by that amount.
     // The read-level lossless check never caught it because it decodes the
@@ -3489,10 +3526,10 @@ int main(int argc,char** argv){
         { fwrite(sb.data(),1,sb.size(),STR.pos_strand.f); STR.pos_strand.close(); }
         // MEASUREMENT ONLY, not yet wired to decode: PgRC2's own design stores
         // position DIRECTLY per ORIGINAL read (SeparatedPseudoGenomePersistence.
-        // cpp:446), no unique-dedup indirection for position at all -- only our
+        // cpp:446), no unique-dedup indirection for position at all -- only the
         // orig2uid correlation (kept regardless, mismatches still need it) adds
         // indirection. Real archaea/P.aeruginosa losses on the order layer
-        // suggest this direct scheme may beat ours at low duplication rate.
+        // suggest this direct scheme may be smaller at low duplication rate.
         // Dumping both so a script can measure real xz'd sizes
         // and report which wins BEFORE committing to a decoder rewrite --
         // same "try it, keep smaller if real" discipline as the varint/fixed32
@@ -3593,7 +3630,7 @@ int main(int argc,char** argv){
     // "better-matches" column). Their accepted matches average 1,369,413
     // mismatches over 988,702 reads = 1.39 per read, coded to 265,900 B.
     //
-    // Every mismatch we accept has to be STORED. This progression measures
+    // Every accepted mismatch has to be STORED. This progression measures
     // pg literal and order and never counted that stream, so stage 17's win
     // could be partly borrowed against a cost that was never on the books.
     // This measures it before anything else is built on top.
@@ -3747,7 +3784,7 @@ int main(int argc,char** argv){
         // cost has been invisible in every number this progression has reported.
         // PgRC2 pays 177,180 B for exactly these streams (offsets 114,824 +
         // lengths 45,485 + 13,847 + 3,024), and their raw 155,048 B offset stream
-        // implies ~38,762 matches against our 59,013 -- so ours is plausibly
+        // implies ~38,762 matches against 59,013 here -- so this stream is plausibly
         // larger, on the order of the whole remaining deficit.
         //
         // Same failure stage 27 caught with mismatches: an aggressive stage looks
@@ -3755,7 +3792,7 @@ int main(int argc,char** argv){
         // The source text was hardcoded to pg/main_pg_end in three places, so a
         // pass could only ever match against the MAIN region. Making it explicit
         // is a prerequisite for self-matching the second region; passing
-        // pg.data()/main_pg_end reproduces today's behaviour exactly.
+        // pg.data()/main_pg_end reproduces the previous behaviour exactly.
         auto parse_range=[&](const char* Q,size_t qlen,Mode mode,size_t lo,size_t hi,
                              std::vector<Ref>& out,
                              const char* S=nullptr,size_t slen=0,int MAXMM=0){
@@ -3813,7 +3850,7 @@ int main(int argc,char** argv){
             // GREEDY parsing, and the classic LZ result is that greedy is not
             // optimal: accepting a shorter match now can block a much longer one
             // starting a base later, and the fragments cost a reference each.
-            // References are our only remaining loss (66,831 against their
+            // References are the only remaining loss (66,831 against PgRC2's
             // ~43,190) and each costs ~40 bits, so fewer-and-longer is exactly
             // the objective.
             //
@@ -3822,7 +3859,7 @@ int main(int argc,char** argv){
             // longer, leave qp as a literal and take the better one. One extra
             // probe per matched position, no extra memory, and nothing from
             // PgRC2 -- their parse is greedy too.
-            // Filter validity: sext describes exactly the text we are extending
+            // Filter validity: sext describes exactly the text being extended
             // against, and MEMSEED+8 must fall at or below MINMEM for the
             // "cannot reach MINMEM" argument above to hold.
             const bool SEXT_ON = (S==idxT) && (slen==idxTlen) && (MEMSEED+8<=MINMEM);
@@ -3903,7 +3940,7 @@ int main(int argc,char** argv){
                     // at source ss is only seen at the first sampled position
                     // p >= ss inside it. Extending forward from there captures a
                     // SUFFIX of the real match and abandons the leading p-ss
-                    // bases -- about STEP/2 each -- to literal. That is why our
+                    // bases -- about STEP/2 each -- to literal. That is why these
                     // matches average 189 bases against CopMEM's 250: copMEM
                     // reports maximal exact matches, this reported partial ones.
                     //
@@ -4023,9 +4060,8 @@ int main(int argc,char** argv){
                     // back: a match at RC position qp of length L covers forward
                     // [qlen-qp-L, qlen-qp). PgRC2 does the same conversion in
                     // correctDestPositionDueToRevComplMatching
-                    // (SimplePgMatcher.cpp:58-60); we were storing the raw RC
-                    // position, which left src and dst in different coordinate
-                    // systems.
+                    // (SimplePgMatcher.cpp:58-60); storing the raw RC position would
+                    // leave src and dst in different coordinate systems.
                     Ref r=m;
                     r.is_rc=RCDEST;
                     if(RCDEST){
@@ -4068,7 +4104,7 @@ int main(int argc,char** argv){
         const double T0=0.60, T1=0.85;
         // MEASURED AND REJECTED: extension mismatch tolerance was built,
         // debugged (it exposed a real decoder bug -- see the streaming-decode
-        // fix) and verified lossless, then measured honestly on the dataset it
+        // fix) and verified lossless, then measured on the dataset it
         // was designed for: Drosophila SRR40104920 at 2.6x coverage went
         // 36,982,418 -> 37,473,181 B, a 490,763 B LOSS. Removing 11 M literal
         // bases saved 212,041 B while the references cost 369,424 B, because a
@@ -4198,7 +4234,7 @@ int main(int argc,char** argv){
         // the scan is strictly sequential and every kept element's write
         // position is always <= its read position (nothing is ever
         // reordered or duplicated), so it's safe to write the trimmed
-        // result back into `allrefs` itself as we go, then resize() down
+        // result back into `allrefs` itself in one pass, then resize() down
         // -- zero second allocation, not a bigger or smarter one.
         std::sort(allrefs.begin(),allrefs.end(),[](const Ref&a,const Ref&b){ return a.dst<b.dst; });
         const size_t rawRefCount=allrefs.size();
@@ -4284,14 +4320,13 @@ int main(int argc,char** argv){
             // and was worse than absolute -- sources have no locality with each
             // other, but each source is close to its own destination.)
             const int64_t d=(int64_t)r.dst-(int64_t)r.src;
-            vint(srcd,(uint64_t)((d<<1)^(d>>63)));
+            vint(srcd,((uint64_t)d<<1)^(uint64_t)(d>>63));
             psrc=(int64_t)r.src;
             prev=(uint64_t)r.dst+r.len;
         }
         // mem_srcdelta: diagnostic only, dropped
-        // STAGE 100 REWRITE: added is_rc (uint8, 4th field) -- previously
-        // absent entirely, meaning a decoder had no way to know an RC-
-        // discovered match needed reverse-complementing before copying.
+        // STAGE 100 REWRITE: is_rc (uint8, 4th field) tells the decoder that an
+        // RC-discovered match must be reverse-complemented before copying.
         // allrefs here is the CLEAN, non-overlapping, trim-on-overlap
         // result (see above) -- exactly the runs literal.txt's marks
         // correspond to, one triple per mark, in the same dst order.
@@ -4357,7 +4392,7 @@ int main(int argc,char** argv){
                   // ratio that took the near-miss channel from 7.5% to 25.0%
                   // marginal precision.
                   //
-                  // MEASURED AND REFUTED, kept as the evidence. MEM references
+                  // MEASURED AND REJECTED. MEM references
                   // TILE the pseudogenome -- each destination position is
                   // encoded exactly once, as literal or as one back-reference --
                   // so refcov is identically 1 and every record scores VAF=1.0
@@ -4451,7 +4486,7 @@ int main(int argc,char** argv){
                   // way minimap2-class aligners infer indels between
                   // collinear blocks. Both ends are anchored by real extended
                   // alignments, which is precisely the "re-convergence on a
-                  // shared node" property our bubble channel can only
+                  // shared node" property the caller's bubble channel can only
                   // approximate by luck.
                   {
                       size_t n_gap = 0;
@@ -4567,7 +4602,7 @@ int main(int argc,char** argv){
     // Each stream is coded in-process and its raw buffer freed IMMEDIATELY
     // afterwards, so peak RAM tracks the largest live stream instead of the
     // sum of all of them -- PgRC2's disposeReadsList/clear discipline
-    // (pgrc-encoder.cpp:157-226), which our multi-process design achieved only
+    // (pgrc-encoder.cpp:157-226), which a multi-process design achieves only
     // by paying 361 MB of disk I/O per 456 MB of input.
     {
         const char* apath = getenv("ARCHIVE") ? getenv("ARCHIVE") : "out.arcs2";
@@ -4603,7 +4638,7 @@ int main(int argc,char** argv){
         vdump("n_cnt.bin",STR.n_cnt);           vdump("read_lengths.bin",STR.read_lengths);
         vdump("orig2uid.bin",STR.orig2uid);
         // The decoder needs pg length and the main/second split point, which
-        // were previously only recoverable by hand-reading the MEM main/second
+        // would otherwise be recoverable only by hand-reading the MEM main/second
         // lines out of stderr. Writing them beside the dumps makes the lossless
         // check reproducible instead of a manual step.
         if(VDUMP){
@@ -4804,7 +4839,7 @@ int main(int argc,char** argv){
                 if (p >= (uint32_t)MAINEND_) {
                     v_pos_reg[4 + (i >> 3)] |= (uint8_t)(1u << (i & 7));
                     const int64_t d = (int64_t)p - prev; prev = (int64_t)p;
-                    uint64_t z = (uint64_t)((d << 1) ^ (d >> 63));
+                    uint64_t z = ((uint64_t)d << 1) ^ (uint64_t)(d >> 63);
                     for (;;) { uint8_t b = (uint8_t)(z & 0x7f); z >>= 7;
                                v_pos_sec.push_back((uint8_t)(b | (z ? 0x80 : 0))); if (!z) break; }
                 } else {
@@ -4866,7 +4901,7 @@ int main(int argc,char** argv){
         // E. coli: 79.55% of its deltas are ZERO (the reads that are not
         // duplicates) and 20.45% are sparse alias payloads over 273,172
         // distinct values. Its order-0 floor is 855,909 B against the 6,213,036
-        // we hand the coder, and no single model fits both halves -- which is
+        // handed to the coder, and no single model fits both halves -- which is
         // precisely why this stream needed a 7-way probe and became the coding
         // pool's floor at 4.53 s, longer than `literal` which is BIGGER but
         // understood (0.38 s through the DNA coder).

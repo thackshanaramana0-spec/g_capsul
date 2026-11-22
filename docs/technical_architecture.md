@@ -1,23 +1,6 @@
----
-Date: 2026-09-20
-Title: Technical Architecture — Container Format and the Assembly Pipeline
-  (Rounds 1/2, Pigeonhole Mapping, MAXMAP Ramp, Second Region, MEM Self-Match)
-Purpose: The one file that explains HOW the pseudogenome and archive are
-  actually built, layer by layer, independent of any single claim's
-  results. Condensed and verified against `docs/technical_architecture.md`
-  §1-2 (the project's own from-scratch architecture reference, written
-  2026-09-02), not rewritten from memory.
-When to refer to this file: Explaining the encoder's mechanism to a reader
-  who has not seen the code; writing the Materials and Methods section;
-  understanding WHY the allele-splitting mechanism in
-  `central_insight_and_mechanism.md` happens (it falls directly out of
-  round-1 chaining + MEM self-match, described here).
-Keywords: architecture, container format, assembly, chaining, pseudogenome,
-  MEM, maximal exact match, pigeonhole mapping, MAXMAP, second region,
-  copMEM, cost-aware acceptance
----
-
 # Technical architecture — container format and assembly
+
+> How the pseudogenome and the archive are built, layer by layer, independent of any single claim's results.
 
 ## Container format
 
@@ -39,7 +22,7 @@ it at that offset. For each read, the algorithm looks for another read whose
 prefix exactly matches this read's suffix for at least `MINOV` bases, and
 chains them into one contiguous pseudogenome span instead of two separate
 literal copies. This is single-pass and **exact** — no approximate matching
-in the shipped path. **The single most important fix in the project's
+in the shipped path. **The most important fix in the project's
 history** (commit `3e06957`): the sweep used to start one base below the read
 length, which makes an exact duplicate read structurally invisible to
 chaining (two identical 251-base reads only overlap at L=251, not L=250).
@@ -88,9 +71,7 @@ threshold, gated on where it was measured to help.
 match can in principle extend past its first mismatch, trading a few extra
 mismatch-stream bytes for a longer, cheaper-per-base reference. Measured and
 rejected: it cost 490,763 B more than it saved on the dataset it was tested
-on. Kept gated behind an override flag purely to reproduce that measurement,
-per this project's standing rule that refuted ideas are recorded, not
-deleted.
+on. It is kept behind an override flag only to reproduce that measurement.
 
 **Why the shipped encoder searches a 4-point candidate grid, not a wider
 one — measured, not assumed.** `scripts/build_scripts/encode_adaptive.sh` tries several

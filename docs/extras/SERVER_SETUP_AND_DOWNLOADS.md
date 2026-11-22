@@ -57,7 +57,7 @@ unzip awscliv2.zip && sudo ./aws/install
 15-dataset SPRING/Genozip comparison, `/root/arcs-clean/c_star_pg_advance/NEW_DATASET_LOCKED.md`
 (one swap: Drosophila out, Utricularia gibba in — documented there with the
 exact reasoning, not silently substituted). **Never change these lists
-without documenting why**, per this project's own standing rule.
+without documenting why**.
 
 **The actual, working download command** (from the dataset download script,
 run for every accession in the locked list):
@@ -192,7 +192,7 @@ specifically.
 | **Kmer2SNP** | — | `git clone https://github.com/yanboANU/Kmer2SNP.git` at `/root/Kmer2SNP`. **Real compatibility fixes required** for this 2020-era code on a modern Python (documented in full in the Kmer2SNP benchmark note): `time.clock()` → `time.perf_counter()` (Python 3.8 removed the former), `networkx.connected_component_subgraphs` → a documented generator-expression equivalent (removed in networkx 2.4+), and `findGSE` (an R package) bypassed via Kmer2SNP's own documented `--c1/--c2/--r` flags with data-derived values from a k-mer histogram, rather than installing R. |
 | **DSK** | v2.3.3 | `git clone https://github.com/GATB/dsk.git` at `/root/dsk`. Kmer2SNP's driver script hardcodes a `/path2dsk/` placeholder — must be pointed at the real built binary after cloning. |
 | **MEGAHIT** | 1.2.9-5 | `apt-get install megahit` — a real Ubuntu package, no manual build needed. |
-| **SPAdes** | v4.0.0 | **Prebuilt binary, not apt** (no current Ubuntu package tracks the latest release): `curl -sL https://github.com/ablab/spades/releases/download/v4.0.0/SPAdes-4.0.0-Linux.tar.gz -o spades.tar.gz && tar xzf spades.tar.gz` — installed this way in this session at `~/SPAdes-4.0.0-Linux/`, verified working (real 239-contig E. coli assembly, the Claim 3 locked-results note §6.2). |
+| **SPAdes** | v4.0.0 | **Prebuilt binary, not apt** (no current Ubuntu package tracks the latest release): `curl -sL https://github.com/ablab/spades/releases/download/v4.0.0/SPAdes-4.0.0-Linux.tar.gz -o spades.tar.gz && tar xzf spades.tar.gz` — installed this way at `~/SPAdes-4.0.0-Linux/`, verified working (real 239-contig E. coli assembly, the Claim 3 locked-results note §6.2). |
 | **bwa / samtools / mosdepth / tabix / bcftools** | see §0 table | plain `apt-get install`, no manual build for any of these. |
 
 ## 6. What NOT to do — real errors this project hit, so a fresh server doesn't repeat them

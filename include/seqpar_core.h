@@ -107,8 +107,8 @@ static constexpr int TBITS=16; static constexpr size_t TSZ=(size_t)1<<TBITS; sta
 static constexpr int MMBITS_MAX=24;   // never worse than before
 // mmtab, the match model's hash table, has 2^b slots with b = ceil(log2(chunk
 // symbols)), at least 16 (64K slots, 256 KB, so a tiny chunk does not get a
-// degenerate table) and at most MMBITS_MAX. It used to be a fixed 2^24 slots (64 MB)
-// per chunk whatever the chunk's size. With 12 parallel chunks that was about
+// degenerate table) and at most MMBITS_MAX. A fixed 2^24 slots (64 MB)
+// per chunk whatever the chunk's size would, with 12 parallel chunks, be about
 // 768 MB, which matched the pipeline's observed ~820 MB peak. The table is only a
 // match-finder heuristic: a miss or collision gives no prediction (mlen = 0), so
 // sizing it to the chunk has no effect on correctness. zstd scales its hash tables

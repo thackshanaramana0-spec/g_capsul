@@ -1,17 +1,6 @@
----
-Date: 2026-09-19
-Title: T1.1 — Lossless Whole-FASTQ Archive Size, 19 Datasets
-Purpose: Complete, verified record of T1.1's numbers, independently
-  recomputed from raw data this session, plus the losslessness
-  verification methodology behind the "LOSSLESS" column.
-When to refer to this file: Writing/checking T1.1's table or text; citing
-  the 19/19, −6.03%, −43.26% aggregate figures; explaining how
-  losslessness was actually verified (not just claimed).
-Keywords: T1.1, archive size, SPRING, Genozip, lossless, 19 datasets,
-  aggregate margin, byte-identical
----
-
 # T1.1 — Archive Size
+
+> Record of the T1.1 numbers, recomputed from the raw CSV, and the losslessness check behind the LOSSLESS column.
 
 ## What it measures
 
@@ -22,7 +11,7 @@ protista, fungi, virus, plantae), vs SPRING and Genozip.
 
 ## Results — independently recomputed from `results/claim1/claim1_T1.1_T1.2.csv`, not just cited
 
-**Aggregate (recomputed this session by summing all 19 datasets'
+**Aggregate (recomputed by summing all 19 datasets'
 `archive_bytes` per tool from the raw CSV and deriving the margin
 directly)**:
 
@@ -46,8 +35,7 @@ column per tool, or the manuscript's own T1.1 table (lines 364-393).
 ## What "LOSSLESS" actually means here, verified — not just a column label
 
 The manuscript states (verified against its own text): *"Every archive was
-independently decoded and verified byte-identical to the source FASTQ
-before being counted."* This is a real, methodologically load-bearing
+independently decoded and checked against its input by comparing the sorted read names, sequences and quality strings."* This is a methodologically load-bearing
 claim: the CSV's `lossless` column reads `LOSSLESS` for all 57 rows (19
 datasets × 3 tools), meaning **every single archive**, including SPRING's
 and Genozip's own outputs, was actually decoded and diffed against the
@@ -57,14 +45,14 @@ compression. This matters because Claim 1's own project history (see
 project once shipped incomplete archive-decode verification and had to
 correct four silent data-loss bugs found only by actually decoding
 archives rather than trusting dump-level checks — the discipline behind
-this column is itself a real, previously-tested lesson, not a default
+this column is itself a previously-tested lesson, not a default
 assumption.
 
 ## Why 19/19 with a mixed margin matters more than a single average
 
 Stating "19/19 wins" alongside the two separate margins (−6.03% vs SPRING,
 a competitive general compressor; −43.26% vs Genozip, a much larger gap) is
-more honest and more informative than a single blended percentage across
+more informative than a single blended percentage across
 both comparators — the two margins tell different stories (a close win
 against the stronger comparator, a decisive one against the other) and
 should be kept separate in any citation, not averaged.

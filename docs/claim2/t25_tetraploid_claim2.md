@@ -1,16 +1,6 @@
----
-Date: 2026-09-19
-Title: T2.5 — Tetraploid Calling, Real HG003+HG004 Mix vs DiscoSNP++
-Purpose: Complete, verified record of T2.5's numbers, why nothing at the
-  sequence level is simulated, and what this table generalizes about the
-  method (ploidy, not just diploid biology).
-When to refer to this file: Writing/checking T2.5's table or text; citing
-  tetraploid F1 numbers; explaining the truth-set construction.
-Keywords: T2.5, tetraploid, ploidy, CAPS_PLOIDY, HG003, HG004, real reads,
-  not simulated, Cooke et al.
----
-
 # T2.5 — Tetraploid Calling
+
+> Record of the T2.5 numbers, why nothing at the sequence level is simulated, and what the table shows about ploidy.
 
 ## What it measures
 
@@ -40,7 +30,7 @@ precision, ours higher recall.
 ## Why this table matters beyond "another win"
 
 T2.1-T2.4 all operate at the standard diploid (ploidy 2) setting. T2.5 is
-the one test of whether the method's ploidy parameter is a real, working
+the one test of whether the method's ploidy parameter is a working
 mechanism rather than a diploid-only implementation with a cosmetic
 `CAPS_PLOIDY` flag. **Both wins here (SNV and indel) demonstrate the
 multi-allelic reconciliation machinery generalizes along the ploidy axis,
@@ -49,7 +39,7 @@ multi-allelic result, since a tetraploid sample is structurally similar to
 a multi-allelic site: more than two haplotype copies must be reconciled at
 once. See `mechanism_insight_claim2.md`.
 
-## Scope, stated honestly
+## Scope
 
 This is a **400kb region**, not a full chromosome — smaller in scope than
 T2.1/T2.3's full-chr20 tests. The manuscript states this precisely via the

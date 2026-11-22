@@ -1,23 +1,11 @@
----
-Date: 2026-09-19
-Title: Novelty and Prior Art — Cross-Claim, Honest, Confirmed vs Inferred
-Purpose: Consolidates the honest comparator analysis from all three claim
-  folders into one reference, keeping confirmed facts and inferred
-  arguments strictly separate throughout.
-When to refer to this file: Writing the paper's related-work discussion;
-  answering any reviewer question of the form "why is X not compared
-  directly"; checking whether a novelty claim is source-verified or
-  argued from first principles.
-Keywords: novelty, prior art, PgRC2, BEETL, CIndex, sFASTQ, DiscoSNP++,
-  Kmer2SNP, SPAdes, bwa, confirmed, inferred, comparator justification
----
+# Novelty and prior art — consolidated
 
-# Novelty and prior art — the honest, consolidated picture
+> Comparison with prior work, collected from the three claim folders. Confirmed facts and inferred arguments are kept separate.
 
 ## Rule followed throughout this file, and throughout the three claim folders it draws from
 
 Every claim below is labeled **confirmed** (verified by reading source code
-or a primary document this session or a prior, cited session) or
+or a primary document, in the final verification or in earlier cited work) or
 **inferred** (a reasonable argument from documented behavior, not verified
 against the comparator's own source). This distinction was enforced
 strictly in each claim folder's mechanism file and is preserved here, not
@@ -28,7 +16,7 @@ flattened into one confident voice.
 - **SPRING, Genozip**: general-purpose FASTQ compressors, the correct
   primary comparators — both handle full FASTQ (sequence + names + quality
   + line-3), matching G_CAPSUL's own scope. **Confirmed**: 19/19 wins vs
-  both, independently re-derived from raw data this session.
+  both, independently re-derived from raw data.
 - **PgRC2**: the closest architectural relative (also pseudogenome-based).
   **Confirmed not directly comparable** to the whole-FASTQ numbers — PgRC2
   stores sequence only, no names/quality/line-3. Correctly scoped
@@ -43,8 +31,7 @@ flattened into one confident voice.
   heterozygous indels from a single diploid sample with zero reference —
   the right primary comparator, not a weak strawman.
 - **Kmer2SNP**: reference-free, SNV-capable, included as a second baseline
-  even though it loses badly on recall — honest inclusion, not
-  cherry-picking the stronger comparator alone. **Confirmed** no indel or
+  even though it loses badly on recall — included alongside the stronger comparator. **Confirmed** no indel or
   multi-allelic model, by construction (its own documented design).
 - **DiscoSNP++'s 0/26 on multi-allelic sites (T2.4)**: explained by its
   bubble-based output format being inherently biallelic. **This is
@@ -63,7 +50,7 @@ flattened into one confident voice.
   positional-clustering channel eBWT2SNP inspired was kept (it measurably
   improved indel recall), but the precision-superiority argument was
   dropped. **Verified applied**: the current manuscript
-  (`capsul_paper/copy.tex` line 911) already states this honestly —
+  (`capsul_paper/copy.tex` line 911) already states this —
   "eBWT2SNP's own published evaluation uses two simulated chromosomes and
   one real one" — so this is not an outstanding action item, only a fact
   worth keeping visible for provenance.
@@ -73,13 +60,13 @@ flattened into one confident voice.
 - **SPAdes**: **confirmed** correct comparator for 5 of 6 T3.1 datasets;
   the 6th (ERR5181310/SARS-CoV-2, amplicon sequencing, >1000x PCR-duplicated
   coverage) is explicitly outside SPAdes's own documented scope too (read
-  directly from the SPAdes paper this session's earlier work) — flagged,
+  directly from the SPAdes paper) — flagged,
   not silently included as a fair comparison.
-- **Result, honestly mixed**: speed dominant (129-784x). Correctness: wins
+- **Result, mixed**: speed dominant (129-784x). Correctness: wins
   genome fraction and indel rate, loses mismatch rate/duplication/N50 —
   explained by SPAdes optimizing for assembly correctness (dedicated
   repeat resolution + error correction) while this system optimizes for
-  compressed size, both genuinely "assembly" in the mechanical sense
+  compressed size, both "assembly" in the mechanical sense
   (**confirmed** against the methods draft's own wording), just different
   objective functions. See `claim3/t31_export_claim3.md` and
   `claim3/mechanism_insight_claim3.md`.
@@ -116,7 +103,7 @@ flattened into one confident voice.
 ## BFQzip — the single closest prior work by intent, verified as already the manuscript's own centerpiece comparison
 
 **Confirmed** (the de Bruijn-channel novelty scan, flagged there as "the
-single most important citation we were missing," and confirmed already
+most important citation we were missing," and confirmed already
 resolved — `guerrini2023bfqzip` is cited in the manuscript with a
 dedicated comparison table, `gcapsul_manuscript.tex` line 336). BFQzip
 (Guerrini, Louza, Rosone, arXiv:2304.08534) modifies bases *and* quality
@@ -150,10 +137,10 @@ own centerpiece related-work comparison.
   **position** rather than exact match, which none of the three can do,
   because their data model (independent strings for BWT, k-mer adjacency
   for de Bruijn graphs) has no coordinate system. This root-cause
-  explanation was checked against how BWT/BEETL actually operates this
-  session, not asserted from the technique's name.
+  explanation was checked against how BWT/BEETL actually operates,
+  not asserted from the technique's name.
 - **No speed or index-size benchmark against any of the three has been
-  run.** Stated as the single most valuable missing experiment
+  run.** Stated as the most valuable missing experiment
   (the development notes, `claim3/t34_exact_match_claim3.md`).
 - **Could BEETL add position retrieval with a small addition?** **Confirmed
   structurally, by tracing what each compression method actually
@@ -190,7 +177,7 @@ The PgRC2 extension analysis, synthesized in
 
 ## "No tool combines all three" — verified as a checked code-audit claim, not an assumption
 
-Verified against the root-level project recap §2 (checked this session, not
+Verified against the root-level project recap §2 (checked, not
 previously in `docs/`). The "one archive, three properties"
 claim was tested directly against every real candidate architecture, not
 merely asserted:
@@ -205,8 +192,7 @@ merely asserted:
 | **G_CAPSUL** | yes, 57/57 verified | yes, from the archive alone | yes, from the archive alone | yes — one archive file |
 
 **The "one representation" claim was independently code-audited, not
-inferred from the architecture diagram**: a direct source scan (this
-session's verification, of `src/encoder.cpp`, `include/caps_caller.h`,
+inferred from the architecture diagram**: a direct source scan (of `src/encoder.cpp`, `include/caps_caller.h`,
 and `src/decoder.cpp` — the encoder, caller, and all of
 export/coverage/query) found **zero `system()`/`popen()`/`exec()`/network
 calls anywhere** in any of the three. The only `fork()` calls (3, in the
@@ -233,7 +219,7 @@ WorldScientific, no free PDF anywhere on Google Scholar's cluster for it),
 so **it was never actually read**, and a later search summary directly
 contradicted the "reference-free" classification (apparently contaminated
 by a description of an unrelated 2023 paper found in the same search).
-**Status: genuinely unresolved, and left that way rather than asserted
+**Status: unresolved, and left that way rather than asserted
 either direction without reading the source.** What *is* checked and holds,
 because it is a narrower compound claim (lossless compression + reference-
 free variant calling + reference-free locus retrieval, together, as one

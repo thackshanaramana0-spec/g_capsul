@@ -1,6 +1,6 @@
 """
 Journal-ready bar graph: archive size as % of raw input (ratio_pct), one bar
-per tool (CAPSULE, SPRING, Genozip) per dataset, from
+per tool (G_CAPSUL, SPRING, Genozip) per dataset, from
 benchmark/results/claim1_T1.1_T1.2.csv.
 
 Datasets on the X axis, bars projecting upward (shorter bar = smaller
@@ -44,6 +44,8 @@ BASELINE = "#c3c2b7"
 
 TOOLS = ["Genozip", "SPRING", "CAPSULE"]
 COLORS = {"CAPSULE": AQUA, "SPRING": ORANGE, "Genozip": BLUE}
+# CSV rows use the key "CAPSULE"; the figure shows the published name.
+DISPLAY = {"CAPSULE": "G_CAPSUL", "SPRING": "SPRING", "Genozip": "Genozip"}
 
 # ---- load ----
 rows = {}
@@ -82,7 +84,7 @@ fig, ax = plt.subplots(figsize=(fig_w_in, fig_h_in))
 for tool, off in zip(TOOLS, offsets):
     ax.bar(
         [i + off for i in x], values[tool], width=bar_w,
-        color=COLORS[tool], label=tool, zorder=3,
+        color=COLORS[tool], label=DISPLAY[tool], zorder=3,
     )
 
 ax.axhline(0, color=BASELINE, linewidth=0.8, zorder=2)
@@ -116,7 +118,7 @@ for text in legend.get_texts():
     text.set_color(INK)
 
 ax.set_title(
-    "Archive size vs raw input: CAPSULE, SPRING, Genozip",
+    "Archive size vs raw input: G_CAPSUL, SPRING, Genozip",
     fontsize=10.5, fontweight="bold", color=INK, loc="center", pad=10,
 )
 

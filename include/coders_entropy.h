@@ -11,7 +11,7 @@
 // PPMd7 (LZMA SDK, public domain) and FSE/Huff0 (Yann Collet, BSD) are
 // standard third-party libraries, vendored under thirdparty/ and called
 // through their own public API below, the same way this project already
-// uses liblzma. The range coder is our own, a standard carry-propagating
+// uses liblzma. The range coder is this project's own, a standard carry-propagating
 // design (the same family LZMA's own range coder belongs to).
 #include <cstdint>
 #include <cstring>
@@ -71,7 +71,7 @@ static std::vector<uint8_t> fse_encode(const uint8_t* src, size_t n){
     std::vector<uint8_t> out(FSE_compressBound(n)+16);
     size_t r = FSE_compress(out.data(), out.size(), src, n);
     // r==1 is FSE's RLE form, and its single byte is NOT the repeated symbol.
-    // The decoder used to reconstruct it as `rawlen copies of src[0]`, which is
+    // Reconstructing it as `rawlen copies of src[0]` is
     // only correct when that symbol happens to be zero -- true for the
     // all-zeros stream the workaround was written for (orig2uid_flags), and
     // silently WRONG for every other constant stream. Measured: n_cnt on
@@ -83,7 +83,7 @@ static std::vector<uint8_t> fse_encode(const uint8_t* src, size_t n){
     if(FSE_isError(r) || r<=1 || r>=n) return {};
     out.resize(r); return out;
 }
-// Huff0 variant of fse_encode. No caller uses it today: best_encode tries FSE
+// Huff0 variant of fse_encode. No caller currently uses it: best_encode tries FSE
 // (method 3) and has no Huff0 method id, so a stream coded this way could not be
 // decoded by capsule_decode_stream.
 static std::vector<uint8_t> huf_encode(const uint8_t* src, size_t n){
@@ -147,7 +147,7 @@ static std::vector<uint8_t> range_encode(const uint8_t* src, size_t n, unsigned 
 
 // ============================ DECODERS ======================================
 // Inverses of the three coders above. Written for the CAPSULE decoder: the
-// archive was previously unreadable, so losslessness could only be checked
+// archive would otherwise be unreadable, and losslessness could only be checked
 // through the raw dumped streams, never through the entropy layer.
 
 struct InBuf { IByteIn vt; const uint8_t* cur; const uint8_t* lim; };

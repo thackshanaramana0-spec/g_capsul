@@ -87,10 +87,9 @@ log "[5/7] running CAPSULE caller at ploidy=$PLOIDY on the mixed sample..."
 # Method B invocation ran the OLD caller and the result was not what it claimed
 # to be -- worth stating because one full tetraploid run was wasted that way.
 # ── ARCHIVE PATH ──────────────────────────────────────────────────────────
-# This table used to drive the ENCODER over the FASTQ, which made it the only
-# part of Claim 2 whose calls did NOT come from the archive -- the exact thing
-# the paper claims. It now does what T2.1 does: compress to a .capsule, then
-# call FROM that archive with no FASTQ and no reference in the loop.
+# Like T2.1, this table compresses to a .capsule and then calls FROM that
+# archive, with no FASTQ and no reference in the loop, which is what the paper
+# claims for Claim 2.
 #   CAPS_SPANS=1 writes contig_spans (which the caller needs) WITHOUT running
 #   the caller inline; CAPS_CALL=1 would do both and cost ~20x.
 # Set CAPS_ENCODER_PATH=1 to fall back to the old in-encoder call for

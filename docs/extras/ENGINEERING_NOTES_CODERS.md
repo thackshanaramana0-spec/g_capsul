@@ -1,6 +1,6 @@
 # Engineering notes: stream coders
 
-Long explanatory comments from `include/coders_inproc.h`, `seqpar_core.h`, `names_coder.h` and `quality_coder.h` that were condensed in the source during the documentation revision. They are kept here word for word because they record measurements and the reasoning behind design choices. The source keeps a short statement of each conclusion.
+Long explanatory comments from `include/coders_inproc.h`, `seqpar_core.h`, `names_coder.h` and `quality_coder.h` that were condensed in the source during the documentation revision. They are kept here in their original wording, with references to individual working sessions removed, because they record measurements and the reasoning behind design choices. The source keeps a short statement of each conclusion.
 
 
 The quoted text is unedited, so it can name working documents (for example under `docs/_removable/`, or a `docs/*.md` that is not in this repository) and sibling code (ARCS, PgRC2) that are not shipped here. Those names are provenance only. Nothing in the code or the paper depends on them.
@@ -9,7 +9,7 @@ The quoted text is unedited, so it can name working documents (for example under
 
 Source: `include/coders_inproc.h`, lines 293-333 before the documentation revision.
 
-Original comment, verbatim:
+Original comment:
 
 ```
 // Reference-stream coder: sources bounded by their own destination.
@@ -79,7 +79,7 @@ What the code now says:
 
 Source: `include/coders_inproc.h`, lines 818-832 before the documentation revision.
 
-Original comment, verbatim:
+Original comment:
 
 ```
     // ── BUCKETS CODED IN PARALLEL ───────────────────────────────────────────
@@ -113,7 +113,7 @@ What the code now says:
 
 Source: `include/seqpar_core.h`, lines 2-72 before the documentation revision.
 
-Original comment, verbatim:
+Original comment:
 
 ```
 // STAGE 81 -- encode-only mode on top of stage 75, unchanged otherwise.
@@ -140,7 +140,7 @@ Original comment, verbatim:
 // (0.176s) is dwarfed by seqpar's (0.729s) in the post-assembly phase, so
 // fixing permcoder alone would not move the total either -- seqpar would
 // still be the bottleneck. seqpar is the one tool whose 0.416s of
-// self-verification genuinely sits on the critical path (it runs AFTER
+// self-verification sits on the critical path (it runs AFTER
 // assembly, not absorbed by the overlap), so it is the one this stage
 // fixes -- not all five, because the diagnostic showed the other four
 // would not move the real number.
@@ -174,7 +174,7 @@ Original comment, verbatim:
 // per block, dispatch across threads. Applied here to stage 74's exact
 // context-mixing model (constexpr orders, fused gather+mixer loop,
 // TBITS=16) -- no algorithm change, only parallel framing, same discipline
-// as every other threaded stage this session.
+// as every other threaded stage.
 //
 // Real, KNOWN, disclosed risk before testing: this model's match component
 // specifically exploits LONG-RANGE repeats (up to the full literal
@@ -233,7 +233,7 @@ What the code now says:
 
 Source: `include/seqpar_core.h`, lines 130-148 before the documentation revision.
 
-Original comment, verbatim:
+Original comment:
 
 ```
 // STAGE 101 -- real root cause found via direct code inspection + layer-
@@ -252,7 +252,7 @@ Original comment, verbatim:
 // established precedent, not invented: zstd's own ZSTD_adjustCParams
 // scales hashLog/chainLog down from a srcSizeHint for exactly this
 // reason (small input doesn't need a hash table sized for a huge one).
-// Same principle as this session's earlier alphabet-adaptive quality-
+// Same principle as the earlier alphabet-adaptive quality-
 // coder fix -- a formula based on a MEASURED property of the actual
 // chunk, not a fixed constant or a per-dataset guess.
 ```
@@ -274,7 +274,7 @@ What the code now says:
 
 Source: `include/names_coder.h`, lines 2-41 before the documentation revision.
 
-Original comment, verbatim:
+Original comment:
 
 ```
 // Names / read-ID coder, shared by the encoder (106_inprocess.cpp) and the
@@ -370,7 +370,7 @@ What the code now says:
 
 Source: `include/names_coder.h`, lines 143-166 before the documentation revision.
 
-Original comment, verbatim:
+Original comment:
 
 ```
 // TWO REAL DEFECTS FIXED HERE, both only visible on high-cardinality fields
@@ -416,7 +416,7 @@ What the code now says:
 
 Source: `include/quality_coder.h`, lines 189-232 before the documentation revision.
 
-Original comment, verbatim:
+Original comment:
 
 ```
     // ── THE 8 TRIALS RUN CONCURRENTLY ────────────────────────────────────

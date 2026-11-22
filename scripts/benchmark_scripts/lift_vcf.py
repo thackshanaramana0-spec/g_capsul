@@ -47,7 +47,7 @@ def c2g(rn,cp0):
 
 def cig_op_at(rn,cp0):
     # Return the CIGAR operation ('M'/'I'/'D'/'S') that covers original-contig position
-    # cp0 in the reference contig's alignment to the genome. This tells us whether a body
+    # cp0 in the reference contig's alignment to the genome. This shows whether a body
     # base is ALIGNED to the genome (M -> the genome carries it -> deletion in the sample)
     # or INSERTED relative to the genome (I -> genome lacks it -> insertion) — robustly,
     # from the actual alignment, not a repeat-fooled sequence search.
@@ -81,7 +81,7 @@ if CONTIGS:
 
 def normalize_indel(pos,ref,alt):
     # left-trim shared suffix then shared prefix (keep 1 anchor base) so representation is
-    # canonical; rtg still haplotype-matches, but this keeps our own records tidy/valid.
+    # canonical; rtg still haplotype-matches, but this keeps the emitted records valid.
     while len(ref)>1 and len(alt)>1 and ref[-1]==alt[-1]:
         ref=ref[:-1]; alt=alt[:-1]
     return pos,ref,alt
@@ -104,10 +104,10 @@ def hapflank_lift(rn,cp1,cref,calt):
     # Match whichever haplotype the genome carries; that allele becomes REF, the
     # other ALT.
     #
-    # POLARITY FIX (2026-09-03). This loop used to take the FIRST haplotype that
-    # matched anywhere in the +/-300bp window, which silently made hapR win by
+    # POLARITY. Taking the FIRST haplotype that matched anywhere in the +/-300bp
+    # window would silently make hapR win by
     # loop order. Inside a tandem repeat BOTH haplotypes match -- shifted copies
-    # of the repeat unit exist on either side -- so the winner was decided by
+    # of the repeat unit exist on either side -- so the winner would be decided by
     # iteration order rather than by evidence, and at repeats it lands on the
     # wrong one. Measured on the tetraploid benchmark: truth TTTTA->T (deletion)
     # came out as T->Tttta (insertion) at 20:3332481, TTTTATTTA->T as
@@ -130,7 +130,7 @@ def hapflank_lift(rn,cp1,cref,calt):
                 _cands.append((abs((lo+k)-(gpos-1-K)), lo+k, hap, ori, mine, other))
                 st=k+1
     _cands.sort(key=lambda c:c[0])
-    # AMBIGUITY GUARD (2026-09-03). Inside a tandem repeat BOTH haplotypes match
+    # AMBIGUITY GUARD. Inside a tandem repeat BOTH haplotypes match
     # the genome window, so a sequence search cannot decide which one the genome
     # actually carries -- and picking either way is a coin flip on insertion vs
     # deletion polarity. When both hapR and hapO match, refuse to decide here and
@@ -221,7 +221,7 @@ for line in open(CALLS):
         # is authoritative. `body` = the differing bases (longer allele minus its anchor),
         # oriented to the forward genome (reverse-complement for reverse-strand contigs).
         # c2g already returns the exact genome coordinate of ANY contig position on either
-        # strand, so we test the body against the genome at that EXACT adjacent position
+        # strand, so the body is tested against the genome at that EXACT adjacent position
         # (no fuzzy window — short bodies match spuriously in a window and misplace calls):
         #   forward: body sits just AFTER the anchor;  reverse: just BEFORE it (rc'd).
         # If the genome carries body there the alt DELETED it, else the alt INSERTED it.
@@ -241,7 +241,7 @@ for line in open(CALLS):
         fwd = rc(body) if rev else body                   # forward-genome orientation
 
         # ── Determine polarity vs the genome. When the caller emitted a DELETION, the
-        # body bases live on THIS (reference) contig, so the bwa CIGAR tells us directly
+        # body bases live on THIS (reference) contig, so the bwa CIGAR shows directly
         # whether the genome carries them (M -> deletion) or they are inserted (I ->
         # insertion) — repeat-robust. When the caller emitted an INSERTION, the body is on
         # the OTHER contig; fall back to a genome-adjacency probe. ──
@@ -252,9 +252,9 @@ for line in open(CALLS):
             if op=='M':   is_del=True                     # body aligns to genome
             elif op in ('I','S'): is_del=False            # body inserted vs genome
         else:
-            # INSERTION-TYPE, CIGAR EVIDENCE (2026-09-03). Previously the CIGAR
-            # was consulted ONLY when the caller had already guessed deletion,
-            # so an insertion-labelled call never got the benefit of the
+            # INSERTION-TYPE, CIGAR EVIDENCE. The CIGAR is consulted for
+            # insertion-labelled calls too, not only when the caller has guessed
+            # deletion, so an insertion-labelled call also gets the benefit of the
             # alignment -- even though the caller's ref/alt polarity is
             # arbitrary (it labels the longer contig "reference"). If the
             # reference contig's own alignment carries a D/N operation of the
@@ -353,7 +353,7 @@ def _leftalign(pos, ref, alt):
         ref=b+ref[:-1]; alt=b+alt[:-1]; pos-=1; guard+=1
     return pos, ref, alt
 
-# REFUTED BY MEASUREMENT 2026-09-03 -- OPT-IN (CAPS_ONE_INDEL_PER_LOCUS=1),
+# REJECTED BY MEASUREMENT -- OPT-IN (CAPS_ONE_INDEL_PER_LOCUS=1),
 # OFF by default. The reasoning is sound (a caller should not emit mutually
 # exclusive indels at one locus; DiscoSNP++ emits exactly 1 record per
 # position, 60/60, and CAPSULE emitted 86 over 81 positions) and it does

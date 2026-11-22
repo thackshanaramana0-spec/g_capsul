@@ -136,10 +136,10 @@ the FM-index, 1,451/1,452 by position alone).
 | `docs/paper_overview.md` | How the paper's sections map onto the three claims |
 | `docs/numbers_and_verification_index.md` | The single canonical source for every final, locked number cited anywhere in this folder |
 | `docs/novelty_and_prior_art.md` | What is and is not novel relative to PgRC2, PgRC, Quip, BEETL-fastq, CIndex, sFASTQ, BFQzip, DiscoSNP++, Kmer2SNP |
-| `docs/honest_limitations_and_scope.md` | Every limitation and scope boundary that must appear in the paper's Discussion |
+| `docs/limitations_and_scope.md` | Every limitation and scope boundary that must appear in the paper's Discussion |
 | `docs/configuration_reference.md` | Every environment variable and positional argument the programs read, with defaults, taken from the source |
 | `docs/extras/` | Background engineering history (PgRC2 reimplementation notes, layer-by-layer profiling in `docs/extras/LAYER_BY_LAYER_ANALYSIS.md`, SOTA comparison tables, server setup, locked dataset list) — lower-priority context, not required to verify any single claim |
-| `docs/extras/ENGINEERING_NOTES_CODERS.md`, `docs/extras/ENGINEERING_NOTES_ENCODER.md` | Long measurements and rejected approaches that were condensed in the source comments, kept verbatim |
+| `docs/extras/ENGINEERING_NOTES_CALLER.md`, `docs/extras/ENGINEERING_NOTES_CODERS.md`, `docs/extras/ENGINEERING_NOTES_ENCODER.md` | Long measurements and rejected approaches that were condensed in the source comments of `include/caps_caller.h`, the coder headers and `src/encoder.cpp`, kept in their original wording |
 
 ---
 
@@ -172,7 +172,7 @@ reproducible code+data+docs view, not the full development history.
   published here. Where a file in this folder's own history once cited one
   of those paths, the citation has been corrected to either point at the
   equivalent public path (for code and result CSVs) or reworded to say
-  plainly that the source is internal and not published, rather than left
+  that the source is internal and not published, rather than left
   pointing at a path that does not resolve in this repository.
 - **Internal notes named by title.** Some documents cite "the development
   notes" or another note by title, with no path. Those are the project's

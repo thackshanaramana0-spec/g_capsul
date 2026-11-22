@@ -13,11 +13,11 @@
 // below for the copy fqzcomp keeps of its own).
 //
 // WHY VENDOR RATHER THAN REIMPLEMENT (measured, see docs/extras/REIMPL_NOTES.md):
-// our own earlier quality coder beats SPRING 7/8 and Genozip 8/8 but
+// this project's earlier quality coder is smaller than SPRING on 7/8 and Genozip on 8/8 but
 // loses to real fqzcomp on 8/8 by 1.1-4.5%, while fqzcomp is also 2x faster
-// single-threaded than ours is on 12 threads at the same RAM. htscodecs is BSD,
+// single-threaded than that coder is on 12 threads at the same RAM. htscodecs is BSD,
 // unlike PgRC2 (GPL-3) which is why THAT had to be reimplemented. Every
-// cross-column signal we hold and fqzcomp cannot see was tested by held-out
+// cross-column signal available here that fqzcomp cannot see was tested by held-out
 // entropy and refuted: tile +12.20% worse, base call +1.04% worse, is-N 0.00%.
 //
 // TWO THINGS DELIBERATELY NOT DONE, both recorded so they are not "fixed" later
@@ -27,7 +27,7 @@
 //    in BAM/CRAM the stored quality of a reverse-strand alignment is already
 //    reversed relative to the original read; fqzcomp un-reverses it to restore
 //    the position-quality correlation (quality degrades toward the 3' end). In
-//    FASTQ the quality is ALREADY in original orientation, and our pos_strand
+//    FASTQ the quality is ALREADY in original orientation, and pos_strand
 //    describes pseudogenome placement, not read orientation -- feeding it would
 //    reverse strings that were never reversed and DESTROY that correlation.
 //    FQZ_FREAD2 likewise applies to paired files, which this single-file path

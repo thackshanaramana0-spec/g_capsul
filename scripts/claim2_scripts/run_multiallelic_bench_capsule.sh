@@ -63,7 +63,7 @@ awk -v c="$CHROM" -v lo="$LO" -v hi="$HI" '$1==c && $3>lo && $2<hi{
 # it can only evaluate the SNV subset. Scored against all 111, the 104
 # indel-bearing sites count as misses BY CONSTRUCTION rather than by
 # measurement -- which is what produced the unreconcilable "5/111". The SNV
-# denominator is the honest one for this metric; the full count is kept
+# denominator is the appropriate one for this metric; the full count is kept
 # alongside it so the scope is visible rather than implied.
 N_MULTI=$(zcat truth_raw.vcf.gz | grep -v '^#' | awk -F'\t' '$5~/,/' | wc -l)
 N_MULTI_SNV=$(zcat truth_raw.vcf.gz | grep -v '^#' | awk -F'\t' '
@@ -73,10 +73,9 @@ log "[2/5] done -- $(awk '{n+=$3-$2}END{print n+0}' regions.bed) confident bp, $
 # ── 3. CAPSULE reference-free call (standard diploid, no ploidy override) ──
 log "[3/5] running CAPSULE caller (standard diploid)..."
 # ── ARCHIVE PATH ──────────────────────────────────────────────────────────
-# This table used to drive the ENCODER over the FASTQ, which made it the only
-# part of Claim 2 whose calls did NOT come from the archive -- the exact thing
-# the paper claims. It now does what T2.1 does: compress to a .capsule, then
-# call FROM that archive with no FASTQ and no reference in the loop.
+# Like T2.1, this table compresses to a .capsule and then calls FROM that
+# archive, with no FASTQ and no reference in the loop, which is what the paper
+# claims for Claim 2.
 #   CAPS_SPANS=1 writes contig_spans (which the caller needs) WITHOUT running
 #   the caller inline; CAPS_CALL=1 would do both and cost ~20x.
 # Set CAPS_ENCODER_PATH=1 to fall back to the old in-encoder call for
@@ -168,14 +167,12 @@ recovered() {
 # measurement).
 recovered_strict() {
     # SNV-ONLY by construction: the check compares single bases, so an
-    # indel-bearing site cannot pass it and must not be counted against us.
+    # indel-bearing site cannot pass it and must not be counted as a miss.
     #
     # Prints THREE numbers, space-separated: both-allele hit count (the T5.2
-    # metric, unchanged), one-allele count, zero-allele count. Added
-    # 2026-09-10 after an audit found the CSV schema had capsule_one/
-    # capsule_none columns that nothing in this script ever filled -- the
-    # published values there were never actually measured. This closes that
-    # gap without changing the STRICT hit computation itself, which is the
+    # metric), one-allele count, zero-allele count, so the CSV's capsule_one and
+    # capsule_none columns are measured rather than left empty. The STRICT hit
+    # computation itself, which is the
     # one figure every published T2.4 number is keyed on.
     local CALLS="$1"
     awk -F'\t' '

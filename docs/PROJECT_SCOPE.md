@@ -3,7 +3,7 @@
 This file is the code-level scope reference: what the tool actually does,
 what it can be used for, and exactly what input it will and will not accept.
 It is not about benchmark results or paper claims — for that, see
-[`honest_limitations_and_scope.md`](honest_limitations_and_scope.md). Every
+[`limitations_and_scope.md`](limitations_and_scope.md). Every
 number here is taken directly from the current source
 (`src/encoder.cpp`, `src/decoder.cpp`, `include/`), not from memory or the
 paper — where the two could ever disagree, the source wins.
@@ -102,23 +102,22 @@ and without fully decompressing first.
 - Any record whose quality-line length doesn't match its sequence-line
   length.
 - An empty file, or a file with zero usable (well-formed) FASTQ records.
+- CRLF line endings, any sequence byte other than upper-case `A`, `C`, `G`, `T`, `N`
+  (lower case and IUPAC codes included), an `N` after base 256 of a read or more than
+  255 `N` in one read, truncated or malformed records, and (with `CAPS_NAMES=1`) mixed
+  line-3 content.
 - Running the encoder with no arguments, or pointing it at a file that
   doesn't exist or can't be opened.
 
-**Not supported, and not always cleanly rejected — real, disclosed gaps, not silent guarantees:**
+**Not supported, and not specially detected (most are still refused by the general record and alphabet checks):**
 - Gzip-compressed FASTQ (`.fastq.gz`) — must be decompressed to plain text
   first; the encoder does not detect or reject this specially, it will
   simply fail to parse valid FASTQ records from it and most likely hit the
   "zero usable records" refusal.
 - FASTA (no quality line), SAM/BAM/CRAM, or any other non-FASTQ format —
   same as above, not specially detected.
-- Protein sequence, RNA (with `U`), IUPAC ambiguity codes
-  (`R`/`Y`/`S`/`W`/etc.), or lowercase bases (`a`/`c`/`g`/`t`) — the base
-  packer only recognizes uppercase `A`/`C`/`G`/`T` as valid; anything else
-  is treated the same as an encoding edge case internally rather than
-  being explicitly detected and refused at the pre-flight stage. Do not
-  trust a resulting archive on such input without decoding and diffing it
-  against the source.
+- Protein sequence or RNA (with `U`) are refused by the same alphabet check, since `U` and
+  every other byte outside `A`, `C`, `G`, `T`, `N` is rejected.
 - Paired-end/mate-pair reads — there is no R1/R2 linking or interleaving
   awareness anywhere in the format; each input file is treated as one
   independent stream of reads. Paired data can be given to the tool (e.g.
@@ -140,7 +139,7 @@ and without fully decompressing first.
   and huge-page-hint code paths; these do not exist on native Windows.
   Linux and macOS (including Apple Silicon) are supported and CI-verified;
   Windows would require either WSL or a source-level port of that specific
-  process-management code, neither of which is done today.
+  process-management code, neither of which is currently done.
 - Human whole-genome-scale datasets (full ~3.1 Gb) are outside this
   project's validated scope by an explicit prior decision — chr20-region
   and 19-dataset-sweep scale inputs are what has actually been measured.
@@ -150,8 +149,8 @@ and without fully decompressing first.
 ---
 
 *Every hard limit and every disclosed gap in this file was verified against
-the current source during this session's own edge-case audit and
-SPRING/PgRC2 comparison, and re-confirmed with a real adversarial test pass
+the current source during the edge-case audit and
+the SPRING/PgRC2 comparison, and re-confirmed with an adversarial test pass
 against the built binaries (zero-arg, missing/empty/garbage/truncated input,
 corrupted archives, malformed queries) — not asserted from documentation
 alone.*

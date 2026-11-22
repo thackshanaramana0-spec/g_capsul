@@ -26,9 +26,9 @@
 
 // ---------- xz (liblzma), equivalent to `xz -9 -c` ----------
 // Multi-threaded LZMA. PgRC2 passes a thread count to every LzmaCoderProps
-// (PropsLibrary.cpp: noOfThreads = numberOfThreads>1 ? 2 : 1); we were calling
-// the single-threaded lzma_easy_buffer_encode, which is a large part of why we
-// measured 145% CPU against their 515% on a 12-core box. Falls back to the
+// (PropsLibrary.cpp: noOfThreads = numberOfThreads>1 ? 2 : 1). The
+// single-threaded lzma_easy_buffer_encode measured 145% CPU against PgRC2's
+// 515% on a 12-core box. Falls back to the
 // single-threaded path for small inputs, where MT block-splitting costs bytes
 // and buys no time.
 static std::vector<uint8_t> xz_compress(const void* data, size_t n, uint32_t preset=9){
@@ -88,7 +88,7 @@ static std::vector<uint8_t> xz_compress_lzma(const void* data, size_t n,
     // regardless of stream size, and with seven probes over six large streams
     // that is ~2.7 GB of allocate-touch-free per file -- measured as 1,089,328
     // minor page faults against PgRC2's 169,421 (6.4x), which is essentially
-    // all of our 3.18 s system time.
+    // all of the encoder's 3.18 s system time.
     //
     // PgRC2 sizes dictionaries per stream by hand (1 MB, 8 MB, 16 MB, 64 MB).
     // The bound here is derived from the data instead: round n up to a power of
@@ -138,7 +138,7 @@ static std::vector<uint8_t> xz_compress_lzma(const void* data, size_t n,
 // The guard: a plane can have H0 = 8 and still be compressible if it has
 // higher-order structure (a counter mod 256 is the textbook case). So a plane
 // that looks incompressible by entropy is confirmed on a bounded 64 KB prefix
-// -- PgRC2's own DEFAULT_MIN_PROBE_SIZE -- before we skip it. That is O(64 KB),
+// -- PgRC2's own DEFAULT_MIN_PROBE_SIZE -- before it is skipped. That is O(64 KB),
 // not O(n).
 static double plane_entropy(const uint8_t* p, size_t n){
     if(!n) return 0.0;
@@ -826,7 +826,7 @@ static std::vector<uint8_t> mmpos_encode_buckets(const std::vector<uint8_t>& pos
     // mismatch of each read forms a column with far more uniform statistics
     // than the row-major order: early columns hold small offsets, late columns
     // large ones. PgRC2 transposes for exactly this reason
-    // (compressRlMisRevOffDest). Measured on S. acidocaldarius, our only
+    // (compressRlMisRevOffDest). Measured on S. acidocaldarius, the only
     // losing dataset, where mm_pos is 23.4% of the archive: 751,726 B in read
     // order against 710,820 B transposed, -5.4% by entropy.
     //

@@ -1,18 +1,6 @@
----
-Date: 2026-09-19
-Title: T1.2 — Wall Time vs SPRING and Genozip, 19 Datasets
-Purpose: Complete, verified, honest record of T1.2's numbers — CAPSULE is
-  never the fastest tool, on either axis, on any dataset. Stated plainly,
-  not softened.
-When to refer to this file: Writing/checking T1.2's table or text; citing
-  any speed number for the base archive (not to be confused with Claim 3's
-  export/coverage/query speeds, which ARE dominant wins); explaining the
-  size-vs-speed trade-off.
-Keywords: T1.2, wall time, compress, decompress, SPRING, Genozip, trade-off,
-  honest loss, not mixed
----
-
 # T1.2 — Wall Time
+
+> Record of the T1.2 numbers. G_CAPSUL is not the fastest tool on either axis on any dataset.
 
 ## What it measures
 
@@ -20,9 +8,9 @@ Compression and decompression wall time, same 19 datasets, same run, same
 machine, one timed job at a time (manuscript's own stated protocol —
 verified present in the caption).
 
-## Results — a real, disclosed loss, not a mixed result
+## Results — a disclosed loss, not a mixed result
 
-**Independently computed this session, directly from the raw CSV**
+**Independently computed, directly from the raw CSV**
 (`results/claim1/claim1_T1.1_T1.2.csv`), by comparing `compress_s` and
 `decompress_s` per dataset across all three tools:
 
@@ -34,7 +22,7 @@ verified present in the caption).
 **CAPSULE is not the fastest tool at either compression or decompression on
 any of the 19 datasets.** SPRING and Genozip trade the "fastest" position
 between themselves row by row; CAPSULE never takes it. This should be
-stated in the paper exactly this plainly — do not describe this as "mixed"
+stated in the paper exactly this — do not describe this as "mixed"
 or "competitive," which would overclaim relative to the actual 0/19, 0/19
 result.
 
@@ -43,7 +31,7 @@ compress — CAPSULE 5.76s, SPRING **3.67s** (fastest), Genozip 4.54s;
 decompress — CAPSULE 2.70s, SPRING 6.44s, Genozip **0.51s** (fastest).
 Consistent with the aggregate 0/19 pattern.
 
-## Why this is the honest cost of Claim 1's own design, not a flaw to hide
+## Why this is the cost of Claim 1's own design, not a flaw to hide
 
 This is the direct, real price of the additional structure Claim 1 retains
 and Claims 2/3 reuse: building a pseudogenome via overlap chaining,
@@ -51,11 +39,11 @@ tracking placements/deviations for every read, and running the full stream
 selector (which measures multiple candidate encoders per stream and keeps
 the smallest — see `code_mapping_claim1.md`) all cost real time that a
 simpler compressor without this structure does not spend. **This is the
-same trade-off already stated candidly elsewhere in the project's own
-documentation** (the pipeline notes/session history: "~1.7x slower, ~2.5x
+same trade-off already stated in the project's own
+documentation** (the pipeline notes: "~1.7x slower, ~2.5x
 heavier at worst" against PgRC2, on the earlier, narrower sequence-only
 comparison — see `mechanism_insight_claim1.md`). T1.2 is the full-FASTQ,
-19-dataset version of that same honest disclosure.
+19-dataset version of that same disclosure.
 
 ## Precisely where the RAM cost comes from, verified file-and-line
 
@@ -103,7 +91,7 @@ correctness," per the same source, an explicitly open item.
 
 Verified against the candidate-fork-depth note: the encoder searches a grid
 of `MAXMAP`×`MINOV` candidates and keeps whichever produces the smallest
-archive (a genuine measured-optimum search, not a heuristic — see
+archive (a measured-optimum search, not a heuristic — see
 the reproducibility note's discipline). A real inefficiency was found and
 fixed: `MINOV` is consumed at the round-2 sweep, `MAXMAP` only later at
 pigeonhole mapping, so candidates sharing the same `MINOV` were computing a

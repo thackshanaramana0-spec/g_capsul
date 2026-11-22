@@ -1,16 +1,6 @@
----
-Date: 2026-09-19
-Title: Claim 1 (COMPACT) — Overview, What It Is And Is Not
-Purpose: Entry point for understanding what Claim 1 claims, what it does
-  not, and how T1.1/T1.2 relate, before reading either table's detail file.
-When to refer to this file: Before writing/reviewing any Claim 1 paper
-  section; answering "is Claim 1 locked"; understanding why Claim 1 is the
-  foundation every other claim's cost gets measured against.
-Keywords: COMPACT, Claim 1, compression, lossless, SPRING, Genozip,
-  archive size, wall time, 19 datasets, overview, scope, foundation
----
-
 # Claim 1 — COMPACT. What it is, what it is not.
+
+> Entry point for Claim 1: what it claims, what it does not claim, and how T1.1 and T1.2 relate.
 
 ## What Claim 1 actually claims, in one sentence
 
@@ -20,17 +10,14 @@ enough structure to support the downstream operations Claims 2 and 3
 measure — and this is stated as the load-bearing constraint on everything
 else in the paper, not just the first result.**
 
-## Why this claim is the foundation, not just "first"
+## Why this claim is the foundation
 
 Every other claim in this paper is evaluated against a compressed
 representation that this claim's own discipline protects. The project's
-own standing rule, verified in this session's Claim 3 work: *"Claim 1 is
-the stronger claim and must not be spent buying Claim 3 a constant"*
-(directly quoted from code comments found this session, `decoder.cpp`
-line ~511). Concretely, this was tested and enforced, not just stated —
-when this session's own investigation drifted toward retuning the encoder
-to chase a Claim 3 (T3.1) metric, it was correctly stopped because doing so
-would have cost ~11.6% archive size. That the project has a real, working
+rule, recorded in a code comment in `decoder.cpp`: *"Claim 1 is
+the stronger claim and must not be spent buying Claim 3 a constant"*.
+The rule was applied in practice. A retuning of the encoder to improve a Claim 3 (T3.1) metric was
+stopped because it would have cost about 11.6% of the archive size. That the project has a working
 discipline of protecting Claim 1's numbers from being spent elsewhere is
 itself evidence worth citing.
 
@@ -44,7 +31,7 @@ itself evidence worth citing.
   chosen to include human, bacteria, archaea, protista, fungi, virus, and
   plantae — the manuscript states this explicitly as a deliberate test of
   whether the method holds under "substantially different sequencing
-  conditions," not cherry-picked for favorable margins.
+  conditions," not selected for favorable margins.
 - **Not the same comparison as the PgRC2 numbers cited elsewhere in the
   project's history.** PgRC2 stores sequence only — no read names, no
   quality scores, no line-3 mode byte. Comparing it to G_CAPSUL's
@@ -57,12 +44,12 @@ itself evidence worth citing.
 | Table | Question | Comparators | Result |
 |---|---|---|---|
 | T1.1 | Lossless whole-FASTQ archive size, 19 datasets | SPRING, Genozip | 19/19 wins vs both. Aggregate: −6.03% vs SPRING, −43.26% vs Genozip. |
-| T1.2 | Wall time (compress + decompress), same 19 datasets | SPRING, Genozip | **CAPSULE is 0/19 fastest at compress and 0/19 fastest at decompress** — verified by independent recomputation from the raw CSV this session, not assumed. This is a real, disclosed trade-off (smaller archives, slower construction), not a mixed result. |
+| T1.2 | Wall time (compress + decompress), same 19 datasets | SPRING, Genozip | **CAPSULE is 0/19 fastest at compress and 0/19 fastest at decompress** — verified by independent recomputation from the raw CSV, not assumed. This is a disclosed trade-off (smaller archives, slower construction), not a mixed result. |
 
 ## Verification status of this overview and its 4 companion files
 
 The T1.1 aggregate figures above were **independently recomputed from the
-raw CSV this session** (`results/claim1/claim1_T1.1_T1.2.csv`), not just
+raw CSV** (`results/claim1/claim1_T1.1_T1.2.csv`), not just
 cited from the development notes — summed all 19 datasets' archive bytes for each
 tool and derived the percentage margins from scratch. Result: exact match
 to the development notes' stated headline (19/19 vs SPRING −6.03%, 19/19 vs Genozip
@@ -77,13 +64,13 @@ folders in `docs/` — re-derivation, not just cross-checking.
    claim's cost gets measured against (see the `CAPS_SPANS`/`contig_spans`
    free-byproduct discussion in `mechanism_insight_claim1.md`, which
    directly connects to Claim 3's T3.1 mechanism).
-2. **T1.2 is the honest secondary axis — speed, and it is a real loss, not
+2. **T1.2 is the secondary axis — speed, and it is a real loss, not
    a mixed result.** CAPSULE is fastest on 0 of 19 datasets for compress and
    0 of 19 for decompress — SPRING and Genozip trade the "fastest" bold
    mark between themselves, CAPSULE never takes it. This is the direct,
    disclosed cost of the extra structure Claim 1 retains and Claims 2/3
    reuse — smaller, richer archives cost more time to build and unpack.
-   State this plainly as a real trade-off, not softened as "mixed" or
+   State this as a real trade-off, not described as "mixed" or
    implied to be occasionally competitive.
 
 ## File index for this folder
@@ -96,7 +83,7 @@ folders in `docs/` — re-derivation, not just cross-checking.
   and the one-byte line-3 encoding.
 - `mechanism_insight_claim1.md` — how Claim 1's own compression mechanism
   (overlap chaining, position+deviation encoding) is the structural cause of
-  the allele-splitting phenomenon Claims 2 and 3 build on; honest PgRC2
+  the allele-splitting phenomenon Claims 2 and 3 build on; PgRC2
   sequence-only comparison.
 - `code_mapping_claim1.md` — exact stage/function references in
   `src/encoder.cpp` and the shared coder headers, and exact source

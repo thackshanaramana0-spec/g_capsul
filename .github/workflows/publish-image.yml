@@ -74,4 +74,4 @@ jobs:
           cd /tmp/publish_ci
           awk 'NR%4==1{n=substr($0,2)} NR%4==2{s=$0} NR%4==0{print n"\t"s"\t"$0}' reads.fq | sort > _a
           paste outdir/reads_out.fq.names outdir/reads_out.fq outdir/reads_out.fq.qual | sort > _b
-          cmp -s _a _b && echo "LOSSLESS -- published image confirmed byte-identical" || { echo "LOSSY"; exit 1; }
+          cmp -s _a _b && echo "LOSSLESS -- published image sorted records identical" || { echo "LOSSY"; exit 1; }

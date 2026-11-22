@@ -1,23 +1,6 @@
----
-Date: 2026-09-19
-Title: How Claim 3 Connects to the Paper's Central Insight — Mechanism,
-  Not a Bolt-On Feature. Honest PgRC2/BEETL Comparison.
-Purpose: The single most important synthesis file in this folder. Answers
-  precisely why Claim 3 (and T3.5/the FM-index specifically) is architecturally
-  earned rather than an API tacked onto an unrelated compressor, and gives
-  an honest, source-checked answer to "could PgRC2 or BEETL do this with a
-  small addition."
-When to refer to this file: Writing the discussion section; answering any
-  reviewer question of the form "isn't this just X with an extra feature
-  bolted on"; deciding what can honestly be claimed about novelty relative
-  to PgRC2 or BEETL; whenever tempted to describe Claim 3's mechanisms as
-  five independent features rather than one insight applied five ways.
-Keywords: insight, mechanism, ARCH, allele splitting, reconciliation,
-  PgRC2, BEETL, CIndex, sFASTQ, novelty, bolt-on, API, not fabricated,
-  confirmed vs inferred
----
-
 # How Claim 3 connects to the paper's actual insight
+
+> Why the retrieval operations of Claim 3 follow from the structure of the archive, and where the FM-index (T3.5) fits.
 
 ## The insight, stated once, precisely
 
@@ -40,7 +23,7 @@ those three preconditions is subject to the same pressure by construction
 
 **Do not confuse the insight with the mechanism.** The insight is the
 general architectural claim (retained structure is reusable). The
-allele-splitting story is the *sharpest evidence* for it, appearing twice —
+allele-splitting story is the *clearest evidence* for it, appearing twice —
 Claim 2 (F1 0.431→0.888 when reconciled), Claim 3/T3.5 (99.93%→100% when
 reconciled) — because it is where the general insight has the most visible,
 measurable bite. It is not itself the paper's thesis.
@@ -48,7 +31,7 @@ measurable bite. It is not itself the paper's thesis.
 **A worked example, verified against the Claim 3 mechanism note** (GIAB
 `20:3001343`, a real het SNV, C>T): a 40 bp probe ending 6 bp before the
 variant occurs **four times** in the pseudogenome, and the consensus base at
-the variant offset genuinely disagrees between occurrences —
+the variant offset disagrees between occurrences —
 
     pg 101,247,805 (+)   C    <- REF haplotype
     pg 119,833,369 (+)   T    <- ALT haplotype
@@ -70,7 +53,7 @@ het locus actually is.
 A skeptical read of Claim 3 might see five separate operations (export,
 coverage, range query, exact match, locus retrieval) and suspect they were
 each engineered independently to win their own comparison — "feature
-creep" rather than one coherent architecture. The honest, verified answer
+creep" rather than one coherent architecture. The verified answer
 (see `code_mapping_claim3.md` for the code-level proof) is that this
 is not the case:
 
@@ -80,7 +63,7 @@ is not the case:
   reasons, not new structures built to win T3.1/T3.2 specifically.
 - **Two of the five (T3.3, T3.4) are the SAME function** (`mode=="query"`),
   differing only in what populates one variable. This was verified directly
-  in the code this session, not assumed.
+  in the code.
 - **T3.5 is not a new mechanism at all.** It is an orchestration pattern —
   two calls to T3.4's exact primitive, reconciled by a Python script. No new
   C++ was written for it.
@@ -90,13 +73,13 @@ these were independently engineered per-table features, they would not
 collapse this cleanly into two fast-exits + one shared primitive + one
 orchestration layer on top of that primitive. The fact that they *do*
 collapse this way is itself evidence the underlying structure (placement +
-deviations, stored once) is genuinely general-purpose, not five special
+deviations, stored once) is general-purpose, not five special
 cases dressed up as one story.
 
 ## The FM-index specifically — extension, not rescue
 
 The FM-index deserves its own paragraph because it is the part most likely to be
-mistaken for a bolt-on API. The honest framing: the FM-index is a capability added
+mistaken for a bolt-on API. The framing: the FM-index is a capability added
 to a **finished archive**, after compression, without re-encoding, without
 touching raw reads, without a second assembly — discovered as *possible*
 only because the archive already stores placement and deviation information
@@ -129,8 +112,8 @@ interface). The correct, precise claim is that PgRC2 lacks the
 **interface**, not the data — a reviewer who knows PgRC2's internals would
 check exactly this distinction.
 
-**Honesty flag on the source of the above**: The Claim 3 final-verdict note
-and the Claim 3 locked-results note (both read in full this session) are more
+**Note on the source of the above**: The Claim 3 final-verdict note
+and the Claim 3 locked-results note (both read in full) are more
 deeply superseded than Claim 1/2's equivalent docs — they predate T3.4 and
 T3.5 entirely (locus retrieval and exact-match completion did not exist as
 concepts when they were written), and their T3.1/T3.2/T3.3 numbers differ
@@ -147,7 +130,7 @@ in order to compress, so the coordinate system is a byproduct rather than
 an addition — which is why locus retrieval, per-base coverage and
 reference-free variant calling all come out of the same structure."*
 
-## Honest, source-checked comparison to PgRC2
+## Source-checked comparison to PgRC2
 
 Full analysis, with confirmed-vs-inferred kept strictly separate in the PgRC2 extension analysis. Summary, preserving that separation:
 
@@ -181,12 +164,12 @@ measured numbers by resemblance alone:
    data is not the hard part; the correctness layer on top of it is — even
    for a team with full access to and understanding of their own code.
 
-**What remains explicitly open, stated plainly**: whether PgRC2's own
+**What remains explicitly open, stated**: whether PgRC2's own
 pseudogenome actually exhibits allele-splitting on real heterozygous data is
 untested and would require building and running PgRC2 locally. Not done,
 not claimed as done.
 
-## Honest comparison to BEETL/CIndex/sFASTQ
+## Comparison to BEETL/CIndex/sFASTQ
 
 Full novelty trail: The project's development notes' "Novelty, corrected after a literature
 survey 2026-09-16" section and the Claim 3 locus-addressability write-up.
@@ -196,7 +179,7 @@ BEETL-fastq (2014), CIndex (2022), sFASTQ (2022) all do it via BWT/FM-index,
 and do it natively (no auxiliary index needed, since the index IS their
 archive).
 
-**What is genuinely distinct, verified against how BWT actually works**:
+**What is distinct, verified against how BWT actually works**:
 retrieval by **position** rather than by **exact match** — returning reads
 *covering* a locus, not reads *containing* a string. The root cause is the
 data model: a BWT stores each read as an independent string with no
@@ -216,11 +199,11 @@ analogous — position is not hard to look up for a BWT, it is **not
 computed, period**. For BEETL to add position retrieval, it would need to
 build an entirely separate assembly/placement structure from scratch — not
 an index over existing data, a second construction process. This is a
-genuine structural asymmetry, verified by tracing what each compression
+structural asymmetry, verified by tracing what each compression
 method actually computes, not assumed from which one "feels" more capable.
 
 **What is not claimed**: no speed or index-size benchmark against
-BEETL/CIndex/sFASTQ has been run. Stated as the single most valuable
+BEETL/CIndex/sFASTQ has been run. Stated as the most valuable
 missing experiment in the development notes, not silently omitted.
 
 ## The native-pileup fast path — an unexploited layer, found by audit
@@ -273,7 +256,7 @@ five separate comparisons. Architecturally they reduce to two fast-exits
 from the existing decode path, one shared query primitive used three ways,
 and one orchestration layer built on that primitive — a structure that
 falls out of retaining placement and deviation data for read reconstruction,
-not one designed piecemeal per table. The one genuinely added structure
+not one designed piecemeal per table. The one added structure
 (the FM-index) was built after compression, from data the archive already held for
 an unrelated reason, which is itself evidence the substrate generalizes
 rather than proof it was anticipated. Whether the closest architectural

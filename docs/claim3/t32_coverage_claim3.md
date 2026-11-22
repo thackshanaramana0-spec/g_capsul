@@ -1,16 +1,6 @@
----
-Date: 2026-09-19
-Title: T3.2 — Per-Base Coverage vs bwa+samtools+mosdepth
-Purpose: Complete, verified record of what T3.2 measures, its exact
-  mechanism, and why it is a clean, unconditional win with no caveats.
-When to refer to this file: Writing/checking T3.2's table or text; the one
-  table in Claim 3 that needs no qualification, useful as a contrast when
-  explaining why T3.1/T3.4 DO need qualification.
-Keywords: T3.2, coverage, bwa, samtools, mosdepth, pos_abs, read_lengths,
-  orig2uid, sweep-line, difference array, per-base depth
----
-
 # T3.2 — Coverage
+
+> Record of what T3.2 measures and its mechanism.
 
 ## What it measures
 
@@ -18,7 +8,7 @@ Time to compute per-base sequencing depth directly from the archive,
 compared to the conventional pipeline: align (bwa-mem) → sort/index
 (samtools) → compute depth (mosdepth), timed as one combined pipeline.
 
-## The mechanism — genuinely exits before assembly, not just fast
+## The mechanism — exits before assembly, not just fast
 
 This is the cleanest of the five tables architecturally. `coverage` mode in
 `decoder.cpp` **returns before the pseudogenome is even rebuilt**
@@ -91,7 +81,7 @@ needs to redo.
 This makes T3.2 a useful anchor when writing the discussion section: it is
 the table that shows the "retained structure is directly reusable" claim at
 its strongest and simplest, before the paper has to start explaining the
-more nuanced tables (T3.1's honest gaps, T3.4's auxiliary index, T3.5's
+more nuanced tables (T3.1's gaps, T3.4's auxiliary index, T3.5's
 orchestration layer).
 
 ## The architecture claim, made concrete by measurement, not asserted

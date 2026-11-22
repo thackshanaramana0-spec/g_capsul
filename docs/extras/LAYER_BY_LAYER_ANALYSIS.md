@@ -1,5 +1,7 @@
 # Layer-by-layer analysis: ours vs PgRC2, real profiling, no changes
 
+> Engineering log from the development of the encoder. It records measurements and rejected approaches in the order they were made, and some figures were superseded by later work. The current results are in `results/` and in the claim folders under `docs/`.
+
 Pure analysis, no code touched. Real numbers from real runs, both sides, same
 file (E. coli, `ecoli_test.fq`, 1,000,000 reads, 150bp, byte-identical
 verified on our side — see the locked-scope note for that proof).
@@ -38,16 +40,16 @@ essentially the ENTIRE pipeline's reported peak RAM (819,572 KB from the
 end-to-end wrapper run).** Assembly (166 MB) is not the RAM bottleneck this
 project's own documentation has repeatedly implied — the sequence *coder*
 is. This reframes the whole "assembly costs RAM" narrative that's been
-assumed all session; it was never actually verified layer-by-layer until now.
+assumed throughout; it was not verified layer by layer until this analysis.
 
 Real question this opens, not yet answered: WHY does seqpar need 820 MB to
 encode 5 MB of literal text? That ratio (~164x) is large enough to be a real
 target — worth checking its context-table sizing (same class of question
-already root-caused once this session for the quality coder's alphabet-size
+already root-caused once for the quality coder's alphabet-size
 issue) before assuming it's inherent.
 
 **Checked for generalization immediately, not left as a single-dataset
-guess (per the standing rule):** re-ran seqpar on P. aeruginosa's literal.txt
+guess:** re-ran seqpar on P. aeruginosa's literal.txt
 (7,012,675 B, ~1.4x larger than E. coli's 5,039,422 B). RAM: 821,536 KB —
 essentially IDENTICAL to E. coli's 819,612 KB despite the different input
 size. **This confirms the 820 MB is a FIXED allocation, not proportional to
@@ -55,7 +57,7 @@ input** — almost certainly a fixed-size context table sized for the DNA
 alphabet's full context space (4 bases × some fixed context depth), not
 scaled to the actual data volume. This is the exact same bug shape as the
 quality coder's pre-fix behavior (fixed, oversized context table regardless
-of alphabet/data size, found and fixed earlier this session via an
+of alphabet/data size, found and fixed earlier via an
 alphabet-adaptive switch) — real, strong reason to believe the same fix
 pattern applies here, though NOT attempted or confirmed this pass (analysis
 only, per instruction).
@@ -63,7 +65,7 @@ only, per instruction).
 ## 2. PgRC2's real per-stream breakdown (from ITS OWN stderr, same file)
 
 Extracted directly from a live compress run — not estimated, not the paper's
-numbers, this session's own measurement on the identical E. coli file.
+numbers, measured on the identical E. coli file.
 
 | PgRC2 stream | Real reported cost | Time |
 |---|---|---|
@@ -87,7 +89,7 @@ delta-coded ROUND 2 attempt (see section 3), which was tried, found to net
 zero elsewhere, and REVERTED. The actual, current, committed L4 is
 2,796,144 B (the direct per-unique-id, non-delta-coded version actually
 shipped). **Real, corrected comparison: L4+L8 = 3,686,476 B, which is
-WORSE than PgRC2's 2,915,270 B — we LOSE on the position/order axis on
+WORSE than PgRC2's 2,915,270 B — G_CAPSUL is larger on the position/order axis on
 E. coli too, not just on P. aeruginosa.** We still win E. coli overall
 (5,784,514 vs 6,144,327) only because sequence+refs (L1+L3=1,346,506) beat
 PgRC2's equivalent enough to cover this gap. This was a real error in this
@@ -98,16 +100,16 @@ period=1..50" lines in PgRC2's log don't map cleanly to a single named
 stream in the stderr output — they're almost certainly per-read-length-group
 division/quality-adjacent bookkeeping (their tool interleaves quality-based
 read division logic even in sequence-only SE mode, per `prepareChainData()`
-read earlier this session), but confirming exactly what they encode would
+read earlier), but confirming exactly what they encode would
 need reading `runQualityBasedDivision()`'s output-writing code, not done
 this pass — flagged, not guessed at.
 
-## 3. Direct line-by-line code correspondence (both sides read this session)
+## 3. Direct line-by-line code correspondence (both sides read in full)
 
 | Our code | PgRC2 equivalent | What's the same | What's different |
 |---|---|---|---|
 | `100_locked_seqorder.cpp:1043-1074` (position/strand/length dump) | `SeparatedPseudoGenomePersistence.cpp:446` (`compressReadsPgPositions`, `singleFileMode` branch) | Both store position per read, absolute (not delta, in our current reverted version) | We index once per UNIQUE read + correlate via `orig2uid`; they store once per ORIGINAL read directly (no unique-read dedup for position at all) |
-| `100_locked_seqorder.cpp:1377-1405` (trim-on-overlap match application) | `SimplePgMatcher.cpp:99-131` | Structurally identical algorithm now (sort by dst, trim overlap, mark-based literal emission) — confirmed by code, not just claimed, this session | Their marks are literal characters embedded in a string; ours are implicit via sorted triples + a separately-dumped literal.txt |
+| `100_locked_seqorder.cpp:1377-1405` (trim-on-overlap match application) | `SimplePgMatcher.cpp:99-131` | Structurally identical algorithm now (sort by dst, trim overlap, mark-based literal emission) — confirmed by reading both sources | Their marks are literal characters embedded in a string; ours are implicit via sorted triples + a separately-dumped literal.txt |
 | `37_ref_coder.cpp` (range-coded src position) | Their sequence-mapping offset streams (LZMA, `Good/Bad sequence mapping - offsets`) | Both code a src/offset value per match | We use a range coder bounded by `log2(pg_len)`; they use generic LZMA over raw offsets — ours is a tighter, purpose-built floor (confirmed: `bounded floor 137,058 B` vs `this coder 137,065 B`, 99.995% of floor) |
 | `50_mismatch_coder_real.cpp` (mmcoder) | `Mismatched symbols codes` (PPMd ord=5) | Both code substituted bases at mismatch positions | Untested this pass whether our context (ref+pos+prev-base) beats their PPMd-5 pound-for-pound — real open comparison, not done here |
 
@@ -129,12 +131,12 @@ bits/base, P. aeruginosa is not a real outlier: 1.9425 vs E. coli's 1.9200).
 The coder itself is not the differentiator.
 
 **Re-tested P. aeruginosa at proper coverage** (the same coverage-mismatch
-fix that flipped it to a win vs SPRING/Genozip earlier this session,
+fix that flipped it to a win vs SPRING/Genozip earlier,
 `pa_test_big.fq`, 1.4M reads) — **real, important finding: this does NOT
 flip it against PgRC2.** Still loses, slightly worse (-6.1% vs -5.9% on the
 small slice). Coverage-mismatch was a real bug for the SPRING/Genozip
 comparison specifically; it does not explain or fix the PgRC2 comparison —
-two genuinely different mechanisms, confirmed by testing rather than
+two different mechanisms, confirmed by testing rather than
 assumed to be the same bug.
 
 At the larger, coverage-matched scale, P. aeruginosa's layer-fraction
@@ -191,7 +193,7 @@ mixed result, not skewed to the small/medium regime
 
 Per direct instruction not to conclude generalization from only 6
 small/medium datasets, tested the full byte-identical pipeline (both
-today's fixes: adaptive seqpar RAM, fixed-width position encoding) at real
+the later fixes: adaptive seqpar RAM, fixed-width position encoding) at real
 large scale for the first time.
 
 | | Ours | PgRC2 | Result |
@@ -201,7 +203,7 @@ large scale for the first time.
 | RAM | 1,300,516 KB | 641,316 KB | **LOSE 2.0x** |
 | Byte-identical | ✓ (0-diff, all 4,000,000 reads) | — | Correctness holds at scale |
 
-**Real, honest finding: the RAM win does NOT generalize to large scale.**
+**Finding: the RAM win does NOT generalize to large scale.**
 Confirmed the predicted mechanism directly: `mmbitsFor(n)` caps at
 `MMBITS_MAX=24` (the ORIGINAL fixed ceiling), so once a chunk's natural
 data volume exceeds what a 2^24-slot table would size for anyway, the
@@ -210,13 +212,13 @@ small-file fix was built to eliminate. The RAM fix is real and correctly
 scoped to the regime it was built for (small/medium chunks); it was never
 tested at this scale before, and claiming a blanket "we now beat PgRC2 on
 RAM" from the small-file result alone would have been exactly the kind of
-overclaim this project has repeatedly corrected itself for this session.
+overclaim that this project has repeatedly corrected.
 
 Size DOES generalize (3.7% win, real, holds at scale) — the fixed-width
 position encoding and overall architecture advantage is not an artifact of
 small test files. Speed remains a real, unaddressed, worsening-at-scale gap
 (1.56x here vs sub-2x on smaller files) — consistent with the never-fully-
-resolved round1/round2 scan-blowup problem found earlier this session on
+resolved round1/round2 scan-blowup problem found earlier on
 T. cacao (a much larger, more repeat-dense genome than C. elegans).
 
 **Investigated further, real correction to the above hypothesis:** measured
@@ -239,8 +241,7 @@ the old `allrefs` is only freed via `swap()` at the very end, after
 this transient double-holding is the likely driver.
 
 **Two real hypotheses tried, both real fixes kept (harmless, byte-identical
-verified), NEITHER solved the actual problem — reported honestly, not
-spun:**
+verified), NEITHER solved the actual problem:**
 
 1. **In-place compaction of `allrefs`/`cleanRefs`** (eliminate the double-
    holding of raw pre-trim and post-trim match lists). Result: RAM
@@ -300,7 +301,7 @@ were never the problem), C. elegans byte-identical + real reduction,
 P. aeruginosa regression-checked (2,016,648 B total, unchanged; RAM
 slightly lower, no regression).
 
-**Real, final, honest 3-axis result for C. elegans after this fix:**
+**Final 3-axis result for C. elegans after this fix:**
 
 | | Ours (before) | Ours (after) | PgRC2 | Final result |
 |---|---|---|---|---|
@@ -326,8 +327,8 @@ switch — pg size or read count, not per-organism), reduce thread count in
 the RAM-heavy match-finding phase, trading some of the already-lost speed
 margin for further RAM reduction, while leaving small/medium files on full
 parallelism where both RAM and speed already win. Not implemented this
-pass — a real, distinct next direction, not required to reach the honest,
-partial win already banked here.
+pass — a real, distinct next direction, not required to reach the
+partial win already obtained here.
 
 ## 4. What this pass did NOT do (explicitly, per instruction — analysis only)
 
@@ -373,7 +374,7 @@ our combined pos_abs+orig2uid (now 1,491,080 B combined, down from
 ## 3e. Novel-kingdom expansion — real results, 2026-08-31
 
 Real PgRC2 comparisons attempted on the 7 new accessions from
-the locked-dataset list's Extended Set. Honest status, not spun:
+the locked-dataset list's Extended Set. Status:
 
 | Dataset | Our total | PgRC2 (real, `-o`) | Result | Notes |
 |---|---|---|---|---|
@@ -420,8 +421,8 @@ remains open.
 ## 3f. MAJOR CORRECTION (2026-08-31): the archaea "losses" were a
 ## measurement error. Real result is 5/6 WINS, biggest wins on archaea.
 
-**What I got wrong.** Sections 3e and earlier compared our COMPLETE layer
-total against a hand-summed SUBSET of PgRC2's streams. I built their total
+**Error in the earlier sections.** Sections 3e and earlier compared our COMPLETE layer
+total against a hand-summed SUBSET of PgRC2's streams. Their total was built
 by reading the tail of their stderr log (the last "collective compression of
 streams" block: pg sequence + self-match offsets + order) and **omitted their
 entire mismatch machinery**, which sits in an earlier block:
@@ -476,7 +477,7 @@ the set is P. aeruginosa at −3.0%.
 ### What survives
 
 - The orig2uid delta-coding fix (real, -34.6% to -90.8% on that layer,
-  byte-identical verified) -- still a genuine improvement.
+  byte-identical verified) -- still a improvement.
 - `103_no_predup.cpp` -- helps H. salinarum (+4.2%) and E. coli, hurts
   slightly elsewhere; keep both binaries and take the min per file until the
   rule for which wins is understood.
@@ -497,7 +498,7 @@ arguments (`ref.bin obs.bin`), and the locked sequence-order script only counted
 LOCKED_SEQORDER_TOTAL** despite being mandatory for decode.
 
 This is the same omitted-mandatory-stream error caught on PgRC2's side in 3f.
-I checked theirs and did not check ours. Fixed in the locked sequence-order script
+Their side was checked and ours was not. Fixed in the locked sequence-order script
 (L5b/L5c).
 
 **Corrected real-full-file results (vs PgRC2's real archive):**
@@ -568,13 +569,13 @@ files -- not subsamples.
 
 **1 win / 4 losses.** The fix is real and helps everywhere (−16.0% on E. coli,
 −8.1% S. aureus, −6.1% P. falciparum, −0.8% L. major, −0.3% P. aeruginosa)
-but only flips E. coli. This is the honest, fully-accounted, fully-verified
+but only flips E. coli. This is the fully accounted, fully verified
 baseline: **we currently lose to PgRC2 on 4 of 5 real datasets.**
 
 Every headline in 3f (+15.7% to +24.5%, "5/6 wins") is withdrawn. Those
 numbers omitted mandatory streams on our side.
 
-**Where the remaining gap is.** MAXMAP helps least exactly where we lose most
+**Where the remaining gap is.** MAXMAP helps least exactly where G_CAPSUL is furthest behind
 (P. aeruginosa −0.3%, L. major −0.8%), so the residual is not the mismatch
 ceiling. Candidates, in order of measured promise, none yet tested:
 1. **Mismatch position coding.** Ours is flat absolute positions + xz. PgRC2
@@ -733,7 +734,7 @@ so pigeonhole guarantees finding placements up to 3 mismatches while we accept
 | 4 | 22 | 421,474 | 89,534 | 9,481,884 |
 
 5.5x more seeds moves mapping by 61 reads and the total by 0.01%. The 89,595
-appended reads genuinely have no acceptable placement -- we are not failing to
+appended reads have no acceptable placement -- we are not failing to
 FIND one.
 
 **So the remaining gap is match QUALITY, not sensitivity.** At MAXMAP=50 we
@@ -747,7 +748,7 @@ work; nothing smaller has moved this number.
 
 Comparing at our own operating point was misleading -- the pg/mismatch
 trade-off means the two tools sit at different points on the same curve. The
-honest comparison is at EQUAL pg size. Our MAXMAP=40 point has L1=2,482,224
+like-for-like comparison is at EQUAL pg size. Our MAXMAP=40 point has L1=2,482,224
 against PgRC2's 2,485,786, so the mismatch streams are directly comparable:
 
 | stream | ours (MAXMAP=40) | PgRC2 | |
@@ -797,7 +798,7 @@ Real P. aeruginosa: 298,188 -> 266,536 (**-10.6%**).
 
 ### Full validation, all 5 real locked files, all BYTE_IDENTICAL
 
-| Dataset | session start | +stage105 | +106 transforms | PgRC2 | margin |
+| Dataset | starting point | +stage105 | +106 transforms | PgRC2 | margin |
 |---|---|---|---|---|---|
 | E. coli | 9,905,845 | 8,297,531 | **8,228,651** | 8,864,420 | **+7.2%** |
 | P. aeruginosa | 9,908,025 | 9,482,924 | **9,366,624** | 9,043,181 | −3.6% |
@@ -805,7 +806,7 @@ Real P. aeruginosa: 298,188 -> 266,536 (**-10.6%**).
 | P. falciparum | 18,810,808 | 17,634,117 | **17,494,397** | 17,219,695 | −1.6% |
 | L. major | 30,612,464 | 30,185,565 | **29,946,905** | 28,272,652 | −5.9% |
 
-**Total reduction this session: −6.7%.** Aggregate vs PgRC2 improved from
+**Total reduction: −6.7%.** Aggregate vs PgRC2 improved from
 −3.4% to **−2.5%**. Still 1 win / 4 losses, but every dataset improved and
 none regressed at any step.
 
@@ -825,7 +826,7 @@ per-stream/per-bucket coder selection (0.49% / 0.2%).
 Closing it means replacing the pigeonhole mapper with a MEM-anchored one
 (their copMEM, seed 38). That is the only remaining lever of any size.
 
-## 3m. Two of my own conclusions corrected by measurement
+## 3m. Two earlier conclusions corrected by measurement
 
 **(a) "The remaining gap is match quality" -- WRONG.** That claim compared our
 mean-per-PLACED-read (4.70) against PgRC2's mean-per-ALL-reads (1.39). Apples
@@ -868,7 +869,7 @@ switch is forbidden by the standing algorithmic-first rule.
 
 ### Final state, all BYTE_IDENTICAL on real full files
 
-| Dataset | session start | final | PgRC2 | margin |
+| Dataset | starting point | final | PgRC2 | margin |
 |---|---|---|---|---|
 | E. coli | 9,905,845 | 8,228,651 | 8,864,420 | **+7.2%** |
 | P. aeruginosa | 9,908,025 | 9,366,624 | 9,043,181 | −3.6% |
@@ -876,7 +877,7 @@ switch is forbidden by the standing algorithmic-first rule.
 | P. falciparum | 18,810,808 | 17,494,397 | 17,219,695 | −1.6% |
 | L. major | 30,612,464 | 29,946,905 | 28,272,652 | −5.9% |
 
-Session total **−6.7%**; aggregate vs PgRC2 **−2.5%**, 1 win / 4 losses.
+Total **−6.7%**; aggregate vs PgRC2 **−2.5%**, 1 win / 4 losses.
 
 ## 3n. Adaptive dedup (keyed on measured duplication rate)
 
@@ -914,7 +915,7 @@ economics enough to matter.)
 
 ### FINAL, all BYTE_IDENTICAL on real full locked files
 
-| Dataset | session start | final | PgRC2 | margin |
+| Dataset | starting point | final | PgRC2 | margin |
 |---|---|---|---|---|
 | E. coli | 9,905,845 | **8,228,651** | 8,864,420 | **+7.2%** |
 | P. aeruginosa | 9,908,025 | **9,320,707** | 9,043,181 | −3.1% |
@@ -922,7 +923,7 @@ economics enough to matter.)
 | P. falciparum | 18,810,808 | **17,494,397** | 17,219,695 | −1.6% |
 | L. major | 30,612,464 | **29,827,649** | 28,272,652 | −5.5% |
 
-**Session total −6.9%; aggregate vs PgRC2 −2.3%** (from −11.7%..−12.9% per
+**Total −6.9%; aggregate vs PgRC2 −2.3%** (from −11.7%..−12.9% per
 file when the accounting bug was first fixed). 1 win / 4 losses.
 
 Remaining losses are only two streams: pg sequence (+407,701) and self-match
@@ -964,7 +965,7 @@ orig2uid, n_indices), keeping whichever of tuned/default is smaller.
 
 ### FINAL RESULT — all BYTE_IDENTICAL on real full locked files
 
-| Dataset | session start | final | PgRC2 | margin |
+| Dataset | starting point | final | PgRC2 | margin |
 |---|---|---|---|---|
 | E. coli | 9,905,845 | **7,995,703** | 8,864,420 | **+9.8%** |
 | P. aeruginosa | 9,908,025 | **9,260,575** | 9,043,181 | −2.4% |
@@ -972,7 +973,7 @@ orig2uid, n_indices), keeping whichever of tuned/default is smaller.
 | P. falciparum | 18,810,808 | **16,752,837** | 17,219,695 | **+2.7%** |
 | L. major | 30,612,464 | **28,526,841** | 28,272,652 | −0.9% |
 
-**Session reduction −10.3%. Aggregate vs PgRC2 +1.46% — we now WIN overall,
+**Reduction −10.3%. Aggregate vs PgRC2 +1.46% — we now WIN overall,
 3 of 5 datasets, all byte-identical.**
 
 The single-stream test predicted −1.2%; the real effect was −2.8% to −4.4% per
@@ -1001,7 +1002,7 @@ every value's byte 0, then every byte 1, etc. Real P. aeruginosa pos_abs
 | PgRC2 | 4,964,368 |
 
 Plane 0 and 1 code to ~1 byte per value -- the low bits of a position array
-are genuinely random, so both tools sit near the entropy floor here
+are random, so both tools sit near the entropy floor here
 (uniform over a 21 Mb pg is 24.3 bits = 3.04 B/position). Only ~19 KB of
 headroom remains on this stream; it is effectively closed.
 
@@ -1011,7 +1012,7 @@ smallest per stream.
 
 ### FINAL RESULT — all BYTE_IDENTICAL, real full locked files
 
-| Dataset | session start | final | PgRC2 | margin |
+| Dataset | starting point | final | PgRC2 | margin |
 |---|---|---|---|---|
 | E. coli | 9,905,845 | **7,981,962** | 8,864,420 | **+10.0%** |
 | P. aeruginosa | 9,908,025 | **9,214,602** | 9,043,181 | −1.9% |
@@ -1019,7 +1020,7 @@ smallest per stream.
 | P. falciparum | 18,810,808 | **16,752,352** | 17,219,695 | **+2.7%** |
 | L. major | 30,612,464 | **28,523,424** | 28,272,652 | −0.9% |
 
-**Session −10.4%. Aggregate vs PgRC2 +1.55%, winning 3 of 5.**
+**Reduction −10.4%. Aggregate vs PgRC2 +1.55%, winning 3 of 5.**
 
 Full list of what actually moved the number, largest first:
 1. LZMA/byte-plane coding of uint32 streams (~4% per dataset)
@@ -1045,8 +1046,8 @@ xz/bzip2/zstd (0.49% / 0.2%).
 | mm_pos | 1,121,860 | 1,774,295 | we win 652,435 |
 | mm_sym | 364,885 | 917,584 | we win 552,699 |
 | mm_cnt | ~355k+ | 745,872 | we win |
-| pg sequence | 9,379,560 | 8,509,123 | **we lose 870,437** |
-| self-match refs | 1,311,720 | 322,985 | **we lose 988,735** |
+| pg sequence | 9,379,560 | 8,509,123 | **+870,437 for G_CAPSUL** |
+| self-match refs | 1,311,720 | 322,985 | **+988,735 for G_CAPSUL** |
 
 The refs "loss" is not inefficiency: we find **412,595** matches removing 42 M
 bases (worth ~9.8 MB of literal at 0.234 B/base) for 1.31 MB of reference
@@ -1063,7 +1064,7 @@ the real stream, all WORSE:
 | (dst−src) delta + xz | 1,442,328 |
 | (dst−src) delta + byte-planes | 1,332,486 |
 
-Delta-against-destination losing tells us the matches are genuinely
+Delta-against-destination losing tells us the matches are
 long-range, which is what a pseudogenome should produce. No coding gain left.
 
 **Conclusion: every stream we code is now at or better than PgRC2's, or
@@ -1139,7 +1140,7 @@ across all five, all BYTE_IDENTICAL:
 | L. major | 27,765,787 (+1.79%) | **27,641,405 (+2.23%)** | 28,272,652 |
 | **aggregate** | **+2.89%, 4/5 wins** | +2.57%, **5/5 wins** | |
 
-**Real trade, stated rather than cherry-picked.** MAXMAP=24 wins every
+**Trade-off.** MAXMAP=24 wins every
 dataset but costs 0.32 points of aggregate, almost all of it P. falciparum
 (+4.48% -> +1.90%). Minimax regret strongly favours 12 (worst case 0.47%
 versus 24's 2.70%, again P. falciparum).
@@ -1205,7 +1206,7 @@ range, byte-planes×2} with a 1-byte method id, on every stream; and
 
 ### FINAL — all BYTE_IDENTICAL on real full locked files
 
-| Dataset | session start | before real coders | **final** | PgRC2 | margin |
+| Dataset | starting point | before real coders | **final** | PgRC2 | margin |
 |---|---|---|---|---|---|
 | E. coli | 9,905,845 | 7,974,367 | **7,960,702** | 8,864,420 | **+10.19%** |
 | P. aeruginosa | 9,908,025 | 9,083,594 | **9,050,430** | 9,043,181 | −0.08% |
@@ -1213,7 +1214,7 @@ range, byte-planes×2} with a 1-byte method id, on every stream; and
 | P. falciparum | 18,810,808 | 16,448,646 | **16,400,369** | 17,219,695 | **+4.76%** |
 | L. major | 30,612,464 | 27,765,787 | **27,701,753** | 28,272,652 | **+2.02%** |
 
-Real coders gained a further −0.26%. **Session reduction −11.8%; aggregate vs
+Real coders gained a further −0.26%. **Reduction −11.8%; aggregate vs
 PgRC2 +3.14%, 4 of 5 wins.** P. aeruginosa is now −0.08% — a statistical tie.
 
 Per-stream highlights on P. aeruginosa: pos_strand 74,272 -> 60,094 (−19%),
@@ -1357,8 +1358,8 @@ halo purely because halo finds 169,968 matches against sulfo's 79,149. Those
 matches pay for themselves -- they remove 12.4 MB of sequence for 472 KB.
 
 **Not yet identified:** why literal and pos_abs lose on both files. Those are
-the two layers where PgRC2 is genuinely ahead of us regardless of dataset, and
-they are the honest remaining target.
+the two layers where PgRC2 is ahead of us regardless of dataset, and
+they are the remaining target.
 
 ## 3w. Completing the identification: literal and pos_abs are ONE root cause
 
@@ -1392,7 +1393,7 @@ bases than theirs.
 
 We already code positions *below* the uniform-random floor for that span --
 there is no meaningful coder gain available. The cost is `N x log2(pg_span)`,
-and we lose only because our span is larger:
+and G_CAPSUL is larger only because its span is larger:
 
 | | our span | their span | ratio | extra bits/read | extra cost |
 |---|---|---|---|---|---|
@@ -1489,7 +1490,7 @@ The single unambiguous, dataset-independent finding is therefore **surviving
 pg volume**, not span. §3w overstated the span ratio and generalised a
 sulfo-only effect to both files. Corrected here rather than left standing.
 
-## 3y. File-wise, layer-wise, at each file's CHOSEN config — where we lose
+## 3y. File-wise, layer-wise, at each file's CHOSEN config — where G_CAPSUL is larger
 
 Measured at the config the adaptive driver actually selects for each file, so
 this describes the shipped behaviour, not a sweep point.

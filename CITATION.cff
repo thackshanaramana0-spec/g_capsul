@@ -1,12 +1,12 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
 type: software
-title: "G_CAPSUL / CAPSULE: a retained assembly for unified lossless FASTQ compression, reference-free variant calling, and reference-free locus retrieval"
+title: "G_CAPSUL: a unified pseudogenome for lossless FASTQ compression, reference-free variant calling, and archive-native addressability"
 authors:
   - family-names: "Balashanmugam"
     given-names: "Thackshanaramana"
-version: 1.1.1
-date-released: "2026-09-26"
+version: 1.2.0
+date-released: "2026-11-22"
 url: "https://github.com/thackshanaramana0-spec/g_capsul"
 repository-code: "https://github.com/thackshanaramana0-spec/g_capsul"
 license: Apache-2.0

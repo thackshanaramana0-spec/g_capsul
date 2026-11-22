@@ -1,18 +1,6 @@
----
-Date: 2026-09-19
-Title: T3.3 — Coordinate-Range Retrieval, All 19 Datasets
-Purpose: Complete, verified record of what T3.3 measures, why it has no
-  baseline column, and its precise code-level relationship to T3.4 (they
-  are the same function).
-When to refer to this file: Writing/checking T3.3's table or text;
-  explaining why no competitor comparison exists for this table; explaining
-  the T3.3/T3.4 code relationship when someone asks "why does T3.4 need an
-  index but T3.3 doesn't."
-Keywords: T3.3, range query, coordinate query, genocat, no competitor,
-  19 datasets, rr vector, sidecar, qidx
----
-
 # T3.3 — Coordinate-Range Query
+
+> Record of what T3.3 measures, why it has no baseline column, and its code-level relationship to T3.4 (they are the same function).
 
 ## What it measures
 
@@ -48,7 +36,7 @@ Exact code path and how it diverges from T3.4: `code_mapping_claim3.md`.
 
 The published note in `results/claim3/claim3_T3.1_T3.2_T3.3.csv` says:
 *"no competitor exists for coordinate-range retrieval."* The precise reason,
-worth stating carefully in the paper (this session verified it against real
+worth stating carefully in the paper (checked against the
 literature, see below): it is **not** that no other tool does range
 queries — CRAM/BAM indexed retrieval and Genozip's `genocat` both do range
 retrieval by coordinate. The reason is that **coordinates only mean
@@ -57,10 +45,10 @@ coordinate system (pseudogenome position) is internal to itself — nobody
 else's coordinates refer to the same numbering. Comparing "our range query
 time" to "their range query time" would not be comparing the same operation
 on the same input; it would be comparing two operations that happen to
-share a name. This asymmetry is a real, documented finding in bioinformatics
+share a name. This asymmetry is a documented finding in bioinformatics
 literature (assembly evaluation without a shared reference is explicitly
 called "ambiguous" in the field — see PAQman/Merqury discussion cited in
-this session's research), not an excuse invented for this paper.
+the literature check), and is not specific to this paper.
 
 ## Results — locked, all 19 datasets, timing only
 

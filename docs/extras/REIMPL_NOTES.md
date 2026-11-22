@@ -1,5 +1,7 @@
 # Independent reimplementation of PgRC2's assembler
 
+> Engineering log from the development of the encoder. It records measurements and rejected approaches in the order they were made, and some figures were superseded by later work. The current results are in `results/` and in the claim folders under `docs/`.
+
 Written from the algorithm, not copied. PgRC2's source was read closely to
 understand what each stage does — and reading it is what found several of the
 results below — but every line here is our own. `method_c/` is the unmodified
@@ -398,7 +400,7 @@ that the packed comparators agree with the memcmp they replaced.
 **The 0.5 s is real and worth naming.** `rcmp` does ~5 shifted word loads where
 `memcmp` did one SIMD-friendly call over contiguous bytes, and the sweep runs it
 20M times. Trading 138 MB for 0.5 s is the right side of that trade here, but it
-is a trade, not a free win.
+is a trade-off, with a cost.
 
 ### Three axes after stage 21
 
@@ -420,7 +422,7 @@ stride 22:
 or at seed 16 / stride 12 if size matters more than memory: **12,899,224
 (+1.61%)**, 5.54 s, 264 MB.
 
-## copMEM's actual trick, and what it buys
+## copMEM's sampling bound, and what it buys
 
 Read `CopMEMMatcher::calcCoprimes` (`matching/copmem/CopMEMMatcher.cpp:111`)
 and `initParams` (:69):
@@ -530,7 +532,7 @@ range coder. Their single-end path has no permutation coder to copy.
 
 **501 bytes off the floor, and the decoder was run**: it rebuilds the
 permutation from the coded stream and every element is compared before any size
-is reported. The input is also checked to be a genuine permutation first, since
+is reported. The input is also checked to be a permutation first, since
 the Lehmer mapping is meaningless otherwise.
 
 For scale: this saves 542,791 B, which is more than twice the entire remaining
@@ -625,7 +627,7 @@ structure. A false positive costs one wasted lookup and cannot change the result
 
 Output byte-identical throughout: 12,926,925 literal, 252,865 mapped, 12,065
 survivors. Still behind, so speed does not flip -- but the residual is now 0.9 s,
-and the honest read is that most of it went to a cache effect rather than to
+and the reading is that most of it went to a cache effect rather than to
 anything algorithmic.
 
 **Memory moved the wrong way and it is not free.** Peak RSS is 238 MB against
@@ -943,7 +945,7 @@ stream being counted and is superseded by this table.
 
 ## Stage 33 — our matches were not maximal
 
-Stage 32 left the reference stream +162,212 B behind and I attributed the rest to
+Stage 32 left the reference stream +162,212 B behind and the rest was attributed to
 assembly quality. Both readings were wrong, and one number said so: our matches
 averaged **179 bases against copMEM's 250**.
 
@@ -1084,7 +1086,7 @@ literal-coded + references = 3,332,257 B:
 
     bases 23,233,953   coded 5,369,074 B   1.8487 bits/base   round trip VERIFIED
 
-**Refuted, and not narrowly.** The per-base rate is genuinely better than our
+**Refuted, and not narrowly.** The per-base rate is better than our
 1.9174 -- and lands on DNA-COMPACT's published 1.838 for yeast, so the coder is
 now at literature-competitive rates. But there are 1.86x more bases to code, and
 5,369,074 against 3,332,257 is not close. **MEM removal is strongly justified and
@@ -1384,12 +1386,12 @@ and the third was cache traffic on a statistics counter.
 
 **What this does and does not prove.** PgRC2's 3.43 s is its whole binary:
 assemble *and* entropy-code the archive. The 2.92 s above is the assembler alone.
-Timing one against the other flatters us, and for most of this session it hid the
+Timing one against the other flatters us, and for most of the work it hid the
 coding cost entirely. Measured: the CM sequence coder is **19.01 s** for
 2,979,683 B, where 2-bit + `xz -6 -T12` is **0.43 s** for 3,057,532 B -- 77,865
 bytes bought for 18.6 seconds. End to end, with the coders run concurrently, the
 speed configuration is **3.34 s against their 3.43 s** and the size configuration
-is 21.9 s against 3.43 s. So the honest reading is: size won decisively either
+is 21.9 s against 3.43 s. So the reading is: size won decisively either
 way (7.2% ahead even with the fast coder), memory won either way, and speed at
 **parity** -- a 3% margin is inside the spread of these measurements. Speed
 stopped being a deficit; it did not become a win. The 2.92 s figure is a stage
@@ -1398,7 +1400,7 @@ result and is only ever quoted as one.
 **Measurement protocol.** Both tools were re-measured back to back on an idle
 machine (`load average 0.11`), minimum of three runs each, PgRC2 as
 `method_c/build/PgRC -i yeast_sub.fq -t 12` under `/usr/bin/time -v`. Earlier
-figures in this file (~4.7 s against 3.70 s) were taken while a second session
+figures in this file (~4.7 s against 3.70 s) were taken while a second job
 held the machine; both sides moved when it was quiet, which is why the pair, not
 either number alone, is what is recorded. `bench.sh`'s "sum of mins" is
 optimistic because the minima do not co-occur in one run -- for this pipeline the
@@ -1437,14 +1439,14 @@ its originals redirected to the container at offset 0.
 dedup, so at constant length one read contains another only when they are equal
 and the pass degenerates to the existing behaviour. No three-axis result moves.
 
-The remaining variable-length gap is not bookkeeping -- trimming genuinely
+The remaining variable-length gap is not bookkeeping -- trimming
 destroys 3' overlap and nothing recovers that. Tier 2 (interior containment, a
 read sitting inside another rather than at its start) is still unimplemented and
 is the next lever if variable-length quality matters.
 
 ## Stages 40-41 — three targeted memory cuts measured zero, and then 45 MB
 
-Peak RSS sat at 233 MB against PgRC2's 232 MB all session, and three separate
+Peak RSS sat at 233 MB against PgRC2's 232 MB throughout, and three separate
 reductions moved it by nothing at all:
 
 | change | what it removed | peak RSS effect |
@@ -1493,7 +1495,7 @@ freed before mapping. Both stay resident. One `malloc_trim(0)` after the free:
 | peak RSS | **189 MB** | 232 MB | **0.81x -- 19% ahead** |
 
 The lesson is the one this file keeps paying for: three plausible fixes were
-built and measured before the *fourth* question -- "is the thing I am shrinking
+built and measured before the *fourth* question -- "is the thing being shrunk
 even at the peak?" -- got asked. The answer was in this repository's own source
 the whole time.
 
@@ -1501,7 +1503,7 @@ the whole time.
 
 ### bench.sh
 
-Wall clock is unusable here -- another session runs concurrently and the same
+Wall clock is unusable here -- another job runs concurrently and the same
 binary measured 1.32 s and 1.91 s for the same stage. `bench.sh <reps> <bin>
 <args>` fixes what can be fixed:
 
@@ -1676,8 +1678,8 @@ Neither file is kept. Both were verified byte-identical (`PG_LITERAL 12,506,313`
 
 The first A/B run gave s36 4.56 s and s38 5.29 s, which looked like a clean
 refutation. It was not measurable at all: `ps` showed a concurrent `arcs` job at
-256% CPU from another session, violating BTR_NOTES.md rule 3 ("never run two timed
-benchmark jobs concurrently"). The same baseline binary then measured 4.56 s and
+256% CPU from another job, violating the benchmark rule that two timed jobs never
+run concurrently. The same baseline binary then measured 4.56 s and
 6.17 s, and round 1 read 1.32 s in one run and 1.91 s in another.
 
 Re-run on an idle machine, interleaved, the timings still overlap:
@@ -1776,7 +1778,7 @@ roles -- the rolling seed width and round 1's classification floor -- in the
 same way stage 17 found acceptance conflated with seed geometry. Splitting them
 (`R1MINOV` separate from `SEEDW`) reproduces the old numbers exactly: R1MINOV=32
 with seed 16 gives main 11,384,786, survivors 14,972, literal 12,952,411 --
-identical to SW=32. The split is a genuine no-op.
+identical to SW=32. The split is a no-op.
 
 The reason is conservation, and it is obvious in hindsight: **the reads a
 stricter classifier excludes from the main pg are exactly the reads that become
@@ -1794,7 +1796,7 @@ So the remaining 1.83% is not reachable by tuning. Where it actually is:
 That is mean overlap, measured earlier at 119.9 against their 133.7 (ideal
 tiling at this coverage ~136). Closing it needs a better overlap search -- more
 candidates considered per read, or a non-greedy layout -- not another parameter.
-Real work, and honestly assessed as the only remaining lever on size.
+Real work, and assessed as the only remaining lever on size.
 
 ### Bug found while building it
 
@@ -1834,7 +1836,7 @@ five-stream archive total is 6,395,016 B against a comparable 7,035,682 B --
 9.11% ahead, at wall-clock parity-to-slight-edge depending on configuration
 (see BEST_METHOD_C_REIMPLEMENTATION.md for the current fast/size tradeoff).
 
-What remains genuinely unbuilt is not a PgRC2 stage at all: this progression
+What remains unbuilt is not a PgRC2 stage at all: this progression
 has never assembled a real container format (no header, no read-name stream,
 no quality-score stream, no single decoder that runs all five coders in
 sequence) -- it measures each stream's achievable size, verified round-trip
@@ -1849,7 +1851,7 @@ into main pg + remainder:
 |---|---------|-----------|-------|
 | PgRC2 | 21.10M | 1.50M | 22.60M |
 | ours (15) | 20.15M | 7.34M | 27.49M |
-| delta | **-0.95M (we win)** | **+5.84M (we lose)** | +4.89M |
+| delta | **-0.95M (G_CAPSUL smaller)** | **+5.84M (G_CAPSUL larger)** | +4.89M |
 
 The remainder gap (5.84M) is LARGER than the total gap (4.89M): 100% of the
 deficit is in the survivor tail, and stage 5 is the survivor tail. Nothing
@@ -2085,6 +2087,6 @@ work, where tile-change conditioning was also refuted (155/572 B against an
 **Conclusion: vendor fqzcomp, feed it our read_lengths (turn off PFLAG_DO_LEN)
 and pos_strand RC flags (GFLAG_DO_REV), and sweep its 4 strategies** (its
 default leaves 1.5-3.0% against its own best on 3 of 8 datasets). Keep stage 92
-in-tree as our own implementation and as the honest comparison point.
+in-tree as our own implementation and as the comparison point.
 Reimplementing would rebuild a model we already implement 1-4% worse, to
 exploit limitations that cost nothing at our data volumes.

@@ -6,7 +6,7 @@
 # on a ~75k-read chr20 window, while every Claim 1 number is full-scale. That
 # asymmetry is the largest single exposure in the paper: a reviewer can ask
 # "do the window numbers hold at 12.6M reads?" and until this script runs, the
-# honest answer is "unknown". A prior attempt to run full scale was killed at
+# answer is unknown. A prior attempt to run full scale was killed at
 # 78 GB RSS; the caller RAM work (ridx off by default, chunked k-mer counting,
 # contig-batched pileup, flat sorted kidx) is what makes it feasible now.
 #

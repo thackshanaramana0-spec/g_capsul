@@ -133,9 +133,9 @@ jobs:
           docker run --rm -v /tmp/docker_ci:/data \
             g_capsul:ci capsule_decode /data/out.capsule /data/outdir /data/outdir/reads_out.fq
 
-      - name: Verify byte-identical (same comparison scripts/benchmark_scripts/benchmark_1_run.sh's losscmp uses)
+      - name: Verify lossless (same sorted comparison scripts/benchmark_scripts/benchmark_1_run.sh's losscmp uses)
         run: |
           cd /tmp/docker_ci
           awk 'NR%4==1{n=substr($0,2)} NR%4==2{s=$0} NR%4==0{print n"\t"s"\t"$0}' reads.fq | sort > _a
           paste outdir/reads_out.fq.names outdir/reads_out.fq outdir/reads_out.fq.qual | sort > _b
-          cmp -s _a _b && echo "LOSSLESS -- confirmed byte-identical" || { echo "LOSSY"; diff _a _b | head -10; exit 1; }
+          cmp -s _a _b && echo "LOSSLESS -- sorted records identical" || { echo "LOSSY"; diff _a _b | head -10; exit 1; }

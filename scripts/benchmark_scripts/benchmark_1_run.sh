@@ -84,7 +84,7 @@ parse_time_v(){
     # gone into the published T3 table as a single bogus figure. The outer
     # timer finishes last, so the last block is the one that timed the whole
     # invocation. Peak RAM takes the max, not the last, since the heaviest
-    # child is the honest answer for a pipeline.
+    # child is the representative figure for a pipeline.
     local f="$1" wall hwm
     wall=$(grep "Elapsed (wall clock)" "$f" 2>/dev/null | tail -1 | awk '{n=split($NF,a,":");
         if(n==3) printf "%.2f",a[1]*3600+a[2]*60+a[3];
@@ -378,7 +378,7 @@ run_phase2(){
         d="$OUT_DIR/c2_$IND"; mkdir -p "$d"
         # THE ARCHIVE PATH IS WHAT CLAIM 2 ASSERTS. Phase 1 already built and
         # KEPT this archive with CAPS_CALL=1, so calling from it here is both
-        # the honest measurement and free of a second compression pass.
+        # the correct measurement and free of a second compression pass.
         # The FASTQ runner (run_fullchr20_bench_capsule.sh) measures the encoder
         # assembling and calling in one pass -- a different, much heavier
         # operation -- and is retained for comparison, not used here.
@@ -498,7 +498,7 @@ run_phase2(){
     # fraction for a target depth is target/30 -- a formula over a declared
     # property of the input, not a fitted constant. 30x itself is not re-run:
     # it IS the T3 row, and re-running it would spend 6 minutes to reproduce a
-    # number we already have.
+    # number already measured there.
     local T4_IND=HG002 BASE_DEPTH=30
     local t4fq="$DATA_DIR/${T4_IND}_pooled.fq"
     if [ -s "$t4fq" ] && case ",$PHASES," in *,2,*) true;; *) false;; esac; then
@@ -748,7 +748,7 @@ run_phase3(){
         step "T3.2  bwa + samtools sort + mosdepth (the conventional route)"
         if [ -s "$ref.bwt" ] && [ -s "$src" ] && command -v mosdepth >/dev/null; then
             # Timed as ONE pipeline under time -v: the conventional route is
-            # align+sort+index+depth, and quoting only one of those would flatter us.
+            # align+sort+index+depth, and quoting only one of those would understate its cost.
             /usr/bin/time -v bash -c "bwa mem -t $NPROC '$ref' '$src' \
               | samtools sort -@ 4 -o '$d/aln.bam' - \
               && samtools index '$d/aln.bam' \

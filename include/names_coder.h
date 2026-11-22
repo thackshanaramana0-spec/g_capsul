@@ -116,7 +116,7 @@ struct Model {
 // ERR5181310 38,059 of 39,416 B (96.6% of the entire names stream) and
 // ERR552797 269,005 of 1,341,038 B (20.1%). Genozip pays for the same field in
 // its own separate `length` context (25,395 B and 177,459 B on the same two
-// files); we can pay nothing, because we already hold the value.
+// files); here it costs nothing, because the value is already known.
 //
 // So the token carries NO payload -- just the type symbol, which an adaptive
 // model drives to near-zero when it dominates a token index. The decoder
@@ -126,7 +126,7 @@ struct Model {
 // (SNIP_REDIRECTION between contexts), but strictly cheaper here because the
 // sequence side needs read_lengths regardless of what names do.
 enum TokType { ID_ALPHA, ID_DIGIT, ID_CHAR, ID_MATCH, ID_ZEROS, ID_DELTA, ID_END, ID_ZDELTA, ID_SEQLEN };
-// Diagnostic only: isolate our two additions over SPRING's baseline coder.
+// Diagnostic only: isolate this coder's two additions over SPRING's baseline coder.
 static const bool NO_ZD   = getenv("NMC_NOZD")!=nullptr;    // drop ID_ZDELTA
 static const bool NO_DICT = getenv("NMC_NODICT")!=nullptr;  // drop the value dictionary
 static const uint32_t MAXTOK=1024;
@@ -261,7 +261,7 @@ struct Layout {
     // Same admission rule as every other elision: verified on EVERY read in
     // pass 1, never inferred from the first one.
     // The byte travels in the names dictionary stream. capsule_decode does not
-    // read it today: it writes names, reads and quality as separate files and does
+    // currently read it: it writes names, reads and quality as separate files and does
     // not reassemble the 4-line record, so a caller that does must restore line 3
     // from it. A file in mode 2 has a line 3 the archive does not reproduce.
     uint8_t line3_mode=2;
@@ -274,7 +274,7 @@ static void dict_pass(const char* fq_path, std::array<GlobalDict,MAXTOK>& gdict,
                       uint64_t* n_names_out, Layout* lay=nullptr){
     FILE* f=fopen(fq_path,"r");
     if(!f){
-        // Not reachable today: encoder.cpp's own pre-flight std::ifstream check
+        // Not currently reachable: encoder.cpp's own pre-flight std::ifstream check
         // on argv[1] already refuses before this runs. Kept as a loud diagnostic
         // rather than a silent no-op anyway, since encode_from_fastq() would
         // otherwise return a normally-shaped Encoded{n_names=0} here with
@@ -387,8 +387,8 @@ static void dict_pass(const char* fq_path, std::array<GlobalDict,MAXTOK>& gdict,
                 const bool is_match = prev_is_digit && match_len==token_len &&
                                       !isdigit((unsigned char)prevc(prev_tok_ptr[token_ctr]+token_len));
                 // Independent of the coding branch: a repeated length would be
-                // coded ID_MATCH, which previously hid the property entirely
-                // and stopped the hoist from ever firing.
+                // coded ID_MATCH, which would hide the property entirely
+                // and stop the hoist from ever firing.
                 tok_is_seqlen = seqlen && digit_value==seqlen
                                 && !isdigit((unsigned char)*id_ptr_tok);
                 if(!is_match){

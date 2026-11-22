@@ -39,7 +39,7 @@ EXIT CODES
 """
 import sys, os, re, json, math, statistics as st
 
-REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 ENCODER_SRC = os.path.join(REPO_ROOT, "src", "encoder.cpp")
 NAMES_SRC   = os.path.join(REPO_ROOT, "include", "names_coder.h")
 
@@ -78,7 +78,8 @@ class Stats:
         "n_records", "n_malformed", "lengths", "header_lengths",
         "n_with_N", "total_bases", "base_counts", "qual_min", "qual_max",
         "qual_sum", "qual_n", "distinct_lengths", "duplicate_prefix_hits",
-        "n_variable_qual_len",
+        "n_variable_qual_len", "n_crlf", "n_bad_alpha", "n_bad_npos",
+        "l3_all_plus", "l3_all_copy",
     )
 
     def __init__(self):
@@ -95,6 +96,11 @@ class Stats:
         self.qual_n = 0
         self.distinct_lengths = set()
         self.n_variable_qual_len = 0
+        self.n_crlf = 0              # records with a CR before the newline
+        self.n_bad_alpha = 0         # records with a base other than A, C, G, T, N
+        self.n_bad_npos = 0          # records with an N past offset 255 or more than 255 Ns
+        self.l3_all_plus = True      # every line 3 is exactly "+"
+        self.l3_all_copy = True      # every line 3 is "+" followed by the header
 
 
 SAMPLE_CAP = 200_000  # cap the in-memory length list; running stats (min/max/
@@ -119,6 +125,8 @@ def stream_fastq(path, stats: Stats):
             if not (s and p and q):
                 stats.n_malformed += 1
                 break
+            if h.endswith(b"\r\n") or s.endswith(b"\r\n") or p.endswith(b"\r\n") or q.endswith(b"\r\n"):
+                stats.n_crlf += 1
             h = h.rstrip(b"\n\r")
             s = s.rstrip(b"\n\r")
             p = p.rstrip(b"\n\r")
@@ -138,6 +146,14 @@ def stream_fastq(path, stats: Stats):
                 stats.n_variable_qual_len += 1
             if b"N" in s:
                 stats.n_with_N += 1
+            if s.translate(None, b"ACGTN"):
+                stats.n_bad_alpha += 1
+            if s.count(b"N") > 255 or s.rfind(b"N") > 255:
+                stats.n_bad_npos += 1
+            if p != b"+":
+                stats.l3_all_plus = False
+            if p != b"+" + h[1:]:
+                stats.l3_all_copy = False
             # base composition over the WHOLE file, not just the sample --
             # cheap (one pass, one dict), and it is what actually answers
             # "is this DNA" rather than a guess from a handful of records.
@@ -280,6 +296,26 @@ def analyze_one(path, limits):
         exit_code = max(exit_code, 2)
 
     # ------------------------------------------------------------------
+    # 2b. Format violations the encoder refuses (same rules as the scope
+    #     check in src/encoder.cpp).
+    # ------------------------------------------------------------------
+    for cnt, msg in (
+        (stats.n_crlf, "use CRLF line endings (convert with `tr -d '\r'`)"),
+        (stats.n_bad_alpha, "contain bases other than A, C, G, T, N (lowercase and IUPAC codes are not supported)"),
+        (stats.n_bad_npos, "have an N at a read offset above 255 or more than 255 Ns"),
+    ):
+        if cnt:
+            findings.append(f"OUT OF SCOPE: {cnt} record(s) {msg}. The encoder will refuse this file.")
+            exit_code = max(exit_code, 2)
+    if stats.n_malformed:
+        findings.append(f"OUT OF SCOPE: {stats.n_malformed} malformed or truncated record(s). The encoder will refuse this file.")
+        exit_code = max(exit_code, 2)
+    if not stats.l3_all_plus and not stats.l3_all_copy:
+        findings.append("OUT OF SCOPE when names are stored (CAPS_NAMES=1): line 3 is neither always '+' "
+                        "nor always '+' followed by the header. The encoder will refuse this file.")
+        exit_code = max(exit_code, 2)
+
+    # ------------------------------------------------------------------
     # 3. Alphabet -- is this actually DNA. This project's pipeline
     #    substitutes N->A internally (real, existing mechanism) and rejects
     #    nothing else explicitly at the source level, but a file whose
@@ -318,7 +354,7 @@ def analyze_one(path, limits):
     #    subsample of a long-read run, or heavily quality-trimmed reads)?
     #    This is NOT a gate -- only #1 and #2 are gates -- because a
     #    genuinely short, high-quality file should never be refused on a
-    #    profile guess. It is an honest caveat, derived from the file's own
+    #    profile guess. It is a caveat, derived from the file's own
     #    numbers, for input that is technically in scope but was validated
     #    on a different shape than what this file has.
     # ------------------------------------------------------------------

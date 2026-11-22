@@ -1,18 +1,6 @@
----
-Date: 2026-11-21
-Title: T3.5 — Locus Retrieval at Heterozygous Sites (Bilateral Anchoring)
-Purpose: Complete, verified record of T3.5's mechanism, why it is the
-  paper's actual novel claim (not T3.4), the multi-individual/multi-locus
-  generalization result, the one diagnosed miss, and the real cost of
-  reaching a clean sweep.
-When to refer to this file: Writing/checking T3.5's table or text; deciding
-  what "the paper's insight" sentence should say; citing the 96/400-vs-
-  400/400 motivating number; explaining why this table has no competitor.
-Keywords: T3.5, locus retrieval, bilateral anchoring, heterozygous, allele
-  splitting, coordinate-only addressing, FM-index, homopolymer, indel eviction
----
-
 # T3.5 — Locus Retrieval
+
+> Record of the T3.5 mechanism, the multi-individual and multi-locus result, the one diagnosed miss, and the cost of reaching a clean sweep.
 
 ## What it measures — and why this is the actual novel claim of Claim 3
 
@@ -121,7 +109,7 @@ locus-specific, not a property of the individual.
 ## Generalization claim — precise wording
 
 The mechanism (bilateral union) is geometric, not a completeness argument the
-way T3.4's FM-index is, which is an honest asymmetry, not a weakness to
+way T3.4's FM-index is, which is an asymmetry, not a weakness to
 hide. It generalizes on the strength of: (a) every parameter is derived from
 data, never fitted (seed floor, probe construction identical across runs),
 and (b) it held clean across two ancestries, two trios and a locus never

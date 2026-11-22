@@ -65,8 +65,8 @@ with open(f'{WORK}/literal.txt','rb') as f:
 # (mirroring SimplePgMatcher.cpp:99-131) before ever writing literal.txt or
 # these triples, so the two are GUARANTEED consistent by construction --
 # no overlaps, no duplicates, no reconstruction-from-a-lossy-dump needed.
-# Also now carries a real is_rc flag (4th field) per match -- previously
-# absent, which was the root cause of ~22% of matches failing a direct-copy
+# Also carries an is_rc flag (4th field) per match; without it ~22% of
+# matches would fail a direct-copy
 # consistency check (they were RC-discovered and need reverse-complementing,
 # not a plain copy).
 with open(f'{WORK}/mem_triples.bin','rb') as f: raw = f.read()

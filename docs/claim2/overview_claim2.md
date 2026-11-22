@@ -1,17 +1,6 @@
----
-Date: 2026-09-19
-Title: Claim 2 (FAITHFUL) — Overview, What It Is And Is Not
-Purpose: Entry point for understanding what Claim 2 claims, what it does
-  not, and how T2.1-T2.5 relate, before reading any single table's detail
-  file.
-When to refer to this file: Before writing/reviewing any Claim 2 paper
-  section; answering "is Claim 2 locked"; deciding what belongs in main
-  tables vs discussion.
-Keywords: FAITHFUL, Claim 2, variant calling, het-SNV, het-indel,
-  multi-allelic, tetraploid, DiscoSNP++, Kmer2SNP, F1, overview, scope
----
-
 # Claim 2 — FAITHFUL. What it is, what it is not.
+
+> Entry point for Claim 2: what it claims, what it does not claim, and how T2.1 to T2.5 relate.
 
 ## What Claim 2 actually claims, in one sentence
 
@@ -31,9 +20,9 @@ FASTQ or building a second, independent representation.**
   reference or doesn't call indels. Kmer2SNP is SNV-only by construction —
   included in T2.1, correctly marked NOT_APPLICABLE in T2.3 (indel), not a
   missing measurement.
-- **Not uniformly a win.** HG005 is the honest exception across T2.1 and
+- **Not uniformly a win.** HG005 is the exception across T2.1 and
   T2.3 — DiscoSNP++ wins F1 on that individual in both tables. Stated
-  plainly in both the CSV and the manuscript text, not hidden.
+  in both the CSV and the manuscript text.
 - **Not simulated data anywhere.** T2.5 (tetraploid) is real HG003+HG004
   reads concatenated — "nothing at the sequence level is simulated, only
   the ploidy relationship is constructed" (manuscript's own wording,
@@ -51,12 +40,12 @@ FASTQ or building a second, independent representation.**
 
 ## Verification status of this overview and its 7 companion files
 
-Every number above and in the detail files was cross-checked this session
+Every number above and in the detail files was cross-checked
 directly against `results/claim2/claim2_T2.*.csv` **and** the live
 manuscript tables in `capsul_paper/capsul_manuscript.tex` (lines 499-660+),
 number by number, not sampled. Zero discrepancies found — Claim 2's
 manuscript tables are current and correct, unlike Claim 3's T3.1/T3.4
-tables which needed correction this session (see `docs/claim3/`).
+tables, which needed correction (see `docs/claim3/`).
 
 ## How the tables relate to each other
 
@@ -68,7 +57,7 @@ tables which needed correction this session (see `docs/claim3/`).
 3. **T2.3 repeats T2.1's structure for a harder variant class** (indels),
    using the same scoring pipeline, same comparator, same four individuals
    — a controlled generalization, not a new method.
-4. **T2.4 is the sharpest evidence for the paper's mechanism** (see
+4. **T2.4 is the clearest evidence for the paper's mechanism** (see
    `mechanism_insight_claim2.md`): it tests a case ordinary biallelic
    calling cannot even represent — a locus with more than one alternate
    allele. This is the SAME reconciliation mechanism Claim 3/T3.5 uses for
@@ -90,7 +79,7 @@ tables which needed correction this session (see `docs/claim3/`).
   refuted headroom candidate (free read threading).
 - `mechanism_insight_claim2.md` — how Claim 2 connects to the paper's
   central insight (the same allele-splitting/reconciliation mechanism as
-  Claim 3/T3.5), and what a fair-comparison honest reading of DiscoSNP++
+  Claim 3/T3.5), and what a fair reading of DiscoSNP++
   and Kmer2SNP's own capabilities actually supports.
 - `code_mapping_claim2.md` — exact function/line references in
   `include/caps_caller.h` and `src/decoder.cpp` for every table,

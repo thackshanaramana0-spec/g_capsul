@@ -1,18 +1,6 @@
----
-Date: 2026-11-21
-Title: T3.4 — Exact-Match Retrieval (Recall vs BWT-Family Tools)
-Purpose: Complete, verified record of what T3.4 measures, how the FM-index
-  completes exact-match search and why that is complete by construction (not
-  a lucky statistic), the four-individual result, and its real, disclosed
-  costs.
-When to refer to this file: Writing/checking T3.4's table or text; deciding
-  how to frame the comparison to BEETL/CIndex/sFASTQ (capability + cost,
-  never head-to-head parity framing); citing any exact-match recall number.
-Keywords: T3.4, exact match, recall, FM-index, BWT, BEETL, CIndex, sFASTQ,
-  find_occurrences, completeness by construction, CAPS_QUERY_CONTAIN, caps_fmi.h
----
-
 # T3.4 — Exact-Match Retrieval
+
+> Record of what T3.4 measures, how the FM-index completes exact-match search (complete by construction), the four-individual result, and its costs.
 
 ## What it measures
 
@@ -148,4 +136,4 @@ in the FM-index. The four-individual result is confirmation that it holds in
 practice, and the synthetic suite probes the cases real data rarely produces
 (contained reads, duplicates, N, repeats, 5% error). See
 `mechanism_insight_claim3.md` for the same point made about T3.5, where the
-argument is geometric and honestly weaker in that specific sense.
+argument is geometric and weaker in that specific sense.

@@ -8,9 +8,10 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 # LTO changes nothing about program semantics (unlike e.g. -ffast-math, which
-# SPRING's CMakeLists uses and we deliberately don't: it would put floating-
+# SPRING's CMakeLists uses and this build deliberately does not: it would put floating-
 # point reordering near a tool whose whole second claim is byte-exact
-# lossless output). Free win, so enable it whenever the toolchain supports it.
+# lossless output). It has no runtime cost, so it is enabled whenever the toolchain
+# supports it.
 include(CheckIPOSupported)
 check_ipo_supported(RESULT CAPS_IPO_OK)
 if(CAPS_IPO_OK)

@@ -1,16 +1,6 @@
----
-Date: 2026-09-19
-Title: T2.4 — Multi-Allelic SNV Sites, Complete chr20 Census
-Purpose: Complete, verified record of T2.4's numbers, why it is a complete
-  census (not a sample), the withdrawn-numbers history (21/26, 11/18,
-  5/111), and why this is the sharpest evidence of the paper's mechanism.
-When to refer to this file: Writing/checking T2.4's table or text; citing
-  17/26 anywhere; explaining why DiscoSNP++ structurally scores 0.
-Keywords: T2.4, multi-allelic, complete census, 17/26, CAPS_PLOIDY,
-  withdrawn numbers, structural not marginal
----
-
 # T2.4 — Multi-Allelic Sites
+
+> Record of the T2.4 numbers. The table is a census of the whole chromosome, not a sample. It also lists the withdrawn numbers (21/26, 11/18, 5/111).
 
 ## What it measures
 
@@ -73,8 +63,8 @@ exact line references.
 
 ## Connection to the paper's central mechanism — the important one
 
-**This table is the sharpest evidence, alongside T3.5, that allele
-separation at compression time is a real, general phenomenon, not specific
+**This table is the clearest evidence, alongside T3.5, that allele
+separation at compression time is a general phenomenon, not specific
 to heterozygous SNV calling.** A multi-allelic site is exactly the case
 where more than two versions of one locus must be reconciled, not just two
 — the same reconciliation logic that recovers both alleles of a simple het

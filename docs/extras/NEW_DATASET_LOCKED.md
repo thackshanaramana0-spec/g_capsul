@@ -39,7 +39,7 @@ Verified live via NCBI eutils 2026-09-02, not guessed:
 - Genome: **100,688,548 bp** (NCBI assembly U_gibba_v2) — the smallest known
   sequenced plant genome, 4.3x smaller than T. cacao's ~430 Mb, which is why a
   small-but-real Plantae run is possible here where it wasn't for Arabidopsis
-  or Drosophila (see `low_coverage_weakness` memory: coverage x genome size
+  or Drosophila (coverage x genome size
   sets a floor, and searching SRA for "smallest run" in Plantae/Animalia just
   selects for low coverage).
 - Coverage (_1 only, same convention as the rest of this table): **~65x**
@@ -85,8 +85,8 @@ the 6 Bacteria entries to drop.
 - ERR17716639, 2.8x coverage, on disk at `/tmp/kd/ERR17716639.fastq`
 - This is the ONE remaining deliberate low-coverage dataset. It stays outside
   the "15" count below — it's a control for the low-coverage weakness
-  (see `low_coverage_weakness` memory: we lose to SPRING here, -2.74%,
-  disclosed honestly, not hidden), not a member of the main comparison set.
+  (G_CAPSUL is 2.74% larger than SPRING on it, and this is
+  reported), not a member of the main comparison set.
 
 ---
 

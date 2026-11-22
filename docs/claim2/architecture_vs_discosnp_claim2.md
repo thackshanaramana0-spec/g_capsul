@@ -1,34 +1,18 @@
----
-Date: 2026-09-20
-Title: Architecture vs DiscoSNP++, Layer by Layer — Where We Match the
-  Textbook, Where We Differ, and One Self-Correction
-Purpose: `mechanism_insight_claim2.md` covers the allele-splitting mechanism
-  and T2.1-T2.5 results; this file is the missing layer-by-layer
-  architecture comparison against DiscoSNP++ specifically — an 18-row
-  correspondence table plus the four real differentiators, condensed and
-  verified against the architecture-versus-DiscoSNP++ note (frozen 2026-09-10),
-  not rewritten from memory.
-When to refer to this file: Writing the Methods/Discussion comparison to
-  DiscoSNP++ at implementation-level detail (not just result numbers);
-  explaining precisely what is shared textbook algorithm vs. genuine
-  contribution; citing the "assembly is the byproduct" self-correction.
-Keywords: DiscoSNP++, kissnp2, GATB, architecture comparison, self-correction,
-  retained assembly, kissreads2, COVCAP, HETSCAN, PLACEMENTS_AS_LINKS_REFUTED
----
-
 # Architecture vs DiscoSNP++, layer by layer
+
+> Layer-by-layer comparison of the G_CAPSUL caller with DiscoSNP++: an 18-row correspondence table and the differences that follow from it.
 
 ## The shape of the comparison
 
 DiscoSNP++'s caller (`kissnp2`, built on the GATB library) and this project's
-Method B caller share a genuine amount of textbook bubble-calling machinery:
+Method B caller share an amount of textbook bubble-calling machinery:
 k-mer counting shape, graph membership testing, bubble start/closure
 conditions, and branching policy are the *same algorithm*, arrived at
 independently in several cases and verified by reading DiscoSNP++'s own
 source. Of an 18-layer correspondence table, roughly half are marked
 **textbook** (shared, not a contribution either way), a handful are
 **theirs** (DiscoSNP++'s design, sometimes adopted, sometimes measured and
-rejected), and the rest are **ours** — genuine differences, each with a
+rejected), and the rest are **ours** — differences, each with a
 measured reason, not asserted superiority.
 
 **Layers marked textbook (shared, same algorithm independently arrived at):**
@@ -45,7 +29,7 @@ walk), branching policy (stop at first junction), low-complexity filtering
   F1 despite the narrower tolerance.
 - Indel proposal: DiscoSNP++ attempts a BFS call at **every** branching node
   (`start_indel_prediction`, unconditional); ours fires only at superbubble
-  nodes, **15.9% of nodes**. This is a real, honestly-acknowledged
+  nodes, **15.9% of nodes**. This is an acknowledged
   architectural deficit — not a place we claim to win, and it is the
   concrete reason the indel claim (T2.3) is reported as a real trade-off,
   not argued away.
@@ -54,7 +38,7 @@ walk), branching policy (stop at first junction), low-complexity filtering
   their default rather than re-tuned (a case of adopting their parameter
   because re-deriving it did not pay).
 
-**Layers marked ours (genuine differences, each measured):**
+**Layers marked ours (differences, each measured):**
 - **Read coherence.** DiscoSNP++ uses `kissreads2`, a *separate binary* that
   re-maps every read onto every candidate bubble. This project keeps reads
   in memory via one indexed sweep instead — a deliberate second FASTQ pass
@@ -67,7 +51,7 @@ walk), branching policy (stop at first junction), low-complexity filtering
   haploid depth and ploidy, which is why precision holds 0.911–0.950 across
   a 10–30× coverage sweep and the tetraploid arm (T2.5) works without
   retuning. DiscoSNP++ exposes `-b`, `-P`, `-D`, `-max_ambigous_indel` as
-  fixed numbers the user sets once.
+  fixed numbers set once by the operator.
 - **`HETSCAN`** — a pair-fraction gate that declines to call on haploid
   input (measured 0.016 on E. coli), something DiscoSNP++ has no equivalent
   of.
@@ -82,7 +66,7 @@ inside `run_variant_call` (`include/caps_caller.h`), and
 `src/encoder.cpp` (the encoder) builds no k-mer table at all — the
 k-mer graph is paid for at call time, same as DiscoSNP++.
 
-**What IS genuinely free is the assembly.** The encoder builds contigs in
+**What IS free is the assembly.** The encoder builds contigs in
 order to compress, and the caller reuses them directly rather than
 re-placing all reads from scratch. Measured: the alternative
 (`build_substrate`, re-placing all 12.6M reads) takes **738 s serial at
@@ -156,7 +140,7 @@ Verified against the indel-bound note. Tracing every indel this project's
 caller misses into its own k-mer graph found the branching node at each
 missed site has real coverage (12–30 reads) but exactly **one** successor
 base, with no coverage floor at play — raw successor counts return literal
-`[0,0,21,0]`. The alternate haplotype's k-mers are genuinely *absent* from
+`[0,0,21,0]`. The alternate haplotype's k-mers are *absent* from
 the graph, not filtered out by a threshold. **66% of missed indels are
 homopolymer-length changes**; most of the rest are tandem-repeat
 expansions. Inserting one base into a run of that same base does not
@@ -199,7 +183,7 @@ construction* — unlike DiscoSNP++, where a graph-traversal path can be
 proposed that no read actually supports, giving `kissreads2` something real
 to reject; the matching constraint (7) fails for a structural reason tied to
 how this project's false bubbles specifically arise (repeat collapse, not
-ambiguous pairing). **The honest conclusion, stated plainly in the source
+ambiguous pairing). **The conclusion, stated in the source
 document**: closing this gap is a substrate change of known shape (the
 generator must read candidates out of the data rather than construct them),
 not a tuning exercise — consistent with the layer-4/5 architectural
@@ -218,17 +202,17 @@ substantially below the bubble channel's 0.623–0.636 alone) — **partly
 refuting the document's own earlier framing**. The channel was kept in the
 shipped caller regardless, because combined with the bubble channel it adds
 real, measured recall the bubble channel alone misses (0.655→0.699 combined
-vs bubble-only, on the windows tested) — the honest reason it survives in
+vs bubble-only, on the windows tested) — the reason it survives in
 the final architecture is a measured combined-channel gain, not the
 (subsequently corrected) precision figure that originally motivated trying
 it.
 
-## Net honest read
+## Net assessment
 
 On the layers that are shared textbook algorithm (5–8 in the source table),
 this project beats DiscoSNP++ on SNV F1 (0.879 vs 0.847 in the isolated
 comparison) — the fair, apples-to-apples layer. On the one layer where
-DiscoSNP++'s design is genuinely richer (unconditional per-node indel
+DiscoSNP++'s design is richer (unconditional per-node indel
 proposal vs. our superbubble-gated 15.9%), that is stated as a real
-architectural deficit, which is the honest reason the indel claim is framed
+architectural deficit, which is the reason the indel claim is framed
 as a disclosed trade-off rather than an unqualified win.

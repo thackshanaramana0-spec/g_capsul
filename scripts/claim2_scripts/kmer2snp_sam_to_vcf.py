@@ -1,7 +1,7 @@
 import re,sys
 # Convert Kmer2SNP SNP-kmer-pair output to a genome-coordinate VCF so it can be
 # scored by the SAME rtg vcfeval pipeline as ARCS (apples-to-apples). Each Kmer2SNP
-# line is two k-mers differing at one base (the SNP); we align kmer1 to the reference
+# line is two k-mers differing at one base (the SNP); kmer1 is aligned to the reference
 # (SAM) to place the SNP, take the genome REF base, and emit the alt allele.
 #   usage: kmer2snp_to_vcf.py <pairs.snp> <kmer1.sam> <ref.fa> <chrom> <out.vcf>
 PAIRS,SAM,REF,CHROM,OUT=sys.argv[1:6]
@@ -16,7 +16,7 @@ for line in open(REF):
 refseq=''.join(seq)
 def gref(p1): return refseq[p1-1].upper() if 1<=p1<=len(refseq) else 'N'
 
-# read pairs, index by kmer1 (the query we align). Store the two alleles + diff offset.
+# read pairs, index by kmer1 (the aligned query). Store the two alleles + diff offset.
 pairs={}   # kmer1 -> (offset, allele1, allele2)
 for line in open(PAIRS):
     p=line.split()

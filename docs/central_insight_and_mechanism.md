@@ -1,17 +1,6 @@
----
-Date: 2026-09-19
-Title: The Central Insight and Mechanism — How Claims 1, 2, 3 Are One Argument
-Purpose: Synthesizes the three per-claim mechanism files into the single
-  cross-cutting argument the paper actually makes, anchored directly in
-  the manuscript's own Introduction and Conclusion text.
-When to refer to this file: Writing the Discussion section; answering "what
-  is this paper's one-sentence contribution"; checking whether a new result
-  belongs to the paper's thesis or is a tangent; deciding how to frame ARCH.
-Keywords: insight, mechanism, allele splitting, reconciliation, substrate,
-  build_substrate, collapse, ARCH, cross-claim, unifying argument
----
-
 # The central insight and mechanism
+
+> Summary of the argument that the three claims share, based on the Introduction and Conclusion of the manuscript.
 
 ## The insight, in the paper's own words (verified, not paraphrased from memory)
 
@@ -96,7 +85,7 @@ tuned to make one benchmark look good.
 
 ## Why Claim 3's operations are not five bolted-on features — the architectural version of the same point
 
-Verified in code this session (`docs/claim3/code_mapping_claim3.md`):
+As traced in the code (`docs/claim3/code_mapping_claim3.md`):
 T3.3 and T3.4 are literally the same function in `decoder.cpp`; T3.5
 is not a separate code path at all, only an orchestration layer calling
 T3.4's primitive twice. This is the structural signature of one retained
@@ -104,7 +93,7 @@ data structure being reused in increasingly demanding ways, not five
 independently-engineered features — the code-level evidence for the same
 claim the Conclusion states in prose.
 
-## The honest asymmetry between Claim 2's and Claim 3's versions of the mechanism
+## Claim 2 and Claim 3 apply the mechanism at different times
 
 Claim 2's reconciliation (`build_substrate`/`collapse_contigs`) happens
 *before* scoring, baked into the caller's substrate construction. Claim
@@ -116,10 +105,9 @@ after the fact, on a finished archive — reinforcing the "substrate,
 reusable in more than one way" framing rather than implying the fix had to
 be anticipated and hard-coded once.
 
-## The one-sentence version of this entire file, from the project's own prior verified work
+## One-sentence summary
 
-Found this session in the Claim 3 locked-results note (verified 2026-09-09, still
-true independent of that document's otherwise-superseded numbers):
+From the Claim 3 locked-results note (verified 2026-09-09, and still correct although the numbers in that note have been superseded):
 
 *"Everyone else's archive stores what the reads SAY. Ours stores where
 they SIT. The compressor had to assemble in order to compress, so the
@@ -127,17 +115,12 @@ coordinate system is a byproduct rather than an addition — which is why
 locus retrieval, per-base coverage and reference-free variant calling all
 come out of the same structure."*
 
-This is the whole paper's argument in two sentences, and it is worth
-having ready as a direct quote for a talk, an abstract, or a reviewer
-response.
+This is the argument of the paper in two sentences.
 
-## Where ARCH fits, precisely, if adopted
+## Where ARCH fits
 
-ARCH is a proposed name for the general pattern this file describes
-(construct once, retain, harness for compression and for downstream
-computation) — not for the allele-splitting mechanism specifically, which
-is the *evidence* for the pattern, not the pattern itself. Conflating the
-two in the paper's wording would be an error: name ARCH for the general
-substrate-reuse claim (paired with G_CAPSUL's introduction, per
-`paper_overview.md`), and describe allele-splitting/reconciliation as the
-mechanism that demonstrates it, not as ARCH itself.
+ARCH (Assemble, Retain, Compress, Harness) names the general pattern this file describes:
+assemble once, retain the structure, and reuse it for compression and for downstream
+computation. It does not name the allele-splitting mechanism, which is the evidence for the
+pattern and not the pattern itself. The paper uses ARCH for the general substrate-reuse claim and
+describes allele splitting and reconciliation as the mechanism that demonstrates it.

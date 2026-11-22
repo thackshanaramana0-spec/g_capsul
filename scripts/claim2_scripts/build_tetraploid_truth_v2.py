@@ -7,7 +7,7 @@ REF strings disagreed. Audit showed that was 631 sites, 100% of them indels,
 all of them STR/repeat loci where the two samples merely used different-length
 representations of the same event (e.g. GAT->G vs GATATAT->G). Skipping them
 systematically biased the indel truth toward easy indels -- exactly the wrong
-direction for an honest benchmark.
+direction for an unbiased benchmark.
 
 v2: normalise each individual first (bcftools norm -f -m -any: left-align and
 split multi-allelics), then take the union of ALLELE records (pos, ref, alt).

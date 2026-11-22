@@ -1,15 +1,6 @@
----
-Date: 2026-09-19
-Title: T2.3 — Heterozygous Indel Calling vs DiscoSNP++
-Purpose: Complete, verified record of T2.3's numbers, the CAPS_CALL_INDELS
-  flag dependency, and the withdrawn-numbers history this table replaced.
-When to refer to this file: Writing/checking T2.3's table or text; citing
-  any het-indel F1 number; verifying the CAPS_CALL_INDELS=1 requirement.
-Keywords: T2.3, het-indel, DiscoSNP++, Kmer2SNP, CAPS_CALL_INDELS,
-  gapped_indel_scan, withdrawn numbers
----
-
 # T2.3 — Heterozygous Indel Calling
+
+> Record of the T2.3 numbers, the dependency on CAPS_CALL_INDELS, and the withdrawn numbers this table replaced.
 
 ## What it measures
 
@@ -29,7 +20,7 @@ construction, not a missing measurement.
 | **Mean** | **0.621** | 0.591 |
 
 Every TP/FP/FN count and every derived rate cross-checked line by line
-against the manuscript this session — exact match, no discrepancy.
+against the manuscript: exact match, no discrepancy.
 
 ## The pattern, and what it means (verified against the manuscript's own stated interpretation)
 
@@ -43,19 +34,19 @@ with the mechanism file's discussion of `gapped_indel_scan` — indel
 detection depends on finding a structural gap in the alignment scan, and a
 missed gap cannot be recovered downstream by any scoring adjustment.
 
-## Same honest exception as T2.1 — HG005
+## Same exception as T2.1 — HG005
 
 DiscoSNP++ wins F1 on HG005 again (0.605 vs 0.593), consistent with T2.1's
-pattern on the same individual. Not hidden, not averaged away.
+pattern on the same individual. It is reported per individual, not averaged away.
 
 ## Critical flag dependency — every number above requires `CAPS_CALL_INDELS=1`
 
-Verified in the pipeline notes' flags table (committed this session, but the
+Verified in the pipeline notes' flags table (committed, but the
 flag itself and its necessity predate tonight): without
 `CAPS_CALL_INDELS=1`, `capsule_decode call` silently takes the graph-only
 SNV path instead of erroring — producing a different, narrower
 configuration, not a failure, and definitely not the numbers above. This is
-the single most important flag for reproducing T2.3 (and T2.4, T2.5 — see
+the most important flag for reproducing T2.3 (and T2.4, T2.5 — see
 those files).
 
 ## Withdrawn numbers — history, kept per this project's own retraction rule

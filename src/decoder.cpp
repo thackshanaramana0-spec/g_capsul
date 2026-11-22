@@ -488,7 +488,7 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
     //
     // They are independent: quality needs only the per-read lengths, its own
     // small stream, not anything the sequence path produces. So it starts here
-    // and is joined where it used to be decoded. Same bytes, same order; the
+    // and is joined where its result is needed. Same bytes, same order; the
     // two costs overlap instead of adding.
     std::thread qthread; bool qual_async = false; uint64_t qw_async = 0;
     double qsecs_async = 0.0;
@@ -591,7 +591,7 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
     }
     // QUERY BUDGET INSTRUMENT (CAPS_QTIME=1). The point of query is that its
     // cost should track the ANSWER, not the archive. To know whether that is
-    // true we need the split, not the total.
+    // true requires the split, not the total.
     const bool QTIME = getenv("CAPS_QTIME")!=nullptr;
     auto _qt0 = std::chrono::steady_clock::now();
     auto QLAP=[&](const char* what){ if(!QTIME) return;
@@ -1051,8 +1051,8 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
 
     _rss("after quality");
     // ── CONTIGS HANDED BACK IN MEMORY ───────────────────────────────────────
-    // The caller used to get its contigs by invoking this whole function a
-    // SECOND time in "export" mode: re-open the archive, re-decode the ref and
+    // The caller gets its contigs in memory. Invoking this whole function a
+    // SECOND time in "export" mode would re-open the archive, re-decode the ref and
     // literal streams, re-apply the extension mismatches, rebuild the same
     // ~148 MB pseudogenome, write ~450k FASTA records to disk, and then parse
     // that file back into strings. 5.60 s of export plus 0.97 s of re-parse,
@@ -1307,15 +1307,15 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
         // DNA SEQUENCE.
         //
         // WHY THE SEQUENCE FORM EXISTS. Offsets are pseudogenome offsets, not
-        // chromosome positions, so "give me BRCA1" was unanswerable without
-        // bringing back a reference -- the one dependency this archive exists
+        // chromosome positions, so a request for a named gene such as BRCA1 could not
+        // be answered without bringing back a reference -- the one dependency this archive exists
         // to avoid. Asking by SEQUENCE removes the coordinate system from the
         // interface entirely: the user supplies the gene/primer/probe they
-        // already have, we locate it in the pseudogenome, and return the reads
-        // sitting there. Still no reference, and now biologically meaningful.
+        // already have, it is located in the pseudogenome, and the reads
+        // sitting there are returned. No reference is used.
         //
         // It is nearly free: pg is already fully decoded and in memory for the
-        // offset form, so this adds a scan over a buffer we are holding anyway.
+        // offset form, so this adds a scan over a buffer already in memory.
         // Both strands are searched, because a read's placement carries no
         // guarantee about which strand the query was written on.
         std::vector<std::pair<uint64_t,uint64_t>> ranges;
@@ -1418,9 +1418,9 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
             const char* d=strchr(modearg.c_str(),'-');
             if(!d){ fprintf(stderr,"query needs START-END or a DNA sequence\n"); return 2; }
             qa=strtoull(modearg.c_str(),nullptr,10); qb=strtoull(d+1,nullptr,10);
-            // A reversed/empty range (qa>=qb) previously fell through silently:
+            // A reversed/empty range (qa>=qb) must not fall through silently:
             // the overlap test below (b>r.first && a<r.second) can never be true
-            // when r.first>=r.second, so this produced a query that always
+            // when r.first>=r.second, so it would give a query that always
             // matched zero reads with no diagnostic -- indistinguishable from a
             // valid range that legitimately has no coverage there. Reject it
             // explicitly instead.
@@ -1503,7 +1503,7 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
       } }
     // Positions are one byte per mismatch while Lmax<=256, and varint-coded
     // deltas above that -- a byte cannot hold a position past 255, which is
-    // what used to make long-read archives lossy. Both forms are widened to
+    // why the varint form exists for long reads. Both forms are widened to
     // uint32 here so the two consumers below index one array either way.
     std::vector<uint32_t> mmpos32;
     {
@@ -2006,7 +2006,7 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
 
     // ---- reconstruct the reads (was decode_105.py) -------------------------
     // That script was 80% of decompression wall clock and set the memory peak
-    // at 1563 MB, above our own compress peak, because it built one Python
+    // at 1563 MB, above the encoder's own peak, because it built one Python
     // string per read for millions of reads. Everything it needs is already
     // decoded here.
     if(!outreads.empty()){
@@ -2057,8 +2057,7 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
                         if(off+m>=mmpos32.size()||off+m>=obs.size()) break;
                         uint32_t j = off+m<mmpos32.size()?mmpos32[off+m]:0;
                         j=prevj+j; prevj=j;
-                        // The old `j==255 -> skip` guard is gone with the clamp
-                        // that created it: 255 is now an ordinary delta value.
+                        // 255 is an ordinary delta value here (no clamp).
                         if(j>=L) continue;             // mismatch past this read
                         const uint8_t ob=obs[off+m];
                         dst[j]= rc ? comp(ob) : ob;
@@ -2108,7 +2107,7 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
             auto ndict = dec("names_dict");
             auto nindex= dec("names_index");
             // ID_SEQLEN codes "length=NNN" in the header as a reference to the
-            // read's own length, which we have already decoded above into
+            // read's own length, which is already decoded above into
             // `lengths` (per ORIGINAL read, the same order names are in). Hand
             // it over: without this the names column cannot be reconstructed.
             std::vector<uint32_t> slens(lengths.begin(), lengths.end());
@@ -2200,8 +2199,8 @@ int capsule_decode_all(const char* arcpath, const std::string& outdir,
 //  CALL VARIANTS FROM A STORED ARCHIVE
 //
 //  Until now Claim 2 called at COMPRESS time, from the encoder's in-memory
-//  state, so the honest sentence was "compress once and get calls as a
-//  byproduct" -- not "open an archive and call variants". This closes that.
+//  state, so the supportable statement was "compress once and get calls as a
+//  byproduct", not "open an archive and call variants". This adds the latter.
 //
 //  It reuses the decoder's existing modes rather than reaching into them:
 //    1. normal decode  -> reads.seq and reads.seq.qual, in ORIGINAL read order
@@ -2372,7 +2371,7 @@ static int capsule_call_from_archive(const std::string& in, const std::string& o
     // ── READ PLACEMENTS FROM THE ARCHIVE (what makes indels possible) ───────
     // The full caller's build_substrate needs each read's (contig id, offset).
     // DBG_ONLY does not -- bubbles read only k-mers -- which is why SNVs work
-    // from the archive today and indels do not: with empty placement arrays
+    // from the archive at present and indels do not: with empty placement arrays
     // build_substrate would place NO reads and the indel pass would emit
     // nothing, silently.
     //
@@ -2385,8 +2384,8 @@ static int capsule_call_from_archive(const std::string& in, const std::string& o
     //   * read_clip has NO archive source. The encoder derives it during
     //     placement, not from a stream. It is left zero here, which is
     //     CORRECT ONLY IF the caller treats 0 as "no left overhang" -- stated
-    //     here so the first VCF comparison against the FASTQ path tells us
-    //     whether that assumption holds rather than us assuming it does.
+    //     here so the first VCF comparison against the FASTQ path shows
+    //     whether that assumption holds.
     if (WANT_INDELS) {
         // w=1, matching BOTH proven consumers (the coverage path at ~line 231
         // and the read path at ~line 401): they decode pos_abs as raw bytes and
@@ -2500,7 +2499,7 @@ static int capsule_call_from_archive(const std::string& in, const std::string& o
 
 #ifndef CAPSULE_NO_MAIN
 #ifndef CAPS_VERSION
-#define CAPS_VERSION "1.1.1"
+#define CAPS_VERSION "1.2.0"
 #endif
 
 int main(int argc,char** argv){
@@ -2522,6 +2521,19 @@ int main(int argc,char** argv){
                                "       capsule_decode coverage <in.capsule> <out.tsv>\n"
                                "       capsule_decode query    <in.capsule> <out.fa> <START-END>\n"
                                "       capsule_decode call     <in.capsule> <out.vcf> [workdir]\n"); return 2; }
+    {   // The output directory is not created here. Without this check every write
+        // below failed silently and the process exited 0 with nothing written.
+        struct stat st;
+        if(stat(argv[2],&st)!=0 || !S_ISDIR(st.st_mode)){
+            fprintf(stderr,"capsule_decode: output directory '%s' does not exist; create it first (mkdir -p).\n",argv[2]);
+            return 2;
+        }
+        if(argc>3){
+            FILE* tf=fopen(argv[3],"wb");
+            if(!tf){ fprintf(stderr,"capsule_decode: cannot write '%s'\n",argv[3]); return 2; }
+            fclose(tf);
+        }
+    }
     return capsule_decode_all(argv[1], argv[2], argc>3?argv[3]:std::string());
 }
 #endif  // CAPSULE_NO_MAIN

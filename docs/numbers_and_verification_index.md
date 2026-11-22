@@ -1,26 +1,12 @@
----
-Date: 2026-09-19
-Title: Master Numbers and Verification Index — Every Table, Every Row,
-  First to Last
-Purpose: The complete, literal, row-by-row record of every table in the
-  paper (not just headline aggregates), each row's exact source, and its
-  verification status this session. The deepest single reference in this
-  folder tree.
-When to refer to this file: Before citing ANY number from this paper
-  anywhere; when a reviewer or collaborator asks for the full data behind
-  a headline figure; the single place to find a specific dataset's row in
-  any table without opening a CSV.
-Keywords: numbers index, master table, full data, every row, verification
-  status, source files, re-derived, cross-checked, cited
----
+# Numbers and verification index
 
-# Master numbers and verification index — full depth
+> Row-by-row record of every table in the paper, with the source file of each number and its verification status.
 
 **Verification status legend**: **RE-DERIVED** = independently recomputed
-from raw data this session. **CROSS-CHECKED** = manuscript number compared
-directly against its CSV source, row by row, this session. **CITED** =
-read from a prior, documented source, not independently re-run this
-session.
+from raw data during the verification audit. **CROSS-CHECKED** = manuscript number compared
+directly against its CSV source, row by row, during the audit. **CITED** =
+read from a prior, documented source, not independently re-run in the
+audit.
 
 ---
 
@@ -174,7 +160,7 @@ Both classes: CAPSULE wins.
 | DRR976266 | 0.70 | 548.82 | 784.0x |
 | HG002 | 5.67 | 2,678.83 | 472.5x |
 
-## T3.1 — Correctness (E. coli/SRR2584863 only, the one dataset both tools can be fairly compared on). Status: RE-DERIVED this session. Source: The T3.1 correctness note.
+## T3.1 — Correctness (E. coli/SRR2584863 only, the one dataset both tools can be fairly compared on). Status: RE-DERIVED. Source: The T3.1 correctness note.
 
 | Metric | CAPSULE (final, shipping config) | SPAdes | Winner |
 |---|---|---|---|
@@ -252,8 +238,8 @@ Measured on a build of the repo source with `scripts/claim3_scripts/run_locus_re
 |---|---|---|---|
 | PgRC2 sequence-only margin | +1.88%, 6 wins/1 loss | CITED | the development notes, the Claim 1 final-verdict note §42, the final-headroom note |
 | PgRC2 speed/RAM vs G_CAPSUL | ~1.7x slower, ~2.5x heavier | CITED | same |
-| Ablation: allele-split collapse effect | F1 0.431 → 0.888 | CITED, not re-run this session | manuscript Results, ~line 306 |
-| `contig_spans` archive cost | 0 bytes (18,282,397 B identical with/without) | RE-DERIVED this session | the T3.1 correctness note |
+| Ablation: allele-split collapse effect | F1 0.431 → 0.888 | CITED, not re-run | manuscript Results, ~line 306 |
+| `contig_spans` archive cost | 0 bytes (18,282,397 B identical with/without) | RE-DERIVED | the T3.1 correctness note |
 | FM-index size vs archive | 1.9-3.5x (0.9-2.6 MB per individual); the k-mer index it replaces was 7-13x | RE-DERIVED 2026-11-21 | `docs/claim3/t34_exact_match_claim3.md` |
 
 ## Cross-machine / cross-core reproducibility — verified, not assumed
@@ -272,97 +258,61 @@ lossless against the original FASTQ. **Answer: yes for output, no for wall
 time — which is the correct, expected behavior**, not a caveat to qualify
 away.
 
-## The project's own forensic audit — what it checked, what it found, what it admits it cannot establish
+## Verification audit: method, findings and limits
 
-Verified against the root-level audit notes (2026-09-10, tag `v1.0.2-capsule`,
-the canonical frozen state — read in full this pass, not previously in
-`docs/`). This is the single most rigorous self-verification
-document in the project and belongs here as the methodological backbone
-for every RE-DERIVED/CROSS-CHECKED status above.
+The tables were checked in two tiers. Ten tables were verified in total. Four of them were
+re-executed against an independent measurement (T2.4, T2.5, the HG002 row of T3.4, and the
+HG002 rows of T2.1 and T2.3). The rest were checked by parsing the run log and comparing it
+with the CSV (transcription-checked). Transcription checking is the weaker tier: the log line
+and the CSV row are written from the same shell variables in the same run, so a wrong
+underlying measurement would appear in both places and the comparison would pass. The one
+defect the audit found (T2.4) lay in the re-executed tier and could not have been found by
+transcription checking.
 
-**Two-tier verification, and why the distinction matters.** Ten tables
-were checked; only four were re-executed against an independent
-measurement (T2.4, T2.5, T3.4's HG002 row, T2.1/T2.3's HG002 rows) — the
-rest were checked by parsing the run log and diffing against the CSV
-("transcription-checked"). The audit is explicit that transcription
-checking is structurally weaker: the log line and the CSV row are written
-from the *same shell variables in the same execution*, so a wrong
-underlying measurement would produce a matching wrong number in both
-places and the check would report clean. **The one real defect this audit
-found (T2.4) was in the re-executed tier and could not have been caught by
-transcription checking** — stated as the honest measure of what the
-weaker tier is actually worth, not asserted as a flaw glossed over.
+**Defects found**
 
-**Four real defects found, each with its own forensic trail:**
+1. **T2.4 reported 21/26, which had no supporting raw log.** The denominator was re-derived
+   independently from the GIAB HG002 truth set (952 multi-allelic truth sites, 26 of them
+   SNV-only), which matched the published denominator. The caller was then re-run three times
+   to test three explanations. A re-run on identical reads tested nondeterminism and gave 17/26
+   again. A build at the preceding commit (via `git worktree`) tested an intervening encoder
+   change and gave 17/26 again. Tracing the original working directory showed that its
+   `regions.bed` spans a 5 Mb window rather than the full chromosome and its truth file has 111
+   sites (7 SNV-only). The 21/26 figure was a stale window result carried forward as the
+   full-chromosome number. It was corrected to 17/26 in every file that cited it.
+2. **T3.4 needs `CAPS_PILEUP=1` when building the query sidecar.** Without it the sidecar holds
+   placements but not each read's deviations, so `query` returns the consensus instead of the
+   reads and the coordinate arm scores 0 by construction. The requirement was missing from the
+   documentation and is now documented in
+   `docs/claim3/t34_t35_multi_individual_claim3.md`.
+3. **`.gitignore` excluded evidence files.** The pattern `*.log` excluded reproduction logs that
+   were cited as being in the repository, and `*.vcf` excluded the truth file of the T2.4
+   correction. Both were fixed with targeted exceptions.
+4. **The file-integrity manifest was generated incorrectly.** A fresh clone failed with eight
+   `No such file` errors because the manifest had been built with a plain `find` that included
+   untracked files. It was regenerated from `git ls-files`.
 
-1. **T2.4's 21/26 had no supporting raw log anywhere on the server.**
-   Investigated by re-deriving the denominator independently from the raw
-   GIAB HG002 BAM (952 multi-allelic truth sites, 26 SNV-only — matched
-   the published denominator exactly), then re-running the caller three
-   separate times under three different hypotheses to rule each out in
-   turn: suspected nondeterminism (re-ran on identical already-streamed
-   reads — 17/26 again, every intermediate count matching); suspected an
-   intervening encoder fix (built at the prior commit via `git worktree`,
-   re-ran — 17/26 a third time, the fix confirmed inert); finally traced
-   the original working directory and found its `regions.bed` spans a
-   5 Mb window, not the full chromosome, and its truth file has 111 sites
-   (7 SNV-only) — matching this project's own *earlier, already-superseded*
-   window figures. **21/26 was a stale window result mistakenly carried
-   forward as if it were the full-chromosome number.** Corrected to 17/26,
-   propagated to all 25 files that cited it.
-2. **T3.4 needed an undocumented required flag, and finding it took three
-   false failures.** Reproducing T3.4 gave `coordinate = 0` three times,
-   matching the *old*, already-acknowledged-wrong figure — each time a
-   confident wrong diagnosis. The actual cause: `CAPS_PILEUP=1` must be
-   passed to `capsule_decode index` before building the query sidecar;
-   without it the sidecar carries placements but not each read's
-   deviations, so `query` emits the consensus rather than the reads and
-   the coordinate arm scores 0 *by construction*, not by measurement. This
-   flag appeared in **zero** documentation files at the time — a reviewer
-   following the documented steps would have hit the identical wall and
-   drawn the identical wrong conclusion, three times, exactly as happened
-   here. Now documented in the full reproduction guide and the result-to-code trace.
-3. **`.gitignore` was silently excluding the audit's own evidence — twice.**
-   First `*.log` excluded preserved reproduction logs already cited as
-   "in the repository" when they were not; the identical failure mode was
-   then found again for `*.vcf`, which had excluded the T2.4 correction's
-   own truth file. Both fixed with targeted exceptions.
-4. **The file-integrity manifest itself was generated wrong**, found only
-   by actually performing a fresh clone (the exact scenario the manifest
-   exists to support) — it failed with 8 `No such file` errors because the
-   original manifest was built with a plain `find` that pulled in a
-   concurrent process's untracked files. Regenerated from `git ls-files` only.
+**What the audit does not establish**
+- No second physical machine was available. A fresh clone with a restricted core count was the
+  closest substitute and it passed, but that is not equivalent to an independent machine.
+- The T3.4 rows for HG003, HG004 and HG005 were not re-run. They are confirmed by inheritance
+  from the HG002 run, not by execution.
+- The verification was carried out by a single party. The highest-value next steps are to
+  re-execute the transcription-checked tier and to obtain a second reviewer.
 
-**What the audit explicitly does NOT claim to have established** — stated
-plainly rather than omitted: no second physical machine exists to test on
-(a fresh clone + restricted core count was the closest substitute, and it
-passed, but the audit itself calls this "not the same as a genuinely
-independent machine"); T3.4's HG003/HG004/HG005 rows were never re-run,
-only HG002 — the other three are "confirmed by inheritance," not
-execution; no independent human reviewer exists — single session, single
-party throughout.
+One bad number was found in ten tables. That does not show there was only one, and the audit is
+not exhaustive.
 
-**The self-assessed detection rate, stated as a number, not a feeling**:
-"one bad number in ten tables was found; the honest inference is not
-'there was exactly one' but 'the process that produced one can produce
-another, and the audit that caught it is not exhaustive.'" The document's
-own stated highest-value next step is re-executing the transcription-only
-tier and getting a second reviewer — not more documentation.
-
-**Canonical version, for citation**: `v1.0.2-capsule`. Five tags were cut
-the same day, each named as if final; four of the five are byte-identical
-in code and results to their predecessor, differing only in documentation.
-The last commit that changed any code or result was `7056c4f` (the T2.4
-correction) — everything after it, including the tag currently in use, is
-prose-only.
+**Canonical version for citation:** `v1.0.2-capsule`. Five tags were cut on one day. Four of
+the five are identical in code and results to their predecessor and differ only in
+documentation. The last commit that changed any code or result was `7056c4f` (the T2.4
+correction). Everything after it is documentation only.
 
 ---
 
 # How to use this file
 
-Find the table, find the row, cite it. Every number above was traced to a
-specific CSV cell or a specific dated doc this session — nothing here was
-typed from memory. If a status says CITED rather than RE-DERIVED or
-CROSS-CHECKED, it means this session read and trusted a prior session's
-verified work rather than re-running it — say so explicitly if a reviewer
-or collaborator asks whether something was freshly verified.
+Find the table and the row, and cite it. Each number above was traced to a specific CSV cell or
+a specific dated document. A status of CITED, as opposed to RE-DERIVED or CROSS-CHECKED, means
+the number was read from earlier verified work and not re-run. Say so if asked whether a number
+was freshly verified.

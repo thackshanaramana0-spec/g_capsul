@@ -1,121 +1,48 @@
----
-Date: 2026-09-19
-Title: Paper Overview — What This Paper Actually Is
-Purpose: The single top-level entry point for understanding the whole
-  paper before diving into any claim-specific folder. States the real
-  title/name structure, the actual manuscript section layout (verified
-  against the live tex file), and how the three claims fit together.
-When to refer to this file: First file to read when starting any work on
-  this paper; onboarding; deciding where something belongs (which claim
-  folder, or here); before writing an abstract, cover letter, or any
-  paper-wide summary.
-Keywords: overview, G_CAPSUL, ARCH, COMPACT, FAITHFUL, ADDRESSABLE, paper
-  structure, PLOS, title, backronym
----
+# Paper overview
 
-# What this paper actually is
+> Entry point: how the paper maps onto the three claims and onto the documents in this folder.
 
-## The name structure — two names, one is the headline, one is secondary
+## Names
 
-**G_CAPSUL** (Compact, Addressable, Pseudogenome-Structured, Unified
-Lossless) is the tool's name and the paper's actual title/contribution. It
-is what appears in the title and what the abstract introduces as the thing
-being evaluated.
+**G_CAPSUL** (Genomic, Compact, Addressable, Pseudogenome-Structured, Unified Lossless) is the
+name of the tool and the subject of the paper.
 
-**ARCH** (Construct, Retain, Compress, Harness — exact wording still being
-finalized, see `docs/claim3/mechanism_insight_claim3.md` for
-the fullest current draft) is a proposed name for the underlying design
-pattern G_CAPSUL implements. **As of this session, ARCH has NOT been added
-to the live manuscript** (`capsul_paper/capsul_manuscript.tex`) — it exists
-only in draft discussion and in this `docs/` folder. Do not
-treat ARCH as already-published terminology; it is a proposed addition,
-pending the user's decision on final wording and placement.
+**ARCH** (Assemble, Retain, Compress, Harness) is the name of the design principle the tool
+follows. During compression the reads are assembled into a pseudogenome, the resulting structure
+is retained in the archive, and it is reused for downstream analysis. The allele-splitting
+mechanism described in `central_insight_and_mechanism.md` is evidence for the principle and is not
+the principle itself.
 
-**Decided placement, if adopted** (per session discussion): name ARCH once,
-folded into the sentence introducing G_CAPSUL, not given a separate
-"we present ARCH" sentence of its own — verified against real precedent
-(Transformer, ResNet, MapReduce, PgRC2 abstracts) that winning papers use
-one headline name, with any secondary mechanism named in passing inside
-the sentence about the main contribution, not launched separately. See
-`central_insight_and_mechanism.md` for the reasoning behind this pattern.
+## The three claims
 
-## The paper's actual structure, verified against the live manuscript
-
-Confirmed directly from `capsul_paper/capsul_manuscript.tex` this session
-(not assumed from a template):
-
-```
-Abstract
-Author summary
-Introduction
-Results
-  COMPACT       (Claim 1 — T1.1, T1.2)
-  FAITHFUL      (Claim 2 — T2.1-T2.5)
-  ADDRESSABLE   (Claim 3 — T3.1-T3.5)
-Discussion
-Materials and methods
-  Datasets
-  Method overview
-  Pseudogenome construction and read placement
-  Lossless FASTQ encoding and reconstruction
-  Heterozygous structure reconciliation
-  Reference-free variant calling
-  Pseudogenome export, coverage, and positional retrieval
-  Experimental setup and baselines
-  Evaluation metrics
-  Implementation and reproducibility
-Conclusion
-Supporting information
-Author contributions
-Acknowledgments
-```
-
-This is a PLOS-format paper (structured abstract conceptually divided into
-background/methodology/conclusions per PLOS guidelines, separate
-plain-language Author Summary — both confirmed against PLOS Computational
-Biology's actual submission guidelines this session, not assumed).
-
-## The three claims, restated at the top level
-
-| Claim | Section name | What it tests | Folder |
+| Claim | Name | Question | Folder |
 |---|---|---|---|
-| 1 | COMPACT | Is the archive smaller than general-purpose FASTQ compressors, losslessly? | `docs/claim1/` |
+| 1 | COMPACT | Is the archive smaller than general-purpose FASTQ compressors, and is it lossless? | `docs/claim1/` |
 | 2 | FAITHFUL | Does the retained structure still support reference-free variant calling? | `docs/claim2/` |
-| 3 | ADDRESSABLE | Can the same archive serve export, coverage, range query, exact match, and locus retrieval? | `docs/claim3/` |
+| 3 | ADDRESSABLE | Can the same archive serve export, coverage, range query, exact match and locus retrieval? | `docs/claim3/` |
 
-**The three are not independent achievements stacked side by side.** Claim
-1 builds the structure; Claims 2 and 3 are two different, separately-
-measured demonstrations that the structure is reusable. This is stated
-directly in the paper's own Introduction (line ~336: *"Three aspects of
-that question were examined separately, corresponding to the three claims
-introduced above: COMPACT, FAITHFUL, and ADDRESSABLE"*) and in its own
-Conclusion (line ~1303: *"a compression-derived representation can remain
-useful as a computational substrate rather than serving only as an
-intermediate for reconstruction"*) — full argument in
+The three claims are not independent results. Claim 1 builds the structure. Claims 2 and 3 are two
+separately measured demonstrations that the structure can be reused. The full argument is in
 `central_insight_and_mechanism.md`.
 
 ## Which documents are authoritative
 
-For every number, `results/*.csv` is the authoritative source: where a document in
-`docs/` disagrees with a result file, the result file wins. The per-claim folders
-`docs/claim1/`, `docs/claim2/` and `docs/claim3/` are the current explanation of each
-claim. Some documents refer by title to the project's internal development notes (for
-example "the development notes" or a named note). Those notes are the project's working
-record. They are not part of this repository, and nothing in `docs/` depends on reading
-them.
+For every number, the CSV files in `results/` are the authoritative source. Where a document in
+`docs/` disagrees with a result file, the result file wins. The folders `docs/claim1/`,
+`docs/claim2/` and `docs/claim3/` are the current explanation of each claim. Some documents refer
+by title to the project's internal working notes. Those notes are not part of this repository and
+nothing in `docs/` depends on reading them.
 
-## File index — where to go next
+## File index
 
-- `technical_architecture.md` — the container format and the assembly
-  pipeline itself (chaining, pigeonhole mapping, MAXMAP ramp, second
-  region, MEM self-match) — HOW the archive is built, independent of any
-  one claim's results
-- `central_insight_and_mechanism.md` — the one mechanism tying all three
-  claims together
-- `novelty_and_prior_art.md` — honest, cross-claim comparison to PgRC2,
-  BEETL/CIndex/sFASTQ, DiscoSNP++/Kmer2SNP, SPAdes/bwa
-- `honest_limitations_and_scope.md` — every real trade-off, withdrawn
-  number, and scope limit, in one place
-- `numbers_and_verification_index.md` — master index of every headline
-  number with source and verification status
-- `claim1/`, `claim2/`, `claim3/` — per-claim detail folders
+- `technical_architecture.md`: the container format and the assembly pipeline (chaining,
+  pigeonhole mapping, the MAXMAP ramp, the second region, MEM self-match). How the archive is
+  built, independent of any one claim's results.
+- `central_insight_and_mechanism.md`: the mechanism shared by all three claims.
+- `novelty_and_prior_art.md`: comparison with PgRC2, BEETL, CIndex, sFASTQ, DiscoSNP++, Kmer2SNP,
+  SPAdes and bwa.
+- `limitations_and_scope.md`: trade-offs, withdrawn numbers and scope limits in one place.
+- `numbers_and_verification_index.md`: index of every headline number with its source and
+  verification status.
+- `configuration_reference.md`: every environment variable and positional argument.
+- `claim1/`, `claim2/`, `claim3/`: per-claim detail.

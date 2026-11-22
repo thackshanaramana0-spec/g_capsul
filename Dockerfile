@@ -26,7 +26,7 @@
 # on every push -- see .github/workflows/ci.yml's docker job): compressed and
 # decompressed a real FASTQ through these two commands, reconstructed the
 # 4-line records from the separate seq/names/qual outputs the same way
-# scripts/benchmark_scripts/benchmark_1_run.sh's own losscmp does, and confirmed byte-identical.
+# scripts/benchmark_scripts/benchmark_1_run.sh's own losscmp does, and confirmed the sorted records identical.
 
 FROM ubuntu:24.04 AS build
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -37,6 +37,7 @@ COPY CMakeLists.txt ./
 COPY src/ src/
 COPY include/ include/
 COPY thirdparty/ thirdparty/
+COPY tests/ tests/
 RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
     && cmake --build build -j"$(nproc)"
 

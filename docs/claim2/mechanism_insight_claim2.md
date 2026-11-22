@@ -1,21 +1,6 @@
----
-Date: 2026-09-19
-Title: How Claim 2 Connects to the Paper's Central Insight — Mechanism,
-  Not a Separate Achievement. Honest DiscoSNP++/Kmer2SNP Capability Check.
-Purpose: The synthesis file for Claim 2. Explains why archive-native
-  calling working at all is not a coincidence but the same mechanism
-  Claim 3/T3.5 demonstrates for retrieval, and gives an honest,
-  capability-checked (not guessed) account of why DiscoSNP++ and Kmer2SNP
-  cannot do what T2.4/T2.5 measure.
-When to refer to this file: Writing the discussion section connecting
-  Claim 2 to Claim 3 and the paper's thesis; answering "why does calling
-  from a compression-optimized archive work at all"; checking whether a
-  DiscoSNP++/Kmer2SNP limitation claim is verified or assumed.
-Keywords: insight, mechanism, reconciliation, collapse, allele splitting,
-  build_substrate, DiscoSNP++, Kmer2SNP, bubble, multi-allelic, structural
----
-
 # How Claim 2 connects to the paper's actual insight
+
+> Mechanism of Claim 2: how archive-native calling relates to the mechanism behind Claim 3 retrieval, with the capabilities of comparator tools checked against their documentation.
 
 ## The insight, restated from the Claim 3 mechanism file, applied here
 
@@ -98,7 +83,7 @@ that belongs in the paper's discussion connecting Claim 1's efficiency to
 Claim 2's accuracy — they are not independent achievements, one enables the
 other's fix to be necessary and sufficient.
 
-## T2.4 (multi-allelic) is the sharpest instance of this, not a bonus table
+## T2.4 (multi-allelic) is the clearest instance of this, not a bonus table
 
 A multi-allelic site is the same phenomenon at higher order: not two
 versions of a locus to reconcile, but three or more. The manuscript's own
@@ -114,32 +99,30 @@ independent confirmation.
 ## Historical scale gap, and its resolution — verified against the Claim 2 final-verdict note in full, not just its superseded-numbers banner
 
 That document's own "Final verdict" section (written before the 2026-09-10
-sweep) states plainly: *"Claim 2 should be described as validated on a
+sweep) states: *"Claim 2 should be described as validated on a
 representative sample, not validated at the stated scale... the full 30x
 chr20 per individual run has never been executed."* At that point every
 Claim 2 number was measured on a ~75K-read chr20 *window*, not a full
 individual. **This is resolved, not still open**: the same document's own
 superseded-numbers table (top of file) labels the final figures explicitly
-as *"full chr20, called from the archive"*, and this session's own T2.1-T2.5
+as *"full chr20, called from the archive"*, and the T2.1-T2.5
 CSV cross-check (`t21_snv_claim2.md` etc.) confirms full-chromosome-scale
 counts (e.g. 37,011 TP on HG002, not a ~75K-window-sized count). State this
-resolution explicitly if the paper's methods section needs to address
-"was this validated at claimed scale" — the honest answer is yes, now,
-where it was not at an earlier point in the project's history.
+resolution if the methods section needs to address
+"was this validated at claimed scale": the answer is yes now, and it was not at an earlier point in
+the project's history.
 
-## A real, undissolved limit on how deeply this mechanism has been code-audited
+## Limit on how deeply this mechanism has been code-audited
 
 The same document states: *"no algorithmic audit at the depth of Claim 3's
-was performed on `caps_caller.h`"* — at 2,132 lines when written. **This
-session found the file at 6,908 lines** — real growth since that audit
-gap was recorded, meaning even the limited prior scrutiny does not cover
-everything currently in the file. This directly reinforces, rather than
-contradicts, this file's own earlier caveat: `build_substrate` and
+was performed on `caps_caller.h`"* — at 2,132 lines when written. **The file
+later measured 6,908 lines**, so even the limited prior scrutiny does not cover everything
+currently in the file. This reinforces this file's earlier caveat: `build_substrate` and
 `collapse_contigs` being the ablation's mechanism is a strong,
 naming-and-commit-history-based inference, not a confirmed fact — and the
-honest reason a deeper confirmation hasn't happened is that no audit at
+reason a deeper confirmation hasn't happened is that no audit at
 that depth has ever been performed on this file, by anyone, at any point in
-the project's history. This is worth stating plainly rather than
+the project's history. This is worth stating rather than
 implying more rigor was applied than actually was.
 
 ## Two indel failure-mode findings, verified from a from-scratch re-scan
@@ -171,7 +154,7 @@ position — not a missed candidate, not a locus mismatch, but a
 length-change-direction error at what is almost certainly a poly-T
 homopolymer, where two locally-plausible interpretations both fit the read
 data and the wrong one was resolved. Occurred once in this window (1 of 16
-FPs), reported as a genuinely distinct failure class and a concrete,
+FPs), reported as a distinct failure class and a concrete,
 explicitly unresolved follow-up question — whether `extract_bubble`/
 `scan_pair` (`caps_caller.h`) has a systematic insertion-vs-deletion bias
 specifically at tandem-repeat loci — not as a conclusion this scan had the
@@ -201,7 +184,7 @@ not after a number was published from it — the default was changed to
 match every validated configuration, and a bare run was re-verified to
 reproduce the exact previously-reported TP/FP/FN afterward.
 
-## Honest capability check: could DiscoSNP++ or Kmer2SNP be extended to do this?
+## Capability check: could DiscoSNP++ or Kmer2SNP be extended to do this?
 
 **Kmer2SNP**: no indel model, no multi-allelic model, by construction — it
 is a k-mer-graph SNV caller. This is stated as a structural limitation in
@@ -215,8 +198,8 @@ impossibility, and the paper should reflect that distinction.
 
 **DiscoSNP++**: its 0/26 on T2.4 is explained by output schema (bubble
 records are inherently biallelic — one REF, one ALT per bubble), which is
-a real, checkable architectural property of a bubble-based caller, not
-guessed. **This has NOT been verified this session by reading DiscoSNP++'s
+a checkable architectural property of a bubble-based caller, not
+guessed. **This has NOT been verified by reading DiscoSNP++'s
 own source** — it is inferred from its documented output format and its
 observed behavior (0 multi-allelic records across 3,989 total emitted, on
 data where the truth set demonstrably contains 26 multi-allelic sites).
@@ -225,7 +208,7 @@ rigor as the PgRC2 source-code check in Claim 3's mechanism file, and the
 paper should not claim it as verified from DiscoSNP++'s own code unless
 that check is actually done.
 
-## The honest, precise paragraph for the paper's discussion section
+## Summary paragraph for the paper's discussion section
 
 *Claim 2's calling results are not independent of Claim 1's compression
 mechanism — they are its direct consequence, reversed. The same

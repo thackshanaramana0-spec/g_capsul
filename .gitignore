@@ -1,9 +1,7 @@
-# Working history, paper drafts, and internal notes -- kept on this machine
-# only, never pushed. The root of this repo is the clean, code+results+docs
-# view; everything else this project produced during development lives here.
+# Local working files (drafts and internal notes). Not part of the repository.
 local/
 
-# Compiled encoders (regenerate: scripts/core_test_scripts/build106.sh)
+# Compiled encoders (regenerate: scripts/build_scripts/build106.sh)
 best*
 *.o
 *.so
@@ -37,9 +35,8 @@ out.arcs2
 *.arcs2
 
 # Benchmark run outputs: archives (hundreds of MB), decoded reads, competitor
-# archives and scratch. GitHub rejects blobs over 100 MB, and a 547 MB .capsule
-# from one sanity run got swept in by `git add -A` and hard-rejected the push.
-# The CSVs and logs are what belong in the repo, not the artefacts themselves.
+# archives and scratch. GitHub rejects files over 100 MB. The CSVs are kept in
+# the repository, not the artefacts themselves.
 results/sanity_*/
 results/benchmark_1_*/
 *.capsule
@@ -47,18 +44,12 @@ results/benchmark_1_*/
 *.genozip
 bin/
 
-# 154 MB regenerable caller output; swept in by a git add -A on 2026-09-08
-# and it made the whole branch unpushable (GitHub caps files at 100 MB).
+# Regenerable caller output (can exceed GitHub's 100 MB file limit).
 out.vcf
 *.vcf
 
-# Preserved raw evidence for reproduction audits. The blanket *.log rule above
-# would silently exclude these, leaving a README that cites logs nobody else
-# can see -- caught 2026-09-10 when exactly that happened to the T2.4 and T3.4
-# audit directories. These are small, they ARE the evidence, and they are the
-# one class of .log this repository must keep.
+# Preserved raw evidence for reproduction audits. The *.log rule above would
+# otherwise exclude these small evidence logs.
 !benchmark/documentation/*_reproduction_*/*.log
-# Same reasoning for the small truth/evidence VCFs preserved alongside them:
-# the blanket *.vcf rule would exclude the very file a correction cites as
-# proof of what the original experiment actually measured.
+# Same for the small truth and evidence VCFs kept alongside them.
 !benchmark/documentation/*_reproduction_*/*.vcf

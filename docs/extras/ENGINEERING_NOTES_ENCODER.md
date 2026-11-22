@@ -1,6 +1,6 @@
 # Engineering notes: the encoder (src/encoder.cpp)
 
-Long explanatory comments from `src/encoder.cpp` that were condensed in the source during the documentation revision. They are kept here word for word because they record measurements, rejected approaches and the reasoning behind design choices. The source keeps a short statement of each conclusion. `STAGE n` labels in these notes are the project's own numbering of the experiment that introduced a block. They are not stages of the program.
+Long explanatory comments from `src/encoder.cpp` that were condensed in the source during the documentation revision. They are kept here in their original wording, with references to individual working sessions removed, because they record measurements, rejected approaches and the reasoning behind design choices. The source keeps a short statement of each conclusion. `STAGE n` labels in these notes are the project's own numbering of the experiment that introduced a block. They are not stages of the program.
 
 
 The quoted text is unedited, so it can name working documents (for example under `docs/_removable/`, or a `docs/*.md` that is not in this repository) and sibling code (ARCS, PgRC2) that are not shipped here. Those names are provenance only. Nothing in the code or the paper depends on them.
@@ -9,7 +9,7 @@ The quoted text is unedited, so it can name working documents (for example under
 
 Source: `src/encoder.cpp`, lines 636-668 before the documentation revision.
 
-Original comment, verbatim:
+Original comment:
 
 ```
     // Sweep seed width. 32 bases fills a uint64 exactly, which is why it was
@@ -70,7 +70,7 @@ What the code now says:
 
 Source: `src/encoder.cpp`, lines 1219-1256 before the documentation revision.
 
-Original comment, verbatim:
+Original comment:
 
 ```
     // ── GRAPH HARVEST -- REFUTED BY ITS OWN MEASUREMENT, kept instrumented ──
@@ -138,7 +138,7 @@ What the code now says:
 
 Source: `src/encoder.cpp`, lines 2431-2516 before the documentation revision.
 
-Original comment, verbatim:
+Original comment:
 
 ```
         // Part width must SCALE with the tolerance, not stay pinned at 32.
@@ -261,7 +261,7 @@ What the code now says:
 
 Source: `src/encoder.cpp`, lines 3441-3471 before the documentation revision.
 
-Original comment, verbatim:
+Original comment:
 
 ```
     // ── STAGE 22: the order permutation (their stage 6) ─────────────────────
@@ -318,7 +318,7 @@ What the code now says:
 
 Source: `src/encoder.cpp`, lines 3474-3514 before the documentation revision.
 
-Original comment, verbatim:
+Original comment:
 
 ```
         // STAGE 100 SIZE FIX -- position/strand/length were being stored once
@@ -349,7 +349,7 @@ Original comment, verbatim:
         // needed at all), which gives the same real total with less
         // complexity and no permutation-cost risk on other datasets.
         // STAGE 100 SIZE FIX ROUND 3 -- real, established, "not flashy"
-        // technique (confirmed this session: DEFLATE itself picks per-block
+        // technique (confirmed: DEFLATE itself picks per-block
         // between stored/static-Huffman/dynamic-Huffman, keeping whichever
         // is smaller -- the exact same "try a plain encoding, keep it if
         // smaller" philosophy, decades-proven, not invented here). Tested
@@ -382,7 +382,7 @@ What the code now says:
 
 Source: `src/encoder.cpp`, lines 4094-4150 before the documentation revision.
 
-Original comment, verbatim:
+Original comment:
 
 ```
         // STAGE 100 REWRITE -- the two separate per-region c[]/cr[] coverage
@@ -394,13 +394,13 @@ Original comment, verbatim:
         // but actual covered POSITIONS did not -- every reconstructed read
         // came out wrong, 0/15424 on a real decode attempt, even for reads
         // with zero mismatches). Root cause: `allrefs` contains redundant,
-        // overlapping candidate matches (this session found 17,343 exact
-        // duplicate destinations on real E. coli data) with no way to
+        // overlapping candidate matches (17,343 exact duplicate
+        // destinations were found on real E. coli data) with no way to
         // recover, from the dump alone, which ones the ORIGINAL c[]/cr[]
         // merge actually kept.
         //
-        // Fix, matching PgRC2's real, proven design exactly (SimplePgMatcher
-        // .cpp:85-160, read line by line this session): sort ALL matches
+        // Fix, following the PgRC2 design (SimplePgMatcher
+        // .cpp:85-160, read line by line): sort ALL matches
         // (both regions, forward+RC, now unified in one `allrefs` with a
         // real is_rc flag -- previously missing entirely) by destination,
         // then walk them TRIMMING overlap with already-consumed territory
@@ -465,4 +465,71 @@ What the code now says:
         // overlap falls at a tail edge also end up leftover, not just true low-coverage gaps. It
         // applies to the main self-match and the second-region CROSS match only. The SECOND_SELF
         // pass stays at 0: it already loses economically at 0 and more matches would worsen that.
+```
+
+## N-containing reads must be stored
+
+Source: `src/encoder.cpp`, lines 822-837 before the documentation revision.
+
+Original comment:
+
+```
+    // STAGE 100 -- real, previously-undisclosed data-loss bug: N-containing
+    // reads were `continue`'d here with NO storage anywhere, in every stage
+    // from 87 through 98. Caught only because a direct question ("how can
+    // this be byte-identical if reads are being dropped") forced a check of
+    // what "round trip: VERIFIED" actually meant throughout this project --
+    // it was always coder-level (does the entropy coder correctly decode ITS
+    // OWN dumped intermediate file), never a genuine original-FASTQ-to-
+    // decoded-FASTQ comparison. Two different builds both silently dropping
+    // the same reads still match each other byte-for-byte; that was mistaken
+    // for correctness against the source file, which was never actually
+    // tested. Fixed here for real: N-containing reads are stored (full raw
+    // sequence text, since 2-bit packing can't represent a 5th symbol) in
+    // n_reads.txt, one per line, plus their ORIGINAL read index (needed to
+    // splice them back into the right position on decode) in n_indices.bin
+    // as raw LE uint32 -- gated on DUMP_LIT since this is a literal-sequence
+    // sibling stream, following the project's existing DUMP_* convention.
+```
+
+What the code now says:
+
+```
+    // STAGE 100 -- N-containing reads must be STORED, not skipped. Skipping them is
+    // silent data loss that a coder-level round trip (decoding the coder's own
+    // intermediate file) cannot detect; only comparing the decoded FASTQ with the
+    // original input does. Each N is replaced by 'A' for the 2-bit pipeline (see
+    // STAGE 105 below) and recorded in three side streams:
+```
+
+## Candidate mkdir/chdir failure
+
+Source: `src/encoder.cpp`, lines 1923-1933 before the documentation revision.
+
+Original comment:
+
+```
+                // A failed mkdir/chdir here previously only perror()'d and
+                // continued -- this candidate would then run in whatever
+                // directory the process was already in, silently writing its
+                // dump/archive files into another candidate's directory (or
+                // the caller's cwd) instead of failing. Found by comparison
+                // against PgRC2's pgrc-encoder.cpp, which treats an
+                // equivalent mkdir failure as fatal. The parent already
+                // tolerates a failed candidate (waitpid/WEXITSTATUS, excludes
+                // it from the size comparison) -- exiting this child cleanly
+                // routes into that existing, already-correct handling instead
+                // of silently corrupting where output lands.
+```
+
+What the code now says:
+
+```
+                // A failed mkdir/chdir is fatal for this candidate: otherwise it would
+                // run in whatever directory the process is in and write its dump and
+                // archive files into another candidate's directory (or the caller's
+                // cwd). PgRC2's pgrc-encoder.cpp also treats an equivalent mkdir
+                // failure as fatal. The parent already tolerates a failed candidate
+                // (waitpid/WEXITSTATUS, excluded from the size comparison), so the
+                // child exits and that handling applies.
 ```

@@ -1,14 +1,6 @@
----
-Date: 2026-09-19
-Title: T2.2 — Het-SNV F1 as a Function of Sequencing Depth (HG002)
-Purpose: Complete, verified record of T2.2's numbers and why it is a
-  sensitivity curve, not a win/loss table.
-When to refer to this file: Writing/checking T2.2's table or text;
-  answering "why does T2.2 have no comparator column."
-Keywords: T2.2, coverage sweep, depth, sensitivity, HG002, seqtk
----
-
 # T2.2 — Coverage Sweep
+
+> Record of the T2.2 numbers. The table is a sensitivity curve, not a win/loss comparison.
 
 ## What it measures
 
@@ -38,7 +30,7 @@ point. Framing it as a "T2.2 vs DiscoSNP++ at four depths" table would
 require running the same sweep for DiscoSNP++, which was not done and is
 not claimed.
 
-## What the shape of the curve says, honestly
+## What the shape of the curve says
 
 Recall is the limiting factor at low coverage, not precision — consistent
 with fewer reads meaning fewer overlapping-read opportunities to detect an

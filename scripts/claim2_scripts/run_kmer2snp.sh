@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # FULL-SCALE Claim 2 competitor arm: Kmer2SNP on the whole chr20 at 30x.
 #
-# Third arm of T3, alongside run_fullchr20_archive_capsule.sh (ours) and
+# Third arm of T3, alongside run_fullchr20_archive_capsule.sh (G_CAPSUL) and
 # run_fullchr20_bench_disco.sh (DiscoSNP++). The truth set, the confident
 # regions, the normalise-then-classify order and the rtg vcfeval call are
 # COPIED VERBATIM from the DiscoSNP++ arm -- the only thing that differs is
@@ -30,7 +30,7 @@
 #
 # ── THE PARAMETERS ARE DERIVED, NOT COPIED ────────────────────────────────
 # Standing rule 1: a formula over a measured property of the input, never a
-# fitted constant. From the k-mer count histogram we take C, the homozygous
+# fitted constant. From the k-mer count histogram the script takes C, the homozygous
 # coverage peak (the mode above the error valley). Heterozygous k-mers occur at
 # ~C/2 because only one haplotype carries them, so the het band is centred
 # there:
@@ -40,18 +40,17 @@
 # derives C=20, c1=5, c2=15 -- c1 exact, the others within one. Recorded as
 # measured; NOT tuned to match, which would make it a fitted constant.
 #
-# `--r`, the heterozygosity rate, is the one value we do not derive: findGSE
+# `--r`, the heterozygosity rate, is the one value not derived here: findGSE
 # estimated 0.001 on that run, which is also the textbook human autosomal
-# heterozygosity. It is passed as HET_RATE and declared, not hidden.
+# heterozygosity. It is passed as HET_RATE and printed in the log.
 #
-# ── WHAT THE PUBLISHED 0.464 ACTUALLY MEASURED ────────────────────────────
-# The Kmer2SNP F1 of 0.464 quoted in this project comes from
-# /root/k2s_win/HG002_r2 (2026-09-02): TP=121, FP=1, FN=279 -- i.e. 400 truth
-# variants. Full chr20 carries 44,575 het SNVs. That number is therefore a
-# ~1% WINDOW of chr20, not the whole-chromosome evaluation our 0.888 and
-# DiscoSNP++'s 0.847 come from. Quoting all three in one table without
-# re-running Kmer2SNP at full scale would compare different experiments. This
-# script exists to remove that asymmetry.
+# ── WHY THIS SCRIPT EXISTS ─────────────────────────────────────────────────
+# An earlier Kmer2SNP F1 was measured on a ~1% window of chr20 (HG002 r2:
+# TP=121, FP=1, FN=279, 400 truth variants), while full chr20 carries 44,575 het
+# SNVs and G_CAPSUL and DiscoSNP++ were scored on the whole chromosome. This
+# script runs Kmer2SNP on full chr20 so all three tools are scored in the same
+# experiment; the Kmer2SNP rows of results/claim2/claim2_T2.1_snv.csv come from
+# it (HG002 full-chr20 F1 0.464, TP=13,565).
 set -u
 T_START=$(date +%s)
 log(){ echo "[kmer2snp] $(date '+%H:%M:%S') $*"; }

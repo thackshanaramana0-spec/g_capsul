@@ -13,7 +13,7 @@
 # the truth this script itself generated -- not hand-computed pg bytes.
 #
 # This is NOT a replacement for the real GIAB benchmark (real human
-# homopolymer/STR indel behavior cannot be synthesized honestly). It exists to catch "the caller crashed" or "the
+# homopolymer/STR indel behavior cannot be synthesized realistically). It exists to catch "the caller crashed" or "the
 # caller stopped finding anything" regressions cheaply, on every change,
 # without needing real data on hand.
 #

@@ -113,10 +113,10 @@ log "[5/6] done -- $(awk '{n+=$3-$2}END{print n+0}' regions.bed) confident bp in
 # `bcftools norm -m -any` has split multi-allelic records, so $5 is always a
 # SINGLE allele here and a plain length test is correct.
 #
-# BUG FIXED 2026-09-03: these filters used to
-# run BEFORE normalisation, on the raw ALT field. A genuine multi-allelic SNV
+# ORDER MATTERS: these filters run AFTER normalisation. On the raw ALT field
+# a genuine multi-allelic SNV
 # (`T -> C,A`, which CAPSULE emits natively and is its own T5.2 capability)
-# has an ALT *string* of length 3, so `length($5)!=1` classified it as an
+# has an ALT *string* of length 3, so `length($5)!=1` would classify it as an
 # INDEL; `bcftools norm -m -any` then split it into two SNV-shaped rows that
 # sat in the INDEL call set and scored as indel false positives. Measured on
 # HG002 r2: 4 of 16 indel FPs were multi-allelic SNVs misfiled this way.

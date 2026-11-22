@@ -1,15 +1,6 @@
----
-Date: 2026-09-19
-Title: T2.1 — Heterozygous SNV Calling vs DiscoSNP++ and Kmer2SNP
-Purpose: Complete, verified record of T2.1's numbers, comparators, and the
-  one honest exception (HG005).
-When to refer to this file: Writing/checking T2.1's table or text; citing
-  any het-SNV F1 number; explaining the comparator choice.
-Keywords: T2.1, het-SNV, DiscoSNP++, Kmer2SNP, F1, GIAB, rtg vcfeval,
-  squash-ploidy, chr20
----
-
 # T2.1 — Heterozygous SNV Calling
+
+> Record of the T2.1 numbers and comparators, including the one dataset where G_CAPSUL does not win (HG005).
 
 ## What it measures
 
@@ -36,13 +27,13 @@ more true positives at a small precision cost. Kmer2SNP is the opposite
 extreme: very high precision (0.978-0.984) but very low recall (0.30-0.34),
 consistent with a SNV-only, conservative-candidate-generation design.
 
-## The honest exception — HG005
+## The exception — HG005
 
 DiscoSNP++ wins F1 on HG005 (0.863 vs 0.834) — the only individual where
 this happens in T2.1. Precision is the driver: ours drops to 0.899 on
 HG005 (vs 0.956-0.958 on the other three) while recall stays comparable
-(0.777 vs 0.830-0.835). This is stated plainly in the CSV and should be
-stated plainly in the paper — do not average it away or omit the row.
+(0.777 vs 0.830-0.835). This is stated in the CSV and should be
+stated in the paper — do not average it away or omit the row.
 
 ## Why DiscoSNP++ and Kmer2SNP are the right comparators, not a weak set
 
@@ -54,7 +45,7 @@ requires a reference genome, which would make the comparison apples-to-
 oranges against a reference-free method. Kmer2SNP is included because it is
 also reference-free and SNV-capable, giving a second, independent
 reference-free baseline — even though its very low recall means it is not
-competitive, including it is honest rather than cherry-picking the stronger
+competitive, including it avoids selecting only the stronger
 comparator alone.
 
 ## What this table does and does not establish

@@ -77,7 +77,7 @@ inline std::string pack_qual(const char* d, size_t nd, int qmin){
 
 // Sequence -> the caller's packed form. Mirrors caps_caller.h::unpack_read.
 // Same format as pack_seq(const char*, size_t) above, written out a second time.
-// No caller uses it today (callers go through pack_seq(const std::string&), which
+// No caller currently uses it (callers go through pack_seq(const std::string&), which
 // forwards to the range overload), so any change to the format must be made in
 // both or this one removed.
 inline std::string pack_seq_str(const std::string& b){
