@@ -7,7 +7,7 @@
 [![Lossless](https://img.shields.io/badge/lossless-byte--exact-brightgreen.svg)](#results)
 
 <p align="center">
-  <a href="Figures/graphical_abstract.pdf"><img src="Figures/graphical_abstract.png" alt="Graphical abstract: Assemble, Retain, Compress and Harness. Reads are chained into a pseudogenome, the placements and deviations are retained, G_CAPSUL compresses them losslessly, and the archive is used for heterozygous variant calling and biological locus retrieval." width="100%"></a>
+  <a href="Figures/graphical_abstract.pdf"><img src="Figures/extras/graphical_abstract.png" alt="Graphical abstract: Assemble, Retain, Compress and Harness. Reads are chained into a pseudogenome, the placements and deviations are retained, G_CAPSUL compresses them losslessly, and the archive is used for heterozygous variant calling and biological locus retrieval." width="100%"></a>
 </p>
 <p align="center"><sub>Graphical abstract. The ARCH principle, Assemble, Retain, Compress and Harness. <a href="Figures/graphical_abstract.pdf">Vector version (PDF)</a>.</sub></p>
 
@@ -61,8 +61,8 @@ three purposes:
 
 ## Key Features
 
-- **Lossless reconstruction**: sequence, read order, identifiers, quality scores, and line-3 mode are preserved for supported input (see [Input requirements](#input-requirements)). Every reported archive was decoded and its records compared with the original input.
-- **Smallest complete lossless archive** across 19 real datasets totaling 59.1 GB of FASTQ, with **19/19 wins against SPRING and 19/19 against Genozip**. Across all three tools, **57/57 archives reconstructed to byte-identical input**.
+- **Lossless reconstruction**: sequence, read order, identifiers, quality scores, and line-3 mode are preserved for supported input (see [Input requirements](#input-requirements)). Every reported archive was decoded and its records compared with the original input. G_CAPSUL supports byte-identical FASTQ reconstruction.
+- **Smallest complete lossless archive** across 19 real datasets totaling 59.1 GB of FASTQ, with **19/19 wins against SPRING and 19/19 against Genozip**, and **byte-identical** reconstruction.
 - **Reference-free variant calling from the archive** without returning to the original FASTQ, using a reference genome, or building a second assembly. Across four GIAB individuals, heterozygous-SNV mean F1 reached **0.876**, compared with 0.853 for DiscoSNP++ and 0.475 for Kmer2SNP.
 - **Multi-allelic and higher-ploidy support**: G_CAPSUL recovered **17/26** multi-allelic sites in the complete chromosome-20 census, while DiscoSNP++ produced no complete multi-allelic records. On a tetraploid dataset formed from real HG003 and HG004 reads, G_CAPSUL achieved SNV F1 **0.897** versus 0.782.
 - **Archive-level addressability**: pseudogenome export was **129–784×** faster than SPAdes, and per-base coverage was **16–54×** faster than BWA+mosdepth. The `query` operation also recovers both allelic read sets at heterozygous loci even when compression separates them across different pseudogenome coordinates, succeeding at **1,452 of 1,452** tested sites across four individuals at one chr20 locus. An FM-index built from the archive after compression returns every read containing a query sequence (exact-match recall **1.0000** on all four), without changing the archive.
@@ -100,7 +100,7 @@ thirdparty/       vendored PPMd7, FSE/Huf0, htscodecs/fqzcomp, each under its ow
 results/          the reported numbers: per-claim CSVs plus generated plots
 docs/             reference documentation: claim1/, claim2/, claim3/, the mechanism,
                   novelty, limitations and configuration documents, and docs/extras/
-Figures/          the manuscript figures (PDF), graphical abstract, and extras/ (TIFF and PNG versions)
+Figures/          the manuscript figures (PDF), graphical abstract, and extras/ (TIFF and PNG versions, graphical abstract PNG, highlights)
 ```
 
 | you want | go to |
@@ -366,8 +366,9 @@ a usable archive requires (see [Configuration](#configuration)). CI builds the i
 checks a round trip on every push ([`.github/workflows/ci.yml`](.github/workflows/ci.yml),
 [`.github/workflows/publish-image.yml`](.github/workflows/publish-image.yml)).
 
-The comparison tools used in the benchmarks (SPRING, Genozip, PgRC2, DiscoSNP++, Kmer2SNP,
-SPAdes, bwa, samtools, mosdepth, rtg-tools) are installed separately; exact commands are in
+The comparison tools used in the benchmarks (SPRING, Genozip, DiscoSNP++, Kmer2SNP with KMC,
+SPAdes, bwa, samtools, mosdepth, bcftools, rtg-tools, and PgRC2 for the separate sequence-only
+comparison above) are installed separately; exact commands are in
 [`docs/extras/SERVER_SETUP_AND_DOWNLOADS.md`](docs/extras/SERVER_SETUP_AND_DOWNLOADS.md).
 
 ---

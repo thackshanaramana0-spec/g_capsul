@@ -26,7 +26,7 @@ g_capsul/
 ├── thirdparty/       vendored dependencies (never modified, never claimed as ours)
 ├── results/          raw CSVs and plots behind every number in the paper
 ├── docs/             this folder — the curated, cross-checked reference tree
-└── Figures/          the four manuscript figures (Fig1.pdf–Fig4.pdf), the graphical abstract, and extras/ with the earlier TIFF and PNG versions
+└── Figures/          the four manuscript figures (Fig1.pdf–Fig4.pdf), the graphical abstract, and extras/ with the earlier TIFF and PNG versions, the graphical abstract PNG and the highlights file
 ```
 
 Each of the three claims below is a row in three tables: what the claim

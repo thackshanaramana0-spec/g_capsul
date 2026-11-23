@@ -65,9 +65,13 @@ run for every accession in the locked list):
 ```bash
 DATA_DIR=/data/fastq
 prefetch --output-directory "$DATA_DIR/prefetch" "$ACCESSION"
-fasterq-dump --split-files --threads "$(nproc)" \
+fasterq-dump --threads "$(nproc)" \
     -O "$DATA_DIR" "$DATA_DIR/prefetch/$ACCESSION/$ACCESSION.sra"
-# fasterq-dump emits ${ACCESSION}.fastq for single-end; rename to _1.fq
+# Default mode. For paired runs it writes ${ACCESSION}_1.fastq and ${ACCESSION}_2.fastq, and
+# writes reads that have no mate to ${ACCESSION}.fastq. Keep ${ACCESSION}_1.fastq as _1.fq.
+# Do not add --split-files: it keeps reads without a mate in the first-mate file, which then
+# no longer matches the recorded sizes (ERR5181310: 472,726,004 bytes with --split-files,
+# 471,183,048 bytes in default mode, which is the recorded size).
 ```
 
 **For the two large datasets (C. elegans SRR065390 ~22GB, T. cacao
@@ -190,7 +194,8 @@ specifically.
 | **PgRC2** | git clone, GPL-3, never vendored | `git clone https://github.com/kowallus/PgRC.git` at `/root/arcs-clean/method_c` (renamed on clone). Build per its own CMake instructions. |
 | **DiscoSNP++** | v2.6.2-12 (per the DiscoSNP++ comparison note) | `git clone https://github.com/GATB/DiscoSnp.git` at `/root/DiscoSnp`. Build with its own `./INSTALL` or CMake script; needs `-G <ref.fa>` at run time (mandatory, not optional — see the development notes' command reference). |
 | **Kmer2SNP** | — | `git clone https://github.com/yanboANU/Kmer2SNP.git` at `/root/Kmer2SNP`. **Real compatibility fixes required** for this 2020-era code on a modern Python (documented in full in the Kmer2SNP benchmark note): `time.clock()` → `time.perf_counter()` (Python 3.8 removed the former), `networkx.connected_component_subgraphs` → a documented generator-expression equivalent (removed in networkx 2.4+), and `findGSE` (an R package) bypassed via Kmer2SNP's own documented `--c1/--c2/--r` flags with data-derived values from a k-mer histogram, rather than installing R. |
-| **DSK** | v2.3.3 | `git clone https://github.com/GATB/dsk.git` at `/root/dsk`. Kmer2SNP's driver script hardcodes a `/path2dsk/` placeholder — must be pointed at the real built binary after cloning. |
+| **KMC** | 3.2.4 | `apt-get install kmc`. The k-mer counter used for Kmer2SNP in the reported results, in place of DSK (see `scripts/claim2_scripts/run_kmer2snp.sh`). |
+| **DSK** | v2.3.3 | Not used in the reported results. Kmer2SNP's own driver script hardcodes a `/path2dsk/` placeholder, so KMC replaces it. |
 | **MEGAHIT** | 1.2.9-5 | `apt-get install megahit` — a real Ubuntu package, no manual build needed. |
 | **SPAdes** | v4.0.0 | **Prebuilt binary, not apt** (no current Ubuntu package tracks the latest release): `curl -sL https://github.com/ablab/spades/releases/download/v4.0.0/SPAdes-4.0.0-Linux.tar.gz -o spades.tar.gz && tar xzf spades.tar.gz` — installed this way at `~/SPAdes-4.0.0-Linux/`, verified working (real 239-contig E. coli assembly, the Claim 3 locked-results note §6.2). |
 | **bwa / samtools / mosdepth / tabix / bcftools** | see §0 table | plain `apt-get install`, no manual build for any of these. |

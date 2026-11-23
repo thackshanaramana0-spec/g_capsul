@@ -153,4 +153,4 @@ then reconstructs sequence, restores `N`s, and only then decodes names
 (feeding it the already-decoded `read_lengths` for `ID_SEQLEN`) and quality
 (same, for record boundaries). A full 4-line FASTQ assembled from all four
 decoder outputs, with no reference to the original file, has been verified
-**byte-identical (same MD5)** against the original input.
+**byte-identical (same MD5)** against the original input. G_CAPSUL supports byte-identical FASTQ reconstruction.
