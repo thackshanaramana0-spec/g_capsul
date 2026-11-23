@@ -48,7 +48,7 @@
   restriction to GIAB confident regions are standard conventions.
 - **T3.1 and T3.2 use 6 of the 19 locked datasets. T3.3 uses all 19.** T3.1 and T3.2 need an
   external tool (SPAdes, bwa) to also succeed on the same dataset. T3.3 needs nothing external.
-  This is disclosed in commit `e746bc8`.
+  This is disclosed in commit `c73753f`.
 - **T2.5 (tetraploid) is a 400 kb region, not a full chromosome**, as the manuscript's table
   caption states. Do not imply chromosome scale for this table.
 - **Human whole-genome scale is out of scope.** Full-WGS datasets were excluded as too large. All

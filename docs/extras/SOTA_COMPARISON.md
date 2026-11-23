@@ -42,14 +42,14 @@ queued for download and not included.
 Both tools solve the same core problem (pseudogenome-based read
 compression) with recognizably similar internal stages, so this is the one
 comparison that can be made at the level of individual streams rather than
-whole-archive totals. Source: The PgRC2 reference-coding note,
-`docs/claim1_locked_result` (memory), and PgRC2's own source
-(`/root/arcs-clean/method_c`, read directly, GPL-3, never vendored).
+whole-archive totals. Source: the PgRC2 reference-coding note (not shipped)
+and PgRC2's own source (read directly from a local clone, GPL-3, never
+vendored).
 
 | layer | PgRC2's approach | G_CAPSUL's approach | who wins / how effective |
 |---|---|---|---|
 | **Assembly admission** | Both-side-overlap required (`getBothSidesOverlappedReads`) — a read only joins the pseudogenome if it overlaps well on BOTH sides | Single-pass exact suffix-prefix chaining, admission by overlap length only | Tested PgRC2's rule directly (B.2 in failures doc): WORSE on all 3 datasets tested (+2,845 / +45,746 / +78,597 B). G_CAPSUL's simpler rule wins here. |
-| **Duplicate handling** | Reads sorted, exact duplicates removed for free before assembly | Originally needed a separate pre-assembly dedup array (`orig2uid`) because the sweep started below read length; fixed by starting the sweep AT read length (commit `3e06957`) so duplicates chain naturally | PgRC2's native approach and G_CAPSUL's fixed approach are now equivalent in effect; G_CAPSUL's fix flipped S. acidocaldarius from a loss to a win (pg 9,134,100 → 6,157,270 B) |
+| **Duplicate handling** | Reads sorted, exact duplicates removed for free before assembly | Originally needed a separate pre-assembly dedup array (`orig2uid`) because the sweep started below read length; fixed by starting the sweep AT read length (commit `6596554`) so duplicates chain naturally | PgRC2's native approach and G_CAPSUL's fixed approach are now equivalent in effect; G_CAPSUL's fix flipped S. acidocaldarius from a loss to a win (pg 9,134,100 → 6,157,270 B) |
 | **3-way pseudogenome split** | Splits into 3 physical regions (main / off-target / N-reads-ish groupings) at the disk-persistence layer | Single pseudogenome + one second region (2 total); N's substituted and corrected inline instead of a 3rd structural split | Measured directly (the PgRC2 three-way-split note): G_CAPSUL's 2-region design does NOT need the 3rd split to match or beat PgRC2 — the extra split PgRC2 does is not free headroom G_CAPSUL is missing |
 | **Reference encoding** | `compressRlMisRevOffDest`: per-period streams (period = mismatch count per read), destination/length/rev-comp/offset each their own stream | `mem_triples` (dst/src/len/rc) split the same way (`mem_dstgap`, `mem_len`, `mem_rc` separate streams) — same insight, arrived at independently and later confirmed to match PgRC2's own log output | Tie in structure; G_CAPSUL measured within ~11% of PgRC2 on raw reference byte count and CHEAPER specifically on the length sub-stream |
 | **Mismatch position coding** | Per-period range coder, bucketed by mismatch count | `mmpos_encode_buckets` — same "bucket by count, period-N range coder" idea, PLUS a flat fallback chosen automatically when smaller | G_CAPSUL's positions measured BELOW both order-0 entropy AND count-conditioned entropy — i.e. at or past the theoretical floor for this representation |

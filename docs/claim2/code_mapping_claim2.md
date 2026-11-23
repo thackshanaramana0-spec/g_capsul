@@ -33,7 +33,7 @@ mechanism should still hold even if a line moves.
   the function whose presence/absence is almost certainly what the
   manuscript's ablation (F1 0.431 without collapse/re-placement, 0.888
   with both) is measuring — verify against the het-indel literature survey or the
-  git history around commit `301d1a5` ("Close the indel_pass accounting:
+  git history around commit `1fec5e0` ("Close the indel_pass accounting:
   build_substrate is 54% and is not waste") before stating this as fully
   confirmed rather than strongly inferred.
 - **`collapse_contigs`** (line 632) — the contig-merging step referenced by

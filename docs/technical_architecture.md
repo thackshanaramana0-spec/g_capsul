@@ -23,7 +23,7 @@ prefix exactly matches this read's suffix for at least `MINOV` bases, and
 chains them into one contiguous pseudogenome span instead of two separate
 literal copies. This is single-pass and **exact** — no approximate matching
 in the shipped path. **The most important fix in the project's
-history** (commit `3e06957`): the sweep used to start one base below the read
+history** (commit `6596554`): the sweep used to start one base below the read
 length, which makes an exact duplicate read structurally invisible to
 chaining (two identical 251-base reads only overlap at L=251, not L=250).
 Starting the sweep at the true max length let duplicates chain for free; on

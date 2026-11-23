@@ -305,7 +305,7 @@ not exhaustive.
 
 **Canonical version for citation:** `v1.0.2-capsule`. Five tags were cut on one day. Four of
 the five are identical in code and results to their predecessor and differ only in
-documentation. The last commit that changed any code or result was `7056c4f` (the T2.4
+documentation. The last commit that changed any code or result was `58cc6a9` (the T2.4
 correction). Everything after it is documentation only.
 
 ---

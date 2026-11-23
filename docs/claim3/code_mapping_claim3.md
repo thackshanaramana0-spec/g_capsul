@@ -3,8 +3,8 @@
 > Functions and files in src/decoder.cpp behind each Claim 3 operation, and the source file of every number cited in this folder.
 
 All line numbers are from `src/decoder.cpp` as committed at
-`e2be4e5` ("Claim 3 multi-individual generalization + T3.1 export-bug fix,
-flags documented"), 2026-09-19. If the file has since changed, re-verify
+`e447ab4` ("Claim 3 multi-individual generalization + T3.1 export-bug fix,
+flags documented"). If the file has since changed, re-verify
 with `grep -n` before trusting a specific number below — the surrounding
 prose describing the mechanism should still hold even if a line shifts.
 
@@ -83,7 +83,7 @@ prose describing the mechanism should still hold even if a line shifts.
 - Tally built during `index`, `decoder.cpp` ~line 1474-1512
   (`tally[{a0+j, obs[off+m]}]++`). **Known strand bug, deliberately left
   unfixed** — documented as a comment at the tally site (see the commit
-  message and the development notes' 2026-09-19 section for why it was not adopted).
+  message for why it was not adopted).
 
 ---
 
@@ -97,10 +97,10 @@ prose describing the mechanism should still hold even if a line shifts.
 | Why ERR5181310/SARS-CoV-2 is excluded from T3.1's fair-comparison set | the ERR5181310 assembly-check note |
 | T3.4/T3.5 multi-individual results (all tables in files 04-05) | `docs/claim3/t34_t35_multi_individual_claim3.md` |
 | T3.4/T3.5's original single-individual (HG002-only) real-data trail | the Claim 3 locus-addressability write-up, the T3.4 residue diagnosis |
-| Raw CSVs behind the HG002 real-data trail | `results/T34_REALDATA_20260915/` (BILATERAL.csv, BOTH_FULL.csv, QUERY_ALONE_FULL.csv, GENERALIZATION_FIXED.csv, etc.) |
+| Raw CSVs behind the HG002 real-data trail | not shipped. The published T3.4 and T3.5 numbers are in `results/claim3/claim3_T3.4_exact_match_recall.csv`, `claim3_T3.5_locus_fidelity_100site.csv` and `claim3_T3.5_locus_retrieval.csv` |
 | PgRC2 comparison (confirmed vs inferred) | the PgRC2 extension analysis |
 | Flags reference (`CAPS_SPANS`, `CAPSULE_EXPORT_CONTIGS`, `CAPS_QUERY_CONTAIN`, etc.) | the pipeline notes, flags table |
-| Findings summary, dated 2026-09-19 | the development notes, 2026-09-19 section |
+| Findings summary | `docs/claim3/t34_t35_multi_individual_claim3.md` |
 | Architecture diagram source (Mermaid) | the Claim 3 architecture-diagram draft |
 | Future work: BEETL speed/size comparison, not yet run | the T3.4 speed-benchmark plan |
 

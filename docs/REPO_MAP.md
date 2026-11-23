@@ -26,7 +26,7 @@ g_capsul/
 ├── thirdparty/       vendored dependencies (never modified, never claimed as ours)
 ├── results/          raw CSVs and plots behind every number in the paper
 ├── docs/             this folder — the curated, cross-checked reference tree
-└── Figures/          the four manuscript figures, Fig1.tif–Fig4.tif
+└── Figures/          the four manuscript figures (Fig1.pdf–Fig4.pdf), the graphical abstract, and extras/ with the earlier TIFF and PNG versions
 ```
 
 Each of the three claims below is a row in three tables: what the claim
@@ -42,8 +42,8 @@ and Genozip, and losslessly against PgRC2 on the sequence stream alone.
 
 | Piece | Path |
 |---|---|
-| Figure | `Figures/Fig1.tif` — architecture overview (encoder stages → archive → four read paths) |
-| Figure | `Figures/Fig2.tif` — archive size as % of raw input, 19 datasets, G_CAPSUL vs SPRING vs Genozip |
+| Figure | `Figures/Fig1.pdf` — architecture overview (encoder stages → archive → four read paths) |
+| Figure | `Figures/Fig2.pdf` — archive size as % of raw input, 19 datasets, G_CAPSUL vs SPRING vs Genozip |
 | Encoder | `src/encoder.cpp` |
 | Decoder | `src/decoder.cpp` |
 | Sequence coder | `include/seqpar_core.h` — the DNA context-mixing coder shared by encoder and decoder |
@@ -53,7 +53,7 @@ and Genozip, and losslessly against PgRC2 on the sequence stream alone.
 | Build | `scripts/build_scripts/build106.sh` → binary `best106` (must include `-fopenmp`, see the script's own header comment) |
 | Encode / verify | `scripts/build_scripts/encode_adaptive.sh`, `scripts/build_scripts/verify_lossless.sh` |
 | Result data | `results/claim1/claim1_T1.1_T1.2.csv` — one row per (dataset, tool), archive size + compress/decompress time + peak RAM, all 19 datasets × 3 tools |
-| Result plot source | `results/plots/claim1/make_claim1_bar_vertical.py` → `claim1_margin_vertical.{pdf,png}` (the `.tif` copy is `Figures/Fig2.tif`) |
+| Result plot source | `results/plots/claim1/make_claim1_bar_vertical.py` → `claim1_margin_vertical.{pdf,png}` (the `.tif` copy is `Figures/extras/Fig2.tif`, the manuscript version is `Figures/Fig2.pdf`) |
 | Docs — overview | `docs/claim1/overview_claim1.md` |
 | Docs — per-table detail | `docs/claim1/t11_archive_size_claim1.md` (T1.1/T1.3), `docs/claim1/t12_wall_time_claim1.md` (T1.2) |
 | Docs — names/quality detail | `docs/claim1/names_and_quality_claim1.md` |
@@ -80,7 +80,7 @@ size-minimizing compressor produces.
 
 | Piece | Path |
 |---|---|
-| Figure | `Figures/Fig3.tif` — reconciliation (aggressive/mild contig collapse) → candidate generation (SNV/indel paths) |
+| Figure | `Figures/Fig3.pdf` — reconciliation (aggressive/mild contig collapse) → candidate generation (SNV/indel paths) |
 | Caller | `include/caps_caller.h` — reconciliation, coverage-adaptive thresholds, SNV/indel/multi-allelic/tetraploid candidate generation and genotyping |
 | Decoder entry point | `src/decoder.cpp` — `call` mode dispatches into `caps_caller.h` |
 | Result data | `results/claim2/claim2_T2.1_snv.csv` (het-SNV), `claim2_T2.2_coverage_sweep.csv` (T2.2), `claim2_T2.3_indel.csv` (het-indel), `claim2_T2.4_multiallelic.csv` (T2.4), `claim2_T2.5_tetraploid.csv` (T2.5) |
@@ -103,7 +103,7 @@ reference genome.
 
 | Piece | Path |
 |---|---|
-| Figure | `Figures/Fig4.tif` — decoded representation → coverage / export / search (coordinate, sequence, FM-index) / heterozygous locus retrieval |
+| Figure | `Figures/Fig4.pdf` — decoded representation → coverage / export / search (coordinate, sequence, FM-index) / heterozygous locus retrieval |
 | Decoder — export / coverage / query | `src/decoder.cpp` — `export`, `coverage`, `query`, and `index` modes |
 | Contig boundaries at encode time | `src/encoder.cpp` — `contig_spans` stream, gated by `CAPS_SPANS` |
 | FM-index (exact-match completion) | `include/caps_fmi.h` — suffix array (SA-IS), 2-bit BWT, rank checkpoints, backward search, save/load; hooked into `src/decoder.cpp` (`index` with `CAPS_FMI=1`, `query` with `CAPS_QUERY_CONTAIN=1`) |

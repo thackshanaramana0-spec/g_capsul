@@ -100,7 +100,7 @@ thirdparty/       vendored PPMd7, FSE/Huf0, htscodecs/fqzcomp, each under its ow
 results/          the reported numbers: per-claim CSVs plus generated plots
 docs/             reference documentation: claim1/, claim2/, claim3/, the mechanism,
                   novelty, limitations and configuration documents, and docs/extras/
-Figures/          the manuscript figures
+Figures/          the manuscript figures (PDF), graphical abstract, and extras/ (TIFF and PNG versions)
 ```
 
 | you want | go to |
@@ -559,7 +559,7 @@ default, in [`docs/configuration_reference.md`](docs/configuration_reference.md)
 
 ## Design
 
-![G_CAPSUL architecture: FASTQ in, one encoder assembling and compressing a pseudogenome archive, five read paths served from that same archive](Figures/Fig1.png)
+![G_CAPSUL architecture: FASTQ in, one encoder assembling and compressing a pseudogenome archive, five read paths served from that same archive](Figures/extras/Fig1.png)
 
 G_CAPSUL follows the **ARCH design principle: Assemble, Retain, Compress, and Harness**.
 Reads are organized once into a reference-free pseudogenome. Their placements, orientations,

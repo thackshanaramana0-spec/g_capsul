@@ -1960,11 +1960,11 @@ cannot be beating us via a better coordinate representation either -- there is
 no room for one.
 
 Do not retry this. Real names gains came from cross-column reference instead
-(ID_SEQLEN, commit 877702d): -96.5% on ERR5181310, -20.1% on ERR552797.
+(ID_SEQLEN, commit cb26202): -96.5% on ERR5181310, -20.1% on ERR552797.
 
 ## Names: the last two gaps are TIES, not losses (2026-09-02)
 
-After ID_SEQLEN (commit 877702d) the standing on the 8 non-human locked
+After ID_SEQLEN (commit cb26202) the standing on the 8 non-human locked
 datasets, every tool measured by its OWN name-section bytes:
 
     vs SPRING    7/8 wins, -18.37%
@@ -2026,7 +2026,7 @@ constant-token elision already handled it.
 
 **UPDATE, same day: wired.** The assessment below stood; the recommendation
 was carried out. `include/quality_coder.h` wraps vendored fqzcomp/htscodecs
-(BSD 3-clause), gated on `CAPS_QUAL=1`, committed `908b769`. It matches
+(BSD 3-clause), gated on `CAPS_QUAL=1`, committed `fbe4ae7`. It matches
 standalone fqzcomp's output exactly (after fixing an ASCII-vs-offset alphabet
 issue found while wiring — see the commit) and beats it on one dataset by
 trying all 4 strategies per block. A complete 4-line FASTQ rebuilt from decoder
