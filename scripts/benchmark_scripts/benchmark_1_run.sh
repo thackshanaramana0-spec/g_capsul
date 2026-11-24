@@ -452,7 +452,7 @@ run_phase2(){
 
         mark "P2 $IND: Kmer2SNP"
         step "Kmer2SNP"
-        # RUNNER EXISTS AND IS VALIDATED as of 2026-09-08 (scripts/claim2_scripts/run_kmer2snp.sh).
+        # RUNNER EXISTS AND IS VALIDATED (scripts/claim2_scripts/run_kmer2snp.sh).
         # Kmer2SNP's own DSK/findGSE wrappers hardcode paths that do not exist
         # here; the runner bypasses them by passing --t1/--c1/--c2/--r directly,
         # counting k-mers with KMC and deriving the coverage band from the

@@ -5,6 +5,10 @@ title: "G_CAPSUL: A Retained Pseudogenome for Reference-Free Lossless FASTQ Comp
 authors:
   - family-names: "Balashanmugam"
     given-names: "Thackshanaramana"
+  - family-names: "Babu"
+    given-names: "R."
+  - family-names: "Dinesh"
+    given-names: "G."
 version: 1.2.0
 date-released: "2026-11-22"
 url: "https://github.com/thackshanaramana0-spec/g_capsul"

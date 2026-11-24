@@ -693,7 +693,7 @@ cross-claim source for every scope boundary that must be disclosed:
 
 If you use G_CAPSUL in your research, please cite:
 
-> Thackshanaramana B (2026). *G_CAPSUL: A Retained Pseudogenome for Reference-Free Lossless
+> Thackshanaramana B, Babu R, Dinesh G (2026). *G_CAPSUL: A Retained Pseudogenome for Reference-Free Lossless
 > FASTQ Compression and Downstream Analysis.*
 > Manuscript in preparation.
 
