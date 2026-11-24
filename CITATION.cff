@@ -1,7 +1,7 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
 type: software
-title: "G_CAPSUL: a unified pseudogenome for lossless FASTQ compression, reference-free variant calling, and archive-native addressability"
+title: "G_CAPSUL: A Retained Pseudogenome for Reference-Free Lossless FASTQ Compression and Downstream Analysis"
 authors:
   - family-names: "Balashanmugam"
     given-names: "Thackshanaramana"

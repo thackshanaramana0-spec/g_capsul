@@ -693,8 +693,8 @@ cross-claim source for every scope boundary that must be disclosed:
 
 If you use G_CAPSUL in your research, please cite:
 
-> Thackshanaramana B (2026). *G_CAPSUL: a unified pseudogenome for lossless FASTQ
-> compression, reference-free variant calling, and archive-native addressability.*
+> Thackshanaramana B (2026). *G_CAPSUL: A Retained Pseudogenome for Reference-Free Lossless
+> FASTQ Compression and Downstream Analysis.*
 > Manuscript in preparation.
 
 To cite the exact code version used, see [`CITATION.cff`](CITATION.cff) (GitHub's own "Cite
