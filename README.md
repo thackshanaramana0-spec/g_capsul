@@ -21,6 +21,7 @@
 - [Installation](#installation)
 - [Quick Start](#quick-start)
 - [Usage](#usage)
+  - [Try it on your own FASTQ](#try-it-on-your-own-fastq)
 - [Input requirements](#input-requirements)
 - [Configuration](#configuration)
 - [Benchmark results and reproducibility](#benchmark-results-and-reproducibility)
@@ -111,19 +112,22 @@ commands are in [`docs/extras/SERVER_SETUP_AND_DOWNLOADS.md`](docs/extras/SERVER
 
 ## Quick Start
 
-Build, then compress, decompress and verify one FASTQ file (single-end, uncompressed).
+Build, then check that one FASTQ file (single-end, uncompressed) survives compression. Use the first check for a full verification, or the second for a quick one.
 
 ```bash
 git clone https://github.com/thackshanaramana0-spec/g_capsul.git && cd g_capsul
 scripts/build_scripts/build106.sh /tmp/best106
 scripts/build_scripts/build_decode.sh /tmp/capsule_decode
 
-# Full ordered byte-for-byte check through the archive. Prints BYTE-IDENTICAL,
+# Check 1 (full): compress, decompress and compare byte for byte through the archive. Prints BYTE-IDENTICAL,
 # or REFUSED with the reason if the input is unsupported.
 BEST=/tmp/best106 DEC=/tmp/capsule_decode scripts/build_scripts/verify_roundtrip.sh path/to/reads.fq
+
+# Check 2 (quick): sequence column only, not through the archive
+BEST=/tmp/best106 scripts/build_scripts/verify_lossless.sh path/to/reads.fq
 ```
 
-`scripts/build_scripts/verify_lossless.sh` is a faster, narrower check. It compares the
+Check 2, `verify_lossless.sh`, compares the
 sequence column rebuilt from the encoder's raw stream dumps, so it tests assembly, mapping and
 read order but not the archive's entropy layer, names or quality.
 
@@ -135,6 +139,9 @@ read order but not the archive's entropy layer, names or quality.
 # Compress a complete FASTQ (sequence, names, quality, line 3)
 CAPS_NAMES=1 CAPS_QUAL=1 INPUT=reads.fq ARCHIVE=out.capsule BEST=/tmp/best106 \
     bash scripts/build_scripts/encode_adaptive.sh
+
+# Compress sequence and read order only (the default, not a full FASTQ)
+INPUT=reads.fq ARCHIVE=out.capsule BEST=/tmp/best106 bash scripts/build_scripts/encode_adaptive.sh
 
 # Decompress. The output directory must already exist.
 mkdir -p outdir
@@ -163,23 +170,48 @@ Calls are in the coordinates of the archive's contigs. The benchmarks lift them 
 coordinates with `scripts/benchmark_scripts/lift_vcf.py` before scoring with `rtg vcfeval`
 (see `scripts/claim3_scripts/run_fullchr20_archive_capsule.sh`).
 
-**Rebuilding the FASTQ by hand.** The decoder writes sequence, names and quality as separate
-files. Line 3 is stored as a mode, either a bare `+` for every read or `+` followed by the
-header.
+### Try it on your own FASTQ
+
+This compresses a FASTQ through the archive, decodes it, rebuilds the 4-line FASTQ from the
+decoder output alone, and compares it with the original byte for byte, read order and line 3
+included. Run from the repository root after the [Quick Start](#quick-start) builds.
 
 ```bash
+IN=reads.fq                 # your single-end FASTQ (uncompressed)
 W=capsul_try; mkdir -p "$W/dec"
-CAPS_NAMES=1 CAPS_QUAL=1 INPUT=reads.fq ARCHIVE="$W/reads.capsule" BEST=/tmp/best106 \
-    bash scripts/build_scripts/encode_adaptive.sh
+
+# 1. Optional input pre-check (the encoder and scope checker refuse the same cases, see
+#    Input requirements). Each count must be 0.
+grep -c $'\r' "$IN"                                                    # CRLF line endings
+awk 'NR%4==2 && /[^ACGTN]/ {b++} END {print b+0}' "$IN"               # bases outside upper-case ACGTN
+awk 'NR%4==2 && length($0)>256 && index(substr($0,257),"N") {b++} END {print b+0}' "$IN"   # N after base 256
+awk 'NR%4==1 {h=substr($0,2)} NR%4==3 {if ($0=="+") p++; else if ($0=="+"h) c++; else o++}
+     END {print (o>0 || (p>0 && c>0)) ? 1 : 0}' "$IN"                 # mixed or other line 3
+
+# 2. Compress (full FASTQ). Unsupported input stops here with an error and exit code 1 or 2.
+CAPS_NAMES=1 CAPS_QUAL=1 INPUT="$IN" ARCHIVE="$W/reads.capsule" \
+    BEST=/tmp/best106 bash scripts/build_scripts/encode_adaptive.sh
+
+# 3. Decompress
 /tmp/capsule_decode "$W/reads.capsule" "$W/dec" "$W/dec/reads.fq"
 
-# line 3 is a bare '+':
+# 4. Rebuild the FASTQ. Line 3 is stored as a mode: a bare '+' for every read, or '+'
+#    followed by the read's header. Use the first command for '+', the second for '+header'.
 paste -d'\n' <(sed 's/^/@/' "$W/dec/reads.fq.names") "$W/dec/reads.fq" \
              <(sed 's/.*/+/' "$W/dec/reads.fq") "$W/dec/reads.fq.qual" > "$W/rebuilt.fq"
-# line 3 is '+header': use  <(sed 's/^/+/' "$W/dec/reads.fq.names")  as the third column
+# paste -d'\n' <(sed 's/^/@/' "$W/dec/reads.fq.names") "$W/dec/reads.fq" \
+#              <(sed 's/^/+/' "$W/dec/reads.fq.names") "$W/dec/reads.fq.qual" > "$W/rebuilt.fq"
 
-cmp reads.fq "$W/rebuilt.fq" && echo "BYTE-IDENTICAL"
+# 5. Compare
+cmp "$IN" "$W/rebuilt.fq" && echo "BYTE-IDENTICAL"
+ls -l "$IN" "$W/reads.capsule"
 ```
+
+Expected: the four counts in step 1 print `0`, step 2 prints `ARCHIVE_TOTAL=<bytes>`, and step 5
+prints `BYTE-IDENTICAL`. This was obtained on simulated diploid reads (24,000 x 150 bp),
+variable-length reads with N (60 to 150 bp, `+header` line 3), 200 to 600 bp reads, 1 to 30 bp
+reads, heavy duplication, all-N reads and a single-read file, and on the benchmark dataset
+SRR29296997.
 
 Function and line references for each operation, by claim, are in
 [`docs/claim1/code_mapping_claim1.md`](docs/claim1/code_mapping_claim1.md),
