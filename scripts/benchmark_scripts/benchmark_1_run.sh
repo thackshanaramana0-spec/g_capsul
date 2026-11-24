@@ -494,7 +494,7 @@ run_phase2(){
     # are subsampled, re-compressed, and called from the resulting archive by
     # exactly the path T3 uses, so the only variable is depth.
     #
-    # HG002_pooled.fq is standardised to 30x (docs/extras/NEW_DATASET_LOCKED.md), so the
+    # HG002_pooled.fq is standardised to 30x (docs/extras/DATASETS.md), so the
     # fraction for a target depth is target/30 -- a formula over a declared
     # property of the input, not a fitted constant. 30x itself is not re-run:
     # it IS the T3 row, and re-running it would spend 6 minutes to reproduce a

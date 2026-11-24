@@ -104,7 +104,7 @@ tail -30 /data/download.log   # must end with "DOWNLOAD COMPLETE"
 ```
 
 **Utricularia gibba (Plantae, `SRR10676752`)** — the one dataset in the
-15-set list not yet downloaded as of this writing. Per `NEW_DATASET_LOCKED.md`,
+15-set list not yet downloaded as of this writing. Per `docs/extras/DATASETS.md`,
 its `.sra` (7.3 GB) was already staged at `/tmp/newdl/SRR10676752/` via the
 S3-mirror method above; only the `fasterq-dump` conversion step remains.
 
