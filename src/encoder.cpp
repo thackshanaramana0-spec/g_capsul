@@ -4,8 +4,8 @@
 //
 // What it does, in order (each step has a banner comment further down):
 //   1. SCOPE CHECK and LOAD. Refuses input outside the format's scope (reads over
-//      MAX_READ_LEN, malformed records, no usable reads). Drops reads containing N
-//      (they are stored separately), collapses exact duplicates (orig2uid), and
+//      MAX_READ_LEN, malformed records, no usable reads). Replaces each N by A
+//      (the N positions are stored separately), collapses exact duplicates (orig2uid), and
 //      removes reads that are prefixes of longer reads (containment).
 //   2. CHAINING (the sweep). Greedily joins reads by exact suffix-prefix overlap,
 //      longest overlap first, into contigs that form the pseudogenome. Two rounds,

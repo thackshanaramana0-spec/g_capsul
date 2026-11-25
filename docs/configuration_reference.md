@@ -55,7 +55,7 @@ The values in the README command (`3 16 16 22 16 16 1 24 64 1`) set argv[2] to a
 | `MAXMAP`, `MAXMAP_DIV` | value | `MAXMAP` forces the mapping mismatch ceiling. Otherwise it is Lmax divided by `MAXMAP_DIV` (default 13), at least 6, and it is raised only when the leftover fraction is above 0.60 (a low-coverage ramp, see the comment at the `MAXMAP` definition). |
 | `MINOV` | value | Overrides the sweep's minimum overlap, for sweeps. |
 | `LOWCOV` | presence | Low-coverage mode: sweep seed width 8 and minimum overlap at most 8. Never selected automatically. |
-| `MEM_MAXMM_OVERRIDE` | value | Overrides the MEM extension-mismatch tolerance, which is otherwise derived from the leftover fraction. |
+| `MEM_MAXMM_OVERRIDE` | value | Overrides the MEM extension-mismatch tolerance, which is otherwise 2 when the heterozygosity pre-scan finds a diploid-looking sample (at least 2.4% of the sampled canonical 31-mers occurring exactly twice) and 0 when it does not. |
 | `SECOND_SELF` | value | 1 or 2: also self-match the second region (forward only, or forward and reverse complement). Off when unset. |
 | `FWD_SELF` | flag value | Forward self-matching in the MEM stage. Default on. `FWD_SELF=0` turns it off. |
 | `CAPS_NO_QOVERLAP` | presence | Do not overlap the names and quality coding with the main pipeline. |
