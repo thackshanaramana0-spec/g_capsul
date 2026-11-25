@@ -10,15 +10,14 @@ design and G_CAPSUL's, and it explains the differences that follow. The caller i
 DiscoSNP++'s caller (`kissnp2`, built on the GATB library) and this project's
 Method B caller share an amount of textbook bubble-calling machinery:
 k-mer counting shape, graph membership testing, bubble start/closure
-conditions, and branching policy are the *same algorithm*, arrived at
-independently in several cases and verified by reading DiscoSNP++'s own
-source. Of an 18-layer correspondence table, roughly half are marked
-**textbook** (shared, not a contribution either way), a handful are
+conditions, and branching policy are the standard algorithm, which
+was confirmed against DiscoSNP++'s source. Of an 18-layer correspondence table, roughly half are marked
+**textbook** (shared standard steps, not a contribution of either tool), a handful are
 **theirs** (DiscoSNP++'s design, sometimes adopted, sometimes measured and
-rejected), and the rest are **ours** — differences, each with a
-measured reason, not asserted superiority.
+rejected), and the rest are **G_CAPSUL's**, which are differences, each with a
+measured reason and none an assertion of superiority.
 
-**Layers marked textbook (shared, same algorithm independently arrived at):**
+**Layers marked textbook (shared standard steps):**
 k-mer counting shape, memory-budget declaration, graph membership oracle,
 bubble start condition (branching node, both strands), SNV closure (lockstep
 walk), branching policy (stop at first junction), low-complexity filtering

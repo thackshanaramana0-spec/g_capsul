@@ -1,10 +1,9 @@
-# Independent reimplementation of PgRC2's assembler
+# Reimplementation of PgRC2's assembler
 
 > Engineering log from the development of the encoder. It records measurements and rejected approaches in the order they were made, and some figures were superseded by later work. The current results are in `results/` and in the claim folders under `docs/`.
 
 This reimplementation follows the algorithm of PgRC2's assembler. PgRC2's source was read to understand what
-each stage does, and that reading is what exposed several of the results below. The code is
-written independently. `method_c/` is the unmodified upstream clone used as the measurement
+each stage does, and that reading is what exposed several of the results below. The code was written for this project. `method_c/` is the unmodified upstream clone used as the measurement
 target. It is GPL-3 and is not vendored (see `.gitignore`).
 
 Purpose: settle whether PgRC2's speed, memory and assembly quality are

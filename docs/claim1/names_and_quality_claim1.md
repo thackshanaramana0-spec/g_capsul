@@ -68,10 +68,8 @@ real `dispatcher.c` has, verified by reading it, not inferred.
 (an fqzcomp-style adaptive context model, developed over stages 67 to 92 of the project history in `docs/extras/`) beats SPRING (7/8
 datasets, −2.88%) and Genozip (8/8, −5.24%) but **loses to the real fqzcomp
 on all 8 tested datasets by 1.1–4.5%**, while running roughly 2× slower
-single-threaded against fqzcomp's 12-threaded path. `htscodecs` is BSD —
-unlike PgRC2 (GPL-3, the reason PgRC2's assembler specifically had to be
-reimplemented from scratch, not vendored) — so there is no license barrier to
-vendoring here. The vendored closure is small: `fqzcomp_qual.c` needs only
+single-threaded against fqzcomp's 12-threaded path. `htscodecs` is BSD licensed, so
+it can be vendored. The vendored closure is small: `fqzcomp_qual.c` needs only
 `htscodecs_tls_alloc/free` from `utils.c` — 2 `.c` files, 6 headers, no rANS,
 no arith_dynamic, no pack/rle.
 
