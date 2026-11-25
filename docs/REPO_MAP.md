@@ -120,7 +120,7 @@ locus addressability into T3.4 (exact-match recall, compared against
 BWT-family tools) and T3.5 (locus retrieval, both alleles). The manuscript's
 own table numbering is independent of this folder's numbering — it runs
 T3.1 through T3.5 in its own sequence, matching the same underlying five
-operations. `docs/numbers_and_verification_index.md` is the canonical
+operations. `docs/results_tables.md` is the canonical
 source for the final, multi-individual T3.4/T3.5 numbers (1,452/1,452 with
 the FM-index, 1,451/1,452 by position alone).
 
@@ -133,10 +133,9 @@ the FM-index, 1,451/1,452 by position alone).
 | `docs/central_insight_and_mechanism.md` | The design principle (ARCH) and the allele-separation mechanism that variant calling and locus retrieval both reconcile |
 | `docs/PROJECT_SCOPE.md` | What the program does, and exactly which input it accepts, refuses and leaves unsupported (checked against the source) |
 | `docs/technical_architecture.md` | The container format and the pseudogenome construction pipeline, independent of any single claim |
-| `docs/paper_overview.md` | Documentation guide: the three claims and which document to read for what |
-| `docs/numbers_and_verification_index.md` | Every reported number with its result file and verification status, plus superseded figures |
+| `docs/results_tables.md` | Every reported number with the result file it comes from |
 | `docs/novelty_and_prior_art.md` | Related work by area (compression, variant calling, export, coverage, retrieval) with the evidence behind each comparison |
-| `docs/limitations_and_scope.md` | What was evaluated and what was not, the costs of the design, and limits on individual results |
+| `docs/limitations_and_scope.md` | What was evaluated and what was not, the costs of the design, limits of individual results, and how the numbers were verified |
 | `docs/configuration_reference.md` | Every environment variable and positional argument the programs read, with defaults, taken from the source |
 | `docs/extras/` | Background engineering history (PgRC2 reimplementation notes, layer-by-layer profiling in `docs/extras/LAYER_BY_LAYER_ANALYSIS.md`, SOTA comparison tables, server setup, locked dataset list) — lower-priority context, not required to verify any single claim |
 | `docs/extras/ENGINEERING_NOTES_CALLER.md`, `docs/extras/ENGINEERING_NOTES_CODERS.md`, `docs/extras/ENGINEERING_NOTES_ENCODER.md` | Long measurements and rejected approaches that were condensed in the source comments of `include/caps_caller.h`, the coder headers and `src/encoder.cpp`, kept in their original wording |

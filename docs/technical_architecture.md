@@ -3,7 +3,7 @@
 This document describes how G_CAPSUL works from the first byte read to the last byte written, and
 how each operation uses the archive afterwards. It follows the source, so every statement can be
 checked against the file named beside it. It is independent of any single claim. The measured
-results are in [`numbers_and_verification_index.md`](numbers_and_verification_index.md), and the
+results are in [`results_tables.md`](results_tables.md), and the
 reasoning behind the design is in [`central_insight_and_mechanism.md`](central_insight_and_mechanism.md).
 
 ## 1. Source map
