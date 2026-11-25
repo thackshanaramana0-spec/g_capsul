@@ -63,7 +63,7 @@ this table. In the current archive format the original read order is carried by 
 describe streams that exist under the same names or the same roles in the current format.
 
 **Net result.** G_CAPSUL is ahead on ratio, by a thin but real margin (+1.88% aggregate on the 7
-datasets that both tools can process, sequence only). It is ahead on robustness, since PgRC2
+datasets that both tools can process, sequence only; internal test only, not published). It is ahead on robustness, since PgRC2
 cannot process 6 of the 14 datasets. It is behind on speed and memory, by a known margin that is
 expected for an assembly-based method. The mismatch-symbol coder, 40% smaller than PgRC2's
 per-symbol code, is the largest per-stream margin found.
@@ -116,7 +116,7 @@ The Claim 2 and Claim 3 results were checked the same way.
 PgRC2 stores only the DNA sequence, with no names, qualities or line 3. Its ratio therefore cannot
 be compared with the whole-FASTQ numbers of T1.1, and the comparison is restricted to the 7
 datasets that PgRC2 can process (those with reads of near-fixed length). The result is +1.88%
-aggregate, with 6 wins and 1 loss. The loss is S. acidocaldarius at -0.83%, and sweeping `MINMEM`
+aggregate, with 6 wins and 1 loss (internal test only, not published). The loss is S. acidocaldarius at -0.83%, and sweeping `MINMEM`
 and `MAXMAP` showed both already at interior optima on that dataset, so the loss is structural and
 not a tuning miss. G_CAPSUL is about 1.7 times slower and 2.5 times heavier in memory at worst.
 
@@ -158,7 +158,7 @@ separate from the four listed under "Bug history".
 ## Summary
 
 Against PgRC2, the only architecturally comparable tool, G_CAPSUL has a smaller sequence-only
-archive (+1.88% aggregate where both can run). It processes variable-length reads, on which PgRC2
+archive (+1.88% aggregate where both can run; internal test only, not published). It processes variable-length reads, on which PgRC2
 refuses or crashes for 6 of the 14 original datasets. It is slower and heavier, as is usual for
 assembly-based methods. Its adaptive mismatch-symbol coder is 40% smaller than PgRC2's independent
 per-symbol code. The wall-time cost seen in T1.2 (G_CAPSUL fastest on 0 of 19 datasets against

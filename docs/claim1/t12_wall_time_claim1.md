@@ -41,7 +41,7 @@ without this structure does not do:
 - searching a small grid of parameter settings per dataset (section 3.10).
 
 This cost buys the smaller archive of T1.1 and the placements that Claims 2 and 3 reuse. The
-sequence-only comparison with PgRC2 shows the same trade-off, with G_CAPSUL about 1.7 times slower
+sequence-only comparison with PgRC2 (internal test only, not published) shows the same trade-off, with G_CAPSUL about 1.7 times slower
 and 2.5 times heavier in memory at worst (see
 [`mechanism_insight_claim1.md`](mechanism_insight_claim1.md)). The full-FASTQ comparison on 19
 datasets is T1.2.

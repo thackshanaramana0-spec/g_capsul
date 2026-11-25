@@ -51,7 +51,7 @@ against its input.
 | T1.1 archive sizes and aggregates | `results/claim1/claim1_T1.1_T1.2.csv` |
 | T1.2 wall times | same file, columns `compress_s` and `decompress_s` |
 | 19/19, -6.03%, -43.26%, 57/57 lossless | the development notes, and recomputed from the CSV above |
-| PgRC2 sequence-only comparison (+1.88%, 6 wins and 1 loss, about 1.7x and 2.5x) | the development notes, citing the Claim 1 final-verdict note and the headroom analysis |
+| PgRC2 sequence-only comparison (internal test only, not published) (+1.88%, 6 wins and 1 loss, about 1.7x and 2.5x) | the development notes, citing the Claim 1 final-verdict note and the headroom analysis |
 | The four silent data-loss bugs | the development notes, section 6.3 |
 | `CAPS_SPANS` adds zero archive bytes | [`../claim3/t31_export_claim3.md`](../claim3/t31_export_claim3.md) |
 
@@ -61,6 +61,6 @@ The T1.1 aggregate (19/19, -6.03%, -43.26%, 57/57 lossless) was recomputed from 
 count of 0 of 19 on both axes was computed the same way. The manuscript's "bold marks fastest per
 row" is consistent with it but does not state the count.
 
-The PgRC2 sequence-only numbers (+1.88%, 6 and 1, about 1.7x and 2.5x) and the descriptions of the
+The PgRC2 sequence-only numbers (+1.88%, 6 and 1, about 1.7x and 2.5x(internal test only, not published)) and the descriptions of the
 four silent data-loss bugs are cited from the development notes. They were not re-run or
 re-confirmed by decoding archives again.

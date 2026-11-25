@@ -253,7 +253,7 @@ of 1,452 by position alone. The extra HG005 window is not part of this total.
 
 | Number | Value | Source |
 |---|---|---|
-| PgRC2 sequence-only margin | +1.88%, 6 wins and 1 loss | `claim1/mechanism_insight_claim1.md` |
+| PgRC2 sequence-only margin (internal test only, not published) | +1.88%, 6 wins and 1 loss | `claim1/mechanism_insight_claim1.md` |
 | PgRC2 speed and memory against G_CAPSUL | about 1.7 times slower and 2.5 times heavier | same |
 | Ablation, collapse and re-placement | F1 0.431 to 0.888 (HG002, chr20) | `claim2/mechanism_insight_claim2.md` |
 | `contig_spans` archive cost | 0 bytes (18,282,397 bytes with and without) | `claim3/t31_export_claim3.md` |

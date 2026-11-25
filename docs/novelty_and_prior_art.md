@@ -34,7 +34,7 @@ only different.
 |---|---|---|---|
 | SPRING (Chandak et al., 2019) | Reordering and hash-based read matching | Primary comparator for whole-FASTQ size. G_CAPSUL is smaller on 19 of 19 datasets (aggregate −6.03%). | Measured |
 | Genozip (Lan et al., 2021) | Universal genomic data compressor | Second comparator. G_CAPSUL is smaller on 19 of 19 datasets (aggregate −43.26%). | Measured |
-| PgRC and PgRC2 (Kowalski and Grabowski, 2020, 2025) | Pseudogenome-based read compression | Closest architecture. PgRC2 stores sequence only (no names, quality or line 3), so the comparison is restricted to sequence and to 7 datasets it can process: +1.88% aggregate, 6 wins and 1 loss, with G_CAPSUL about 1.7 times slower and up to 2.5 times heavier. | Measured |
+| PgRC and PgRC2 (Kowalski and Grabowski, 2020, 2025) | Pseudogenome-based read compression | Closest architecture. PgRC2 stores sequence only (no names, quality or line 3), so the comparison is restricted to sequence and to 7 datasets it can process: +1.88% aggregate, 6 wins and 1 loss, with G_CAPSUL about 1.7 times slower and up to 2.5 times heavier (internal test only, not published). | Measured |
 | CRAM 3.1 (Bonfield, 2022) and reference-based compressors (Fritz et al., 2011) | Alignment against a reference genome | Need a reference. G_CAPSUL needs none. | Documented |
 | fqzcomp (Bonfield and Mahoney, 2013) | Context-mixing coding of FASTQ fields | The quality coder is vendored from it (see `THIRD_PARTY_NOTICES.md`), so quality compression is not claimed as new. | Source read |
 | DSRC 2, FaStore, SCALCE, minicom, NanoSpring | Other FASTQ and read compressors | Cited as context. Not benchmarked here. | Documented |
