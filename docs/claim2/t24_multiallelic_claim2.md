@@ -22,22 +22,20 @@ CSV status field: `CORRECTED_20260910`. `disco_multiallelic_records_emitted`
 multi-allelic record across its entire output on this individual, not just
 missed these specific 26 sites.
 
-## Why DiscoSNP++'s 0 is structural, not a tuning gap — do not soften this
+## Why DiscoSNP++'s 0 is structural and not a tuning gap
 
-Verified against the manuscript's own stated reasoning, and consistent with
-DiscoSNP++'s documented design (bubble-based, biallelic by construction):
+The manuscript's reasoning is consistent with DiscoSNP++'s documented design, which is
+bubble-based and biallelic by construction:
 DiscoSNP++'s output format has no record type that represents more than one
 ALT allele at one locus. This is not "DiscoSNP++ missed these 26 sites" in
-the sense of a detectable-but-undetected event — it is "DiscoSNP++'s output
-schema cannot express the answer," the same category of limitation as
-asking a tool with no indel model to call an indel. Stating "0/26" without
-this context risks implying a fixable miss; the correct framing is a
-categorical capability difference.
+the sense of a detectable-but-undetected event — it is that DiscoSNP++'s output
+schema cannot express the answer, the same kind of limitation as
+asking a tool with no indel model to call an indel. The 0 of 26 is a difference in capability and not a fixable miss.
 
-## Withdrawn numbers — three of them, and why each was wrong
+## Superseded numbers
 
-Per the development notes and the Claim 2 final-verdict note, ALL of the following are
-withdrawn and must not be cited:
+The development notes record the following earlier figures as withdrawn. The current figure is
+17 of 26:
 
 - **"5/111"**: scored 104 indel-bearing sites with a single-base check that
   cannot evaluate them — a measurement-method defect, not a caller result.

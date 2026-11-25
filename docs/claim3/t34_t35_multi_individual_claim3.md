@@ -1,7 +1,7 @@
 # T3.4 / T3.5 multi-individual replication — HG003, HG004, HG005
 
-> **Status of this document, 2026-11-21.** This is the dated record of the first
-> multi-individual replication (2026-09-19), kept as written. It was measured with
+> **Status of this document.** This is the record of the first multi-individual replication,
+> kept as written. It was measured with
 > the earlier k-mer completion index (`.xmi`, `CAPS_XMI=1`), which has since been
 > replaced by the FM-index. **The current numbers and method are in
 > `docs/claim3/t34_exact_match_claim3.md` and `docs/claim3/t35_locus_retrieval_claim3.md`.**
@@ -20,7 +20,7 @@
 >   alone gives 0.8536 / 0.8457 / 0.8099 / 0.6047.
 > - The k-mer index was 7-13 times the archive's size. The FM-index is 1.9-3.5 times.
 
-**Status: done, 2026-09-19. Real data and real runs. Closes the
+**Status: done, with real data and real runs. Closes the
 single-individual scope gap identified during Claim 3 finalization: every
 prior 400/400-style number for locus retrieval was measured on HG002 alone
 (one region, replicated across 3 independently-built archives of that SAME
@@ -55,10 +55,9 @@ than accepting them:
    same site recovers 11 ALT-carrying reads that plain query could not
    reach (was 0), flipping the site from apparent-REF-only to a correct
    het call. The real cause was the *same* structural ceiling as T3.4's
-   gap (see below), not allele absence. This correction is important
-   enough to say: **do not repeat the withdrawn "subsampling
-   variance, nothing to fix" explanation anywhere else** — it was
-   incomplete and has been superseded by this finding.
+   gap (see below), not allele absence. The earlier
+   explanation, "subsampling variance, nothing to fix", was incomplete and is superseded by this
+   finding.
 
 **The cost:** `.xmi` completion is not free. It
 recovers real reads that plain query structurally misses, but by the same
@@ -299,13 +298,12 @@ reproduction target (see `results/claim3/claim3_T3.4_exact_match_recall.csv` and
 
 ---
 
-# LOCKED — 2026-09-19. Generalization is structural, not statistical.
+# Why the result generalizes: the argument is structural, not statistical
 
-**T3.4 and T3.5 are locked. Neither rests on having sampled enough data;
-each rests on a property of the mechanism. Recorded here so the question is
-not reopened.**
+Neither T3.4 nor T3.5 rests on having sampled enough data. Each rests on a property of the
+mechanism, which is recorded here.
 
-## T3.5 (position / locus retrieval) — locked
+## T3.5 (position and locus retrieval)
 
 The mechanism is geometric: union an upstream and a downstream reference
 anchor so that neither side of the locus can be structurally blind. Nothing
@@ -321,7 +319,7 @@ of the aggregate.
 **1,452/1,452 het sites, zero exceptions, nothing tuned between runs.**
 Native (archive alone, no `.xmi`) is 1,451/1,452 = 99.93%.
 
-## T3.4 (exact-match retrieval) — locked
+## T3.4 (exact-match retrieval)
 
 This one is a **completeness proof**, not an empirical rate:
 
@@ -363,4 +361,4 @@ comparison is:
 If BEETL's index is comparable, the objection disappears. **Measuring
 BEETL's index size on the same dataset is more decisive than measuring its
 speed**, and is the single highest-value missing experiment for T3.4.
-Recorded as future work, not as a gap in the locked claim.
+This is recorded as future work and is not a gap in the claim.

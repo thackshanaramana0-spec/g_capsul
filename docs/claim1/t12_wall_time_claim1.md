@@ -1,121 +1,67 @@
-# T1.2 — Wall Time
+# T1.2: compression and decompression wall time
 
-> Record of the T1.2 numbers. G_CAPSUL is not the fastest tool on either axis on any dataset.
+This file records the wall-time comparison of G_CAPSUL, SPRING and Genozip on the 19 datasets of
+Claim 1 (see [`overview_claim1.md`](overview_claim1.md)). G_CAPSUL is not the fastest tool on any
+dataset, for either compression or decompression. The explanation is the cost of the structure
+that the archive retains, described below. The numbers are in
+`results/claim1/claim1_T1.1_T1.2.csv` (columns `compress_s` and `decompress_s`).
 
-## What it measures
+## What was measured
 
-Compression and decompression wall time, same 19 datasets, same run, same
-machine, one timed job at a time (manuscript's own stated protocol —
-verified present in the caption).
+Compression and decompression wall time for each tool on the same 19 datasets, in the same run on
+the same machine, one timed job at a time. This is the protocol stated in the manuscript table
+caption.
 
-## Results — a disclosed loss, not a mixed result
+## Result
 
-**Independently computed, directly from the raw CSV**
-(`results/claim1/claim1_T1.1_T1.2.csv`), by comparing `compress_s` and
-`decompress_s` per dataset across all three tools:
+The per-dataset comparison of `compress_s` and `decompress_s` across the three tools, recomputed
+from the CSV, gives:
 
-| | CAPSULE fastest |
+| | G_CAPSUL fastest |
 |---|---|
-| Compress, out of 19 datasets | **0** |
-| Decompress, out of 19 datasets | **0** |
+| Compression, out of 19 datasets | 0 |
+| Decompression, out of 19 datasets | 0 |
 
-**CAPSULE is not the fastest tool at either compression or decompression on
-any of the 19 datasets.** SPRING and Genozip trade the "fastest" position
-between themselves row by row; CAPSULE never takes it. This should be
-stated in the paper exactly this — do not describe this as "mixed"
-or "competitive," which would overclaim relative to the actual 0/19, 0/19
-result.
+SPRING and Genozip share the fastest position between them. The result is a plain loss on this
+axis and should be described that way.
 
-**Sample row** (ERR5181310, cross-checked against the manuscript):
-compress — CAPSULE 5.76s, SPRING **3.67s** (fastest), Genozip 4.54s;
-decompress — CAPSULE 2.70s, SPRING 6.44s, Genozip **0.51s** (fastest).
-Consistent with the aggregate 0/19 pattern.
+The ERR5181310 row, which agrees with the manuscript table, shows the pattern. Compression took
+5.76 s for G_CAPSUL, 3.67 s for SPRING (fastest) and 4.54 s for Genozip. Decompression took 2.70 s
+for G_CAPSUL, 6.44 s for SPRING and 0.51 s for Genozip (fastest).
 
-## Why this is the cost of Claim 1's own design, not a flaw to hide
+## Why G_CAPSUL is slower
 
-This is the direct, real price of the additional structure Claim 1 retains
-and Claims 2/3 reuse: building a pseudogenome via overlap chaining,
-tracking placements/deviations for every read, and running the full stream
-selector (which measures multiple candidate encoders per stream and keeps
-the smallest — see `code_mapping_claim1.md`) all cost real time that a
-simpler compressor without this structure does not spend. **This is the
-same trade-off already stated in the project's own
-documentation** (the pipeline notes: "~1.7x slower, ~2.5x
-heavier at worst" against PgRC2, on the earlier, narrower sequence-only
-comparison — see `mechanism_insight_claim1.md`). T1.2 is the full-FASTQ,
-19-dataset version of that same disclosure.
+The archive keeps a placement for every read, and building it takes work that a compressor
+without this structure does not do:
 
-## Precisely where the RAM cost comes from, verified file-and-line
+- assembling the pseudogenome by overlap chaining (section 3.3 of
+  [`../technical_architecture.md`](../technical_architecture.md)),
+- mapping the remaining reads and finding MEM self-matches (sections 3.4 and 3.7),
+- trying several encodings of each stream and keeping the smallest (section 3.9),
+- searching a small grid of parameter settings per dataset (section 3.10).
 
-Verified against the headroom analysis. The dominant RAM item is a
-single structure: `src/encoder.cpp`'s duplicate-detection map
-(`std::unordered_map<uint64_t, std::vector<uint32_t>>`) costs **~80 B per
-distinct read** (hash node + a separately heap-allocated inner vector).
-PgRC2's equivalent — a flat `vector<uint32_t>` of sorted read indices,
-compared adjacently for duplicates — costs **~4 B per read**, because the
-*same* sorted array then also serves as the overlap-search index: **one
-structure, two jobs**, where this project builds a hash map for dedup *and*
-a separate prefix index for overlap. Measured headroom from this
-difference alone: 90 MB on E. coli, 344 MB on L. major, 428 MB on yeast,
-scaling to 2.2 GB projected on C. elegans and 4.4 GB on T. cacao — this is
-the concrete, file-and-line explanation for the "~2.5x heavier" RAM
-disclosure above, not a vague resource-usage gap. **Speed, by contrast, is
-not where PgRC2 is ahead in assembly/comparison itself**: this project's
-`rcmp` compares 32 bases per 64-bit operation at arbitrary offset, against
-PgRC2's `compareSuffixWithPrefix`, which falls back to one base per
-iteration through a lookup table whenever the suffix is not byte-aligned —
-measured 1.64 s vs 2.75 s in this project's favor for that specific
-operation. The overall slowdown is not from losing at the comparison
-primitive; it is paid elsewhere (RAM-driven cache pressure, and the
-decompress-side cost below).
+This cost buys the smaller archive of T1.1 and the placements that Claims 2 and 3 reuse. The
+sequence-only comparison with PgRC2 shows the same trade-off, with G_CAPSUL about 1.7 times slower
+and 2.5 times heavier in memory at worst (see
+[`mechanism_insight_claim1.md`](mechanism_insight_claim1.md)). The full-FASTQ comparison on 19
+datasets is T1.2.
 
-## Most of the disclosed decompress slowdown is a Python/C++ artifact, not an algorithmic cost
+## A measured saving behind the shipped time
 
-Verified against the final-headroom note. Of a measured 40.1 s total
-decompress (against PgRC2's 4.0 s — the ~10x figure), **80% (32.19 s) is a
-Python script** (`scripts/build_scripts/decode_105.py`) iterating every read in the
-interpreter, and it also sets the peak memory (1,563 MB — higher than this
-project's own *compress* peak of 1,032 MB). The C++ portion
-(`capsule_decode`) alone takes 7.95 s. Ported fully to C++, decompress
-would land near 7.9 s against PgRC2's 4.0 s — **roughly 2x, not 10x**.
-This is disclosed precisely so a reader does not mistake an
-implementation-language artifact (a reference decoder script never
-optimized because the archive's own C++ decoder is what ships and is
-measured for correctness) for an algorithmic limitation of the compression
-architecture itself. **Compression-side speed, separately, has real,
-structural headroom of its own**: the greedy assembly sweep is 43% of
-compress time and "has never been attacked for speed — only for
-correctness," per the same source, an explicitly open item.
+The encoder evaluates a grid of `MAXMAP` and `MINOV` settings and keeps the smallest archive.
+`MINOV` is used in the round-2 sweep and `MAXMAP` only later, at pigeonhole mapping. Candidates
+that share a `MINOV` therefore computed a bit-identical round-2 assembly, up to four times over.
+The production logs confirmed this, with `round2:` printed as two distinct results across the 8
+candidates and not as 8. On a full HG002 run the repeated work cost about 2,360 s of CPU, and
+because the candidates ran concurrently at one thread each, it sat on the wall-clock critical
+path. The encoder now computes round 2 once per `MINOV` value and forks the candidates from it
+(the "candidates share a prefix" design in `src/encoder.cpp`, described in
+[`code_mapping_claim1.md`](code_mapping_claim1.md)).
 
-## One real engineering fix behind the shipped speed number, worth keeping visible
+## Scope of this table
 
-Verified against the candidate-fork-depth note: the encoder searches a grid
-of `MAXMAP`×`MINOV` candidates and keeps whichever produces the smallest
-archive (a measured-optimum search, not a heuristic — see
-the reproducibility note's discipline). A real inefficiency was found and
-fixed: `MINOV` is consumed at the round-2 sweep, `MAXMAP` only later at
-pigeonhole mapping, so candidates sharing the same `MINOV` were computing a
-**bit-identical round-2 assembly** up to four times over — confirmed
-directly from production logs, not inferred (`round2:` printed exactly two
-distinct results across all 8 candidates, not 8). Measured cost: ~2,360 s of
-CPU on a full HG002 run recomputing an assembly already in hand, and because
-candidates ran concurrently at one thread each, the wasted work sat directly
-on the wall-clock critical path. Fixed by sharing the round-2 result across
-same-`MINOV` candidates rather than reforking per candidate. This is the
-origin of `encoder.cpp`'s "candidates share a prefix" design
-(`code_mapping_claim1.md`), not an incidental detail — it is a real,
-measured, non-trivial fraction of what makes T1.2's wall-time cost as low as
-it is, and belongs in Methods as evidence the speed trade-off was minimized,
-not merely accepted.
-
-## What NOT to write in the paper
-
-- Do not write "G_CAPSUL is competitive on speed" or imply any row wins —
-  verified 0/19 on both axes.
-- Do not conflate this with Claim 3's speed tables (T3.1 export 129-784x
-  faster, T3.2 coverage 16-54x faster) — those measure a *different*
-  operation (recovering already-computed structure post-archive) against a
-  *different* comparator (SPAdes, bwa+samtools+mosdepth), not
-  compression/decompression against SPRING/Genozip. A reader confusing
-  "G_CAPSUL is slow at T1.2" with "G_CAPSUL is slow at T3.1/T3.2" would be
-  factually wrong in the opposite direction — T3.1/T3.2 are dominant wins.
+T1.2 measures compression and decompression against SPRING and Genozip. It is a different
+measurement from the speed tables of Claim 3, where export is 129 to 784 times faster than SPAdes
+(T3.1) and coverage is 16 to 54 times faster than bwa with samtools and mosdepth (T3.2). Those
+compare operations performed on the already-built archive with other tools, so a slow T1.2 and
+fast T3.1 and T3.2 do not contradict each other.

@@ -1,32 +1,25 @@
-# Claim 2 — FAITHFUL. What it is, what it is not.
+# Claim 2 (FAITHFUL): reference-free variant calling from the archive
 
-> Entry point for Claim 2: what it claims, what it does not claim, and how T2.1 to T2.5 relate.
+This folder documents Claim 2 of the manuscript. The pseudogenome structure that the archive keeps
+for compression (Claim 1) still holds enough signal to call heterozygous variants, from the archive
+alone, without a reference and without going back to the FASTQ or building a second representation.
+This file states what the claim covers and does not cover and how its five tables (T2.1 to T2.5,
+the result tables of Claim 2) relate. The result files in `results/claim2/` are authoritative.
 
-## What Claim 2 actually claims, in one sentence
+## What Claim 2 does not claim
 
-**The same pseudogenome structure retained for compression (Claim 1) still
-contains enough biological signal to call heterozygous variants —
-reference-free, from the archive alone — without returning to the original
-FASTQ or building a second, independent representation.**
-
-## What Claim 2 is NOT
-
-- **Not a claim to beat every variant caller in existence.** The comparator
-  set is deliberately narrow and justified: per the het-indel
-  literature survey, DiscoSNP++ is the only other general-purpose
-  reference-free caller that handles heterozygous indels from a single
-  diploid sample with no reference at all. Everything else surveyed
-  (DeepVariant, GATK, Strelka2, ska lo, eBWT2SNP) either requires a
-  reference or doesn't call indels. Kmer2SNP is SNV-only by construction —
-  included in T2.1, correctly marked NOT_APPLICABLE in T2.3 (indel), not a
-  missing measurement.
-- **Not uniformly a win.** HG005 is the exception across T2.1 and
-  T2.3 — DiscoSNP++ wins F1 on that individual in both tables. Stated
-  in both the CSV and the manuscript text.
-- **Not simulated data anywhere.** T2.5 (tetraploid) is real HG003+HG004
-  reads concatenated — "nothing at the sequence level is simulated, only
-  the ploidy relationship is constructed" (manuscript's own wording,
-  verified against the CSV).
+- **It does not claim to beat every variant caller.** The comparator set is narrow on purpose.
+  According to the heterozygous-indel literature survey in the development notes, DiscoSNP++ is the
+  only other general-purpose, reference-free caller that handles heterozygous indels from a
+  single diploid sample. The other tools surveyed (DeepVariant, GATK, Strelka2, ska lo and
+  eBWT2SNP) either need a reference or do not call indels. Kmer2SNP is SNV-only by construction. It
+  appears in T2.1, and in T2.3 it is marked `NOT_APPLICABLE` because it has no indel model, which
+  means no measurement is missing.
+- **It is not a win on every individual.** HG005 is the exception in T2.1 and T2.3, where DiscoSNP++
+  has the higher F1. The CSV and the manuscript text both say so.
+- **It does not use simulated data.** T2.5 (tetraploid) concatenates real HG003 and HG004 reads.
+  In the manuscript's words, nothing at the sequence level is simulated, and only the ploidy
+  relationship is constructed.
 
 ## The five tables, one line each
 
@@ -38,14 +31,10 @@ FASTQ or building a second, independent representation.**
 | T2.4 | Multi-allelic SNV sites, complete chr20 census | DiscoSNP++ | WIN, 17/26 vs 0/26 — structural, not marginal |
 | T2.5 | Tetraploid SNV+indel, real HG003+HG004 mix | DiscoSNP++ | WIN both classes, SNV 0.897 vs 0.782, indel 0.597 vs 0.553 |
 
-## Verification status of this overview and its 7 companion files
+## Verification of the figures
 
-Every number above and in the detail files was cross-checked
-directly against `results/claim2/claim2_T2.*.csv` **and** the live
-manuscript tables in `capsul_paper/capsul_manuscript.tex` (lines 499-660+),
-number by number, not sampled. Zero discrepancies found — Claim 2's
-manuscript tables are current and correct, unlike Claim 3's T3.1/T3.4
-tables, which needed correction (see `docs/claim3/`).
+Every number in this folder was compared, one by one, with `results/claim2/claim2_T2.*.csv` and
+with the manuscript tables. No discrepancy was found.
 
 ## How the tables relate to each other
 
@@ -67,26 +56,22 @@ tables, which needed correction (see `docs/claim3/`).
 
 ## File index for this folder
 
-- `t21_snv_claim2.md`
-- `t22_coverage_sweep_claim2.md`
-- `t23_indel_claim2.md`
-- `t24_multiallelic_claim2.md`
-- `t25_tetraploid_claim2.md`
-- `architecture_vs_discosnp_claim2.md` — layer-by-layer implementation
-  comparison against DiscoSNP++ (18-row correspondence table: shared
-  textbook algorithm vs. their design vs. ours), including the
-  "assembly is the byproduct, not the graph" self-correction and one
-  refuted headroom candidate (free read threading).
-- `mechanism_insight_claim2.md` — how Claim 2 connects to the paper's
-  central insight (the same allele-splitting/reconciliation mechanism as
-  Claim 3/T3.5), and what a fair reading of DiscoSNP++
-  and Kmer2SNP's own capabilities actually supports.
-- `code_mapping_claim2.md` — exact function/line references in
-  `include/caps_caller.h` and `src/decoder.cpp` for every table,
-  and the exact source file for every number cited.
+- [`t21_snv_claim2.md`](t21_snv_claim2.md): heterozygous SNVs.
+- [`t22_coverage_sweep_claim2.md`](t22_coverage_sweep_claim2.md): F1 against depth.
+- [`t23_indel_claim2.md`](t23_indel_claim2.md): heterozygous indels.
+- [`t24_multiallelic_claim2.md`](t24_multiallelic_claim2.md): multi-allelic sites.
+- [`t25_tetraploid_claim2.md`](t25_tetraploid_claim2.md): tetraploid calling.
+- [`architecture_vs_discosnp_claim2.md`](architecture_vs_discosnp_claim2.md): layer-by-layer
+  comparison with DiscoSNP++ (an 18-row table of the shared textbook algorithm, DiscoSNP++'s design
+  and G_CAPSUL's), the correction that assembly is a byproduct and not the graph, and one refuted
+  speed-up (free read threading).
+- [`mechanism_insight_claim2.md`](mechanism_insight_claim2.md): how Claim 2 rests on the same
+  allele-splitting and reconciliation mechanism as Claim 3 (T3.5), and what DiscoSNP++ and Kmer2SNP
+  can and cannot do.
+- [`code_mapping_claim2.md`](code_mapping_claim2.md): the functions in `include/caps_caller.h` and
+  `src/decoder.cpp` behind each table, and the source file of every number.
 
-## Source-of-truth rule for this whole folder
+## Source of truth
 
-Where any file here disagrees with `results/`, the result file
-wins. This folder is navigation/synthesis, not a replacement source of
-truth.
+Where a file in this folder disagrees with `results/`, the result file is correct. This folder
+explains the results and does not replace them.

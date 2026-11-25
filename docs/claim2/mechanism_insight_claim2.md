@@ -26,7 +26,7 @@ one site" pattern as T3.3-vs-T3.5 in Claim 3.
 
 ## The category-error correction behind why archive-native calling was worth trying at all
 
-Verified against the compression-derived-calling note. Before building a
+Before building a
 caller from the archive, this project checked the literature on
 assembly-derived variant calling and found a real concession worth citing:
 Xu et al. 2017 (*Scientific Reports* 7:10963), simulating >3M SNVs
@@ -48,7 +48,7 @@ withdrawn, not cited anywhere in this project's own claims.)
 
 ## A free candidate-generation channel already inside the archive, at ~1 byte per candidate
 
-Verified against the same source. Independent of any caller logic, the
+Independent of any caller logic, the
 encoder's own MEM-extension mismatch streams (`mem_extmm_cnt/pos/obs`) are
 `(position, reference base, observed base)` triples recorded so decode can
 reproduce a read that was stored as a near-copy of an earlier pseudogenome
@@ -96,130 +96,85 @@ alleles.** T2.5 (tetraploid) generalizes it again, along the ploidy axis
 rather than the allele-count axis — same underlying mechanism, third
 independent confirmation.
 
-## Historical scale gap, and its resolution — verified against the Claim 2 final-verdict note in full, not just its superseded-numbers banner
+## Evaluation scale
 
-That document's own "Final verdict" section (written before the 2026-09-10
-sweep) states: *"Claim 2 should be described as validated on a
-representative sample, not validated at the stated scale... the full 30x
-chr20 per individual run has never been executed."* At that point every
-Claim 2 number was measured on a ~75K-read chr20 *window*, not a full
-individual. **This is resolved, not still open**: the same document's own
-superseded-numbers table (top of file) labels the final figures explicitly
-as *"full chr20, called from the archive"*, and the T2.1-T2.5
-CSV cross-check (`t21_snv_claim2.md` etc.) confirms full-chromosome-scale
-counts (e.g. 37,011 TP on HG002, not a ~75K-window-sized count). State this
-resolution if the methods section needs to address
-"was this validated at claimed scale": the answer is yes now, and it was not at an earlier point in
-the project's history.
+An earlier version of the Claim 2 record described the results as validated on a representative
+sample and not at the stated scale, because every number then came from a window of about 75,000
+reads of chromosome 20 and not from a full individual. That is resolved. The final figures are from
+full chromosome 20, called from the archive, and the T2.1 to T2.5 CSV files give counts at that
+scale (for example 37,011 true positives on HG002, which a 75,000-read window could not produce).
 
-## Limit on how deeply this mechanism has been code-audited
+## How closely the mechanism has been code-audited
 
-The same document states: *"no algorithmic audit at the depth of Claim 3's
-was performed on `caps_caller.h`"* — at 2,132 lines when written. **The file
-later measured 6,908 lines**, so even the limited prior scrutiny does not cover everything
-currently in the file. This reinforces this file's earlier caveat: `build_substrate` and
-`collapse_contigs` being the ablation's mechanism is a strong,
-naming-and-commit-history-based inference, not a confirmed fact — and the
-reason a deeper confirmation hasn't happened is that no audit at
-that depth has ever been performed on this file, by anyone, at any point in
-the project's history. This is worth stating rather than
-implying more rigor was applied than actually was.
+An earlier review noted that `caps_caller.h`, then 2,132 lines, had not had an algorithmic audit
+at the depth applied to the Claim 3 code. The file now has 5,970 lines, so even that limited
+scrutiny does not cover all of it. The statement that `build_substrate` and `collapse_contigs`
+are the mechanism behind the ablation therefore rests on their names, their commit history and the
+ablation itself, and not on a line-by-line audit.
 
-## Two indel failure-mode findings, verified from a from-scratch re-scan
+## Two indel failure modes found by a fresh re-scan
 
-The het-indel re-scan note (2026-09-03) deliberately re-ran the het-indel
-benchmark and inspected raw FP/FN VCF records by hand, without starting from
-any prior analysis's conclusions — specifically to catch confirmation bias.
+The heterozygous-indel benchmark was re-run and the raw false-positive and false-negative VCF
+records were inspected by hand, without starting from earlier conclusions, to avoid confirmation
+bias.
 
-**Finding 1 — repeat context drives false positives, replicated via an
-independent signal.** Prior docs identified homopolymer/short-tandem-repeat
-context as the dominant false-positive driver using GIAB's own
-`difficultregion=` truth annotations. This scan found the *same*
-underlying signal through an unrelated path: the reference FASTA is
-soft-masked (repeats in lowercase), and both `bcftools norm` and `rtg
-vcfeval`'s reference lookup inherit that case when normalizing an indel —
-so a call's case in the FP/FN report is a free, independent repeat marker.
-Measured: false positives are lowercase (repeat-masked) 62.5% of the time
-against true positives' 31.6% — **~2× enrichment**, replicating the
-existing conclusion a second, unrelated way (small sample, n=16 FP/n=38 TP
-on one window — suggestive, not definitive on its own, but consistent with
-every prior measurement of the same phenomenon).
+**Finding 1: repeat context drives false positives.** Earlier analysis had identified
+homopolymer and short-tandem-repeat context as the dominant false-positive driver, using GIAB's
+`difficultregion=` annotations. The re-scan found the same signal by an unrelated route. The
+reference FASTA is soft-masked (repeats in lowercase), and both `bcftools norm` and the reference
+lookup of `rtg vcfeval` keep that case when normalizing an indel, so the case of a call in the
+report marks a repeat. False positives were lowercase 62.5% of the time against 31.6% for true
+positives, about a twofold enrichment. The sample is small (16 false positives and 38 true
+positives in one window), so the result is suggestive and consistent with every earlier measurement
+of the same effect.
 
-**Finding 2 — a distinct, previously undocumented failure mode: right
-site, wrong polarity.** Cross-referencing FP and FN positions directly (not
-done in prior analyses) found one exact positional match:
-`chr20:3332481`, where GIAB truth calls a 4bp deletion (`TTTTA→T`) and this
-project's caller called a 4bp *insertion* (`T→Tttta`) at the *identical*
-position — not a missed candidate, not a locus mismatch, but a
-length-change-direction error at what is almost certainly a poly-T
-homopolymer, where two locally-plausible interpretations both fit the read
-data and the wrong one was resolved. Occurred once in this window (1 of 16
-FPs), reported as a distinct failure class and a concrete,
-explicitly unresolved follow-up question — whether `extract_bubble`/
-`scan_pair` (`caps_caller.h`) has a systematic insertion-vs-deletion bias
-specifically at tandem-repeat loci — not as a conclusion this scan had the
-sample size to reach.
+**Finding 2: right site, wrong polarity.** Comparing false-positive and false-negative positions
+directly gave one exact match, `chr20:3332481`. GIAB truth has a 4 bp deletion (`TTTTA` to `T`)
+and the caller called a 4 bp insertion (`T` to `Tttta`) at the same position. This is a
+length-change-direction error at what is almost certainly a poly-T homopolymer, where two local
+interpretations fit the reads and the wrong one was chosen. It occurred once in this window (1 of
+16 false positives). It is reported as a distinct failure class. Whether `extract_bubble` and
+`scan_pair` in `caps_caller.h` have a systematic insertion-versus-deletion bias at tandem repeats
+is an open question, and the sample is too small to answer it.
 
-## Verification discipline, evidenced concretely — worth citing for credibility, not just the results
+## Checks made before results were reported
 
-The same document records two real measurement bugs caught and fixed
-*before* being reported as caller results: a benchmark script's synthetic-
-truth generator silently shifted indel positions (root-caused, fixed, not
-a caller defect), and an apparent catastrophic runtime signal from
-small-sample testing turned out to be a sampling artifact once the trend
-across sample sizes was checked rather than trusting one data point. Both
-are good, concrete evidence of the project's actual practice — checking an
-invariant before trusting a number — rather than a claim made once and
-left unexamined. **A third instance, verified against
-the pre-flight checklist**: a pre-full-scale-run audit of every tunable
-for accidentally-fitted constants found that the dBG bubble channel's
-multi-polymorphism tolerance (`CAPS_DBG_MAXPOLY`) still defaulted to 3
-(DiscoSNP++'s own `-P` default) in the *compiled binary*, while every
-number this project had actually reported for that channel was measured
-with `MAXPOLY=1` passed explicitly on the command line — a bare,
-undocumented invocation would silently have used a configuration that
-scores measurably worse (F1 0.861 at P=1 with coherence checking vs 0.850
-at P=3, on the same window). Caught and fixed *before* the full-scale run,
-not after a number was published from it — the default was changed to
-match every validated configuration, and a bare run was re-verified to
-reproduce the exact previously-reported TP/FP/FN afterward.
+Two measurement bugs were caught and fixed before any caller result was reported. A synthetic-truth
+generator in a benchmark script silently shifted indel positions, which was a script defect and not
+a caller defect. An apparent runtime blow-up in small-sample tests proved to be a sampling artifact
+once the trend across sample sizes was examined.
 
-## Capability check: could DiscoSNP++ or Kmer2SNP be extended to do this?
+A third check covered the tunable parameters. An audit before the full-scale run looked for
+accidentally fitted constants. It found that the multi-polymorphism tolerance of the de Bruijn
+bubble channel (`CAPS_DBG_MAXPOLY`) still defaulted to 3 in the compiled binary (DiscoSNP++'s own
+`-P` default), while every reported number for that channel had been measured with `MAXPOLY=1`
+passed on the command line. A bare invocation would have used a configuration that scores worse
+(F1 0.861 at P=1 with coherence checking against 0.850 at P=3, on the same window). The default was
+changed to 1 (the current value in `include/caps_caller.h`), and a bare run was confirmed to
+reproduce the previously reported TP, FP and FN.
 
-**Kmer2SNP**: no indel model, no multi-allelic model, by construction — it
-is a k-mer-graph SNV caller. This is stated as a structural limitation in
-the het-indel literature survey and confirmed by its own absence from
-T2.3/T2.4/T2.5 (`NOT_APPLICABLE`, not a measured 0). No claim is made here
-about whether it *could* be extended — that would require reading its
-source, which has not been done for this project (unlike the PgRC2 check
-in Claim 3's mechanism file). **Do not claim more than this** — Kmer2SNP's
-limitation is documented as observed capability, not verified architectural
-impossibility, and the paper should reflect that distinction.
+## Could DiscoSNP++ or Kmer2SNP do this?
 
-**DiscoSNP++**: its 0/26 on T2.4 is explained by output schema (bubble
-records are inherently biallelic — one REF, one ALT per bubble), which is
-a checkable architectural property of a bubble-based caller, not
-guessed. **This has NOT been verified by reading DiscoSNP++'s
-own source** — it is inferred from its documented output format and its
-observed behavior (0 multi-allelic records across 3,989 total emitted, on
-data where the truth set demonstrably contains 26 multi-allelic sites).
-This is a reasonable, evidence-based inference, but it is not the same
-rigor as the PgRC2 source-code check in Claim 3's mechanism file, and the
-paper should not claim it as verified from DiscoSNP++'s own code unless
-that check is actually done.
+**Kmer2SNP** has no indel model and no multi-allelic model, because it is a k-mer-graph SNV caller.
+This follows from its design as described in the heterozygous-indel literature survey, and is
+consistent with its absence from T2.3 to T2.5 (`NOT_APPLICABLE`, not a measured 0). Whether it
+could be extended was not examined, because that would require reading its source. The limitation
+is therefore an observed capability and not a verified architectural impossibility.
 
-## Summary paragraph for the paper's discussion section
+**DiscoSNP++** produced 0 of 26 on T2.4. This is explained by its output schema. A bubble record
+has one REF and one ALT, so a bubble-based caller cannot express more than one alternate allele at
+a locus. The explanation is inferred from the documented output format and from the observed
+behavior (no multi-allelic record among 3,989 emitted, on data whose truth set contains 26
+multi-allelic sites). DiscoSNP++'s source was not read, so the explanation is not verified at the
+code level, which is a weaker check than the PgRC2 source check in
+[`../claim3/mechanism_insight_claim3.md`](../claim3/mechanism_insight_claim3.md).
 
-*Claim 2's calling results are not independent of Claim 1's compression
-mechanism — they are its direct consequence, reversed. The same
-bit-minimization pressure that causes a compressor to place divergent
-alleles at separate pseudogenomic addresses is what a naive caller would
-read as two unrelated single-allele sites; reconciling those addresses
-before calling (build_substrate/collapse_contigs) is what recovers the
-signal, raising F1 from 0.431 to 0.888 in ablation. T2.4's multi-allelic
-result and T2.5's tetraploid result are the same mechanism observed at
-higher allele count and higher ploidy respectively, not separate
-achievements. DiscoSNP++'s inability to represent multi-allelic sites
-follows from its bubble-based, inherently biallelic output format; this is
-inferred from its documented design and observed output, not verified by
-reading its source, and is stated with that caveat.*
+## Summary
+
+The calling results of Claim 2 follow from the compression mechanism of Claim 1. The pressure to
+minimize bits that makes a compressor place divergent alleles at separate pseudogenome addresses is
+what a naive caller reads as unrelated single-allele sites. Reconciling those addresses before
+calling (`build_substrate` and `collapse_contigs`) recovers the signal and raises the F1 from 0.431
+to 0.888 in the ablation. T2.4 (multi-allelic) and T2.5 (tetraploid) show the same mechanism at a
+higher allele count and a higher ploidy. DiscoSNP++'s inability to represent multi-allelic sites
+follows from its biallelic bubble output format, as inferred above.

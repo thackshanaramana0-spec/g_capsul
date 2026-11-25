@@ -92,7 +92,7 @@ adds.
   `benchmark_0_preflight.sh`, so a broken index is a NO-GO before any table
   is produced.
 
-## The real, disclosed cost — do not omit
+## The cost
 
 1. **Index size.** 0.9 to 2.6 MB per individual: 928,092 B for HG002 and
    2,640,919 B for HG005, against archives of 480,627 B and 748,892 B. It is
@@ -113,20 +113,18 @@ adds.
    and 87 of 400 for HG002 to HG005; see T3.5). That belongs to the locus
    query's mismatch tolerance, not to exact-match search, which is exact.
 
-## How to frame the comparison to BEETL/CIndex/sFASTQ — do this, not that
+## Relation to BEETL, CIndex and sFASTQ
 
-**Do**: "The archive answers both retrieval types — reads covering a locus
-(by position) and reads containing a string (recall 1.0000, via an FM-index
-built from the archive after compression)." State capability and the real
-cost. A BWT index answers the exact-match question by construction because
+The archive answers both retrieval types: reads covering a locus (by position) and reads
+containing a string (recall 1.0000, through an FM-index built from the archive after compression).
+The cost of the index is real and is stated above. A BWT index answers the exact-match question by construction because
 it is built from every read at compression time. Here the pseudogenome has
 already absorbed the reads that match it, so the FM-index covers only the
 rest.
 
-**Do not**: claim head-to-head parity with BWT-family tools as if in
-competition, or call the FM-index free. **No speed comparison and no
-index-size comparison against BEETL/CIndex/sFASTQ has been measured.** Both
-are explicitly future work, not claimed.
+This is not a claim of head-to-head parity with the BWT-family tools, and the FM-index is not free.
+No speed comparison and no index-size comparison against BEETL, CIndex or sFASTQ has been measured.
+Both are future work.
 
 ## What generalizes and why — not "we tested enough samples"
 

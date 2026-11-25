@@ -49,11 +49,8 @@ configuration, not a failure, and definitely not the numbers above. This is
 the most important flag for reproducing T2.3 (and T2.4, T2.5 — see
 those files).
 
-## Withdrawn numbers — history, kept per this project's own retraction rule
+## Superseded numbers
 
-The Claim 2 final-verdict note records that earlier het-indel figures
-(0.637, then 0.666, both measured on 8 chr20 WINDOWS, not full chromosomes)
-are **superseded** by the final 0.621 figure above (full chr20, 4
-individuals, from the 2026-09-09/10 sweep). The 0.621 figure in this file
-and in the manuscript is the final, correct one — do not cite 0.637 or
-0.666 anywhere.
+Earlier heterozygous-indel figures (0.637, then 0.666) were measured on 8 chromosome 20 windows and
+not on full chromosomes. They are superseded by the 0.621 above (full chromosome 20, 4
+individuals), which is the figure in this file and in the manuscript.

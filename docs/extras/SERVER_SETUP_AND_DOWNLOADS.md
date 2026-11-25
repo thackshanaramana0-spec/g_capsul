@@ -1,17 +1,13 @@
-# Server setup — every dataset and tool, exactly as installed, verified
+# Server setup and dataset downloads
 
-Written 2026-09-03. Every command below is either (a) copied from a
-checked-in script (the dataset download script in the outer `/root/arcs-clean`
-repo) and re-verified against this server's actual state, or (b)
-reconstructed from a verified git remote / installed version / package
-manager record on this exact server — never guessed. Where something could
-not be independently verified, it says so explicitly rather than presenting
-a guess as fact.
+This runbook lists the tools and data that the benchmark needs and the commands that install or
+fetch each of them, so that a new machine can reach the same state. The commands come from the
+scripts used for the reported runs and were checked against the server that produced them. Version
+numbers are the ones installed there. Where something could not be verified, the text says so.
+References to "the development notes" and to the per-tool benchmark notes mean the author's
+internal working record, which is not distributed with the repository.
 
-**Purpose:** if this server is destroyed, this file plus the two repos
-(`arcs-clean`, `c_star_pg_advance`) is everything a new server needs to
-reach the same state — same datasets, same tool versions, same install
-method. Follow it top to bottom; each phase is independent.
+The accession list is in [`DATASETS.md`](DATASETS.md). The sections are independent of each other.
 
 ---
 
@@ -50,17 +46,14 @@ curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip
 unzip awscliv2.zip && sudo ./aws/install
 ```
 
-## 2. Claim 1 — 10-17 locked SRA datasets
+## 2. Claim 1: SRA datasets
 
-**Source of truth for the exact accessions: `/root/arcs-clean/DATASET_LOCKED.md`**
-(10 primary + 7 extended = 17) and, for the G_CAPSUL-sandbox-specific
-15-dataset SPRING/Genozip comparison, `/root/arcs-clean/c_star_pg_advance/NEW_DATASET_LOCKED.md`
-(one swap: Drosophila out, Utricularia gibba in — documented there with the
-exact reasoning, not silently substituted). **Never change these lists
-without documenting why**.
+**The exact accessions** are listed in [`DATASETS.md`](DATASETS.md) (15 organisms and 4 human
+individuals). The set must not be changed without recording the reason, because a substitution
+invalidates the comparison with the published tables.
 
 **The actual, working download command** (from the dataset download script,
-run for every accession in the locked list):
+run for every accession in the list):
 
 ```bash
 DATA_DIR=/data/fastq
@@ -76,7 +69,7 @@ fasterq-dump --threads "$(nproc)" \
 
 **For the two large datasets (C. elegans SRR065390 ~22GB, T. cacao
 SRR870667 ~15GB SRA), `prefetch` is too slow — use the S3 Open Data mirror
-instead**, exactly as documented in the development notes:
+instead**, as recorded in the development notes:
 
 ```bash
 aws s3 cp --no-sign-request \
@@ -96,23 +89,16 @@ bandwidth far better than `prefetch`'s own transport for multi-GB files.
 **Rule of thumb used on this project: any accession whose `.sra` is
 expected above ~5GB, use the S3 mirror first, not `prefetch`.**
 
-**Run the whole locked list in one command** (already scripted, not manual):
+**Fetching the whole list.** Loop the commands above over the accessions of `DATASETS.md`, using
+the S3 mirror for any accession whose `.sra` is above about 5 GB. Check that every
+`${ACCESSION}_1.fastq` exists and has the expected size before starting the benchmark, then rename
+it to `${ACCESSION}_1.fq` in `$CAPSULE_DATA_DIR` (default `/data/fastq`).
 
-```bash
-bash benchmark/download.sh /data/fastq 2>&1 | tee /data/download.log
-tail -30 /data/download.log   # must end with "DOWNLOAD COMPLETE"
-```
+## 3. Claim 2: GIAB HG002 to HG005, chromosome 20 at 30x
 
-**Utricularia gibba (Plantae, `SRR10676752`)** — the one dataset in the
-15-set list not yet downloaded as of this writing. Per `docs/extras/DATASETS.md`,
-its `.sra` (7.3 GB) was already staged at `/tmp/newdl/SRR10676752/` via the
-S3-mirror method above; only the `fasterq-dump` conversion step remains.
-
-## 3. Claim 2 — GIAB HG002-HG005 chr20 at standardized 30×
-
-**Not a bulk file download — a targeted S3 stream + downsample**, because
+**This is a targeted S3 stream and downsample, not a bulk download**, because
 the full WGS BAMs are hundreds of GB per individual and only chr20 at 30×
-is needed. This is the dataset download script Phase 3, reproduced here exactly:
+is needed. This is the download step used for the reported runs:
 
 ```bash
 export HTS_S3_ADDRESS_STYLE=path
@@ -145,11 +131,10 @@ seqtk sample -s 42 HG002_chr20_full.fq "$FRAC" > HG002_pooled.fq
 | HG005 | `s3://giab/data/ChineseTrio/HG005_NA24631_son` |
 
 Source GIAB S3 coverage varies per individual (60-300×) — this is exactly
-why the downsample-to-30× step exists: it removes that confound so T3 F1
-comparisons across individuals are apples-to-apples, not an accident of
-whichever individual happened to be sequenced deeper.
+why the downsample-to-30× step exists: it removes that confound so that F1
+comparisons across individuals do not depend on which individual was sequenced deeper.
 
-**chr20 reference and GIAB truth VCFs** (also Phase 5 of the dataset download script):
+**chr20 reference and GIAB truth VCFs** :
 
 ```bash
 # GRCh37/hg19 chr20, sequence renamed from ">chr20" to ">20" to match GIAB's convention
@@ -177,30 +162,28 @@ curl -L -o rtg-tools.zip \
 unzip rtg-tools.zip
 ```
 
-## 4. Claim 3 — E. coli export/coverage/query baseline
+## 4. Claim 3: E. coli export, coverage and query
 
-Uses the same `SRR2584863` accession already fetched for Claim 1 (locked
-accession #1) — no separate download needed. `scripts/benchmark_scripts/benchmark_1_run.sh` in
-`c_star_pg_advance` builds everything else it needs (its own binaries,
-SPAdes if absent) automatically — see §5 below for the SPAdes part
-specifically.
+Uses the same `SRR2584863` accession as Claim 1 (dataset 1 of `DATASETS.md`), so no separate
+download is needed. `scripts/benchmark_scripts/benchmark_1_run.sh` builds the other binaries it
+needs, and SPAdes if it is absent (see section 5).
 
-## 5. SOTA and allied tools — exact install method, verified per tool
+## 5. Comparison tools: versions and install methods
 
 | tool | version (verified) | install method (verified against this server) |
 |---|---|---|
 | **SPRING** | (no `--version` flag; boost-based build) | `git clone https://github.com/shubhamchandak94/SPRING.git` at `/root/SPRING`, built per its own README (CMake + boost). |
 | **Genozip** | 15.0.87 (`genozip --version`) | Source tarball `genozip-src.tar.gz` (7.6MB, present at `/root/genozip-src.tar.gz`) extracted to `/root/genozip-genozip-15.0.87/` and built there. Official source: `https://github.com/genozip/genozip` (download a release tarball, e.g. `https://github.com/genozip/genozip/archive/refs/tags/genozip-15.0.87.tar.gz`, then `make`). |
-| **PgRC2** | git clone, GPL-3, never vendored | `git clone https://github.com/kowallus/PgRC.git` at `/root/arcs-clean/method_c` (renamed on clone). Build per its own CMake instructions. |
+| **PgRC2** | git clone, GPL-3, never vendored | `git clone https://github.com/kowallus/PgRC.git` at `method_c/` in the working directory (renamed on clone). Build per its own CMake instructions. |
 | **DiscoSNP++** | v2.6.2-12 (per the DiscoSNP++ comparison note) | `git clone https://github.com/GATB/DiscoSnp.git` at `/root/DiscoSnp`. Build with its own `./INSTALL` or CMake script; needs `-G <ref.fa>` at run time (mandatory, not optional — see the development notes' command reference). |
 | **Kmer2SNP** | — | `git clone https://github.com/yanboANU/Kmer2SNP.git` at `/root/Kmer2SNP`. **Real compatibility fixes required** for this 2020-era code on a modern Python (documented in full in the Kmer2SNP benchmark note): `time.clock()` → `time.perf_counter()` (Python 3.8 removed the former), `networkx.connected_component_subgraphs` → a documented generator-expression equivalent (removed in networkx 2.4+), and `findGSE` (an R package) bypassed via Kmer2SNP's own documented `--c1/--c2/--r` flags with data-derived values from a k-mer histogram, rather than installing R. |
 | **KMC** | 3.2.4 | `apt-get install kmc`. The k-mer counter used for Kmer2SNP in the reported results, in place of DSK (see `scripts/claim2_scripts/run_kmer2snp.sh`). |
 | **DSK** | v2.3.3 | Not used in the reported results. Kmer2SNP's own driver script hardcodes a `/path2dsk/` placeholder, so KMC replaces it. |
 | **MEGAHIT** | 1.2.9-5 | `apt-get install megahit` — a real Ubuntu package, no manual build needed. |
-| **SPAdes** | v4.0.0 | **Prebuilt binary, not apt** (no current Ubuntu package tracks the latest release): `curl -sL https://github.com/ablab/spades/releases/download/v4.0.0/SPAdes-4.0.0-Linux.tar.gz -o spades.tar.gz && tar xzf spades.tar.gz` — installed this way at `~/SPAdes-4.0.0-Linux/`, verified working (real 239-contig E. coli assembly, the Claim 3 locked-results note §6.2). |
+| **SPAdes** | v4.0.0 | **Prebuilt binary, not apt** (no current Ubuntu package tracks the latest release): `curl -sL https://github.com/ablab/spades/releases/download/v4.0.0/SPAdes-4.0.0-Linux.tar.gz -o spades.tar.gz && tar xzf spades.tar.gz` — installed this way at `~/SPAdes-4.0.0-Linux/`, verified working on the E. coli assembly of T3.1 (239 contigs). |
 | **bwa / samtools / mosdepth / tabix / bcftools** | see §0 table | plain `apt-get install`, no manual build for any of these. |
 
-## 6. What NOT to do — real errors this project hit, so a fresh server doesn't repeat them
+## 6. Mistakes to avoid
 
 1. **Do not use `prefetch` alone for any SRA accession likely to exceed
    ~5GB.** It works but is far slower than the S3 mirror (§2) for large

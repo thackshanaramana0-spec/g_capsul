@@ -1,93 +1,74 @@
-# Code-to-table mapping
+# Code-to-table mapping (Claim 2)
 
-> Functions and files in include/caps_caller.h and src/decoder.cpp behind each Claim 2 operation, and the source file of every number cited in this folder.
-
-Line numbers from `include/caps_caller.h` (6,908 lines) and
-`src/decoder.cpp`, as committed. This file maps *structure and
-entry points*, verified directly by grep and targeted reads —
-it is not a claim to have read all 6,908 lines of `caps_caller.h` (not
-feasible or necessary for this purpose). If a specific line number below
-has shifted, re-verify with `grep -n` before trusting it; the described
-mechanism should still hold even if a line moves.
+This file maps the Claim 2 operations (T2.1 to T2.5) to the code that performs them and lists the
+source file of every number cited in this folder. The line numbers are from `include/caps_caller.h`
+(5,970 lines) and `src/decoder.cpp`. They drift as the files change, so search for the function
+name. The file maps entry points and structure, and it does not claim a line-by-line read of the
+caller. The caller is described in [`../technical_architecture.md`](../technical_architecture.md),
+section 7.
 
 ## Entry point
 
-- `decoder.cpp:2136-2137` — dispatch: `capsule_decode call <in.capsule>
-  <out.vcf> [workdir]` routes to `capsule_call_from_archive`, defined at
-  `decoder.cpp:1857`.
-- This is the "Claim 2 from a STORED archive" path (comment at line 2135) —
-  calling reads a `.capsule` file, not live in-memory state from
-  compression, confirming the "archive-native, no FASTQ re-read" claim at
-  the code level, not just in prose.
+- `src/decoder.cpp:2512` dispatches `capsule_decode call <in.capsule> <out.vcf> [workdir]` to
+  `capsule_call_from_archive`, defined at `decoder.cpp:2233`.
+- The call reads a stored `.capsule` file. It does not use in-memory state from compression, which
+  confirms at the code level that calling is archive-native and does not read the FASTQ again.
 
-## Core mechanism functions, `include/caps_caller.h`
+## Core functions in `include/caps_caller.h`
 
-- **`extract_bubble` / `extract_snv_bubble`** (lines ~195, ~401) — find
-  divergent regions between two contig sequences ("bubbles"), the raw
-  signal that a het site produces when its two alleles are separated onto
-  different pseudogenomic segments.
-- **`scan_pair`** (line ~347) — runs bubble extraction across a pair of
-  aligned sequences.
-- **`build_substrate`** (line 816) — the reconciliation mechanism. Builds
-  the calling substrate from raw contig sequences plus `CallData`; this is
-  the function whose presence/absence is almost certainly what the
-  manuscript's ablation (F1 0.431 without collapse/re-placement, 0.888
-  with both) is measuring — verify against the het-indel literature survey or the
-  git history around commit `1fec5e0` ("Close the indel_pass accounting:
-  build_substrate is 54% and is not waste") before stating this as fully
-  confirmed rather than strongly inferred.
-- **`collapse_contigs`** (line 632) — the contig-merging step referenced by
-  name in the ablation's "collapse" terminology.
-- **`gapped_indel_scan`** (line 731) — read-level gapped alignment scan
-  producing indel evidence; the function behind T2.3's indel calls.
-- **`run_variant_call`** (line 1260 onward — the dominant function in the
-  file, spanning roughly 5,600 of the file's 6,908 lines) — orchestrates
-  the full pipeline: SNV pileup substrate, indel/bubble substrate,
-  ploidy-aware emission.
-- **Ploidy handling**: `CAPS_PLOIDY` read at `caps_caller.h:1347`
-  (`if (v >= 2 && v <= 4) PLOIDY = v`), used in multi-allelic-frequency
-  logic at line 2512 (`MAF_K = MAF * 2.0 / PLOIDY`), and in rejection
-  accounting for multi-allelic candidates that exceed the configured ploidy
-  (`n_multi_overploidy`, logged around line 4325). This is the mechanism
-  behind both T2.4 (ploidy=2, multi-allelic within that ploidy) and T2.5
-  (ploidy=4, via `CAPS_PLOIDY=4`).
+- **`extract_bubble` (line 258) and `extract_snv_bubble` (line 427)** find divergent regions between
+  two contig sequences (bubbles), the signal that a heterozygous site produces when its two alleles
+  sit on different pseudogenome segments.
+- **`scan_pair` (line 373)** runs bubble extraction across a pair of aligned sequences.
+- **`build_substrate` (line 791)** is the reconciliation step. It builds the calling substrate from
+  the contig sequences and `CallData`. It is very probably the function that the manuscript's
+  ablation toggles (F1 0.431 without collapse and re-placement, 0.888 with both). This is inferred
+  from names and from the commit history around `1fec5e0` ("Close the indel_pass accounting:
+  build_substrate is 54% and is not waste"), and the ablation was not re-run.
+- **`collapse_contigs` (line 625)** is the contig-merging step, referred to as "collapse" in the
+  ablation.
+- **`gapped_indel_scan` (line 707)** is the read-level gapped alignment scan that produces the indel
+  evidence behind T2.3.
+- **`run_variant_call` (line 1188)** is the dominant function of the file. It orchestrates the
+  pipeline: SNV pileup substrate, indel and bubble substrate, and ploidy-aware emission.
+- **Ploidy.** `CAPS_PLOIDY` is read at line 1262 (`if (v >= 2 && v <= 4) PLOIDY = v`) and used in
+  the multi-allelic frequency threshold at line 2262 (`MAF_K = MAF * 2.0 / PLOIDY`). Candidates
+  that exceed the configured ploidy are counted in `n_multi_overploidy` (from line 3438). This is
+  the mechanism behind T2.4 (ploidy 2, multi-allelic within that ploidy) and T2.5 (ploidy 4, set by
+  `CAPS_PLOIDY=4`).
 
-## Flag dependency, confirmed against the pipeline notes
+## Flags the tables depend on
 
-- `CAPS_CALL_INDELS=1` — required for T2.3/T2.4/T2.5. Without it,
-  `capsule_decode call` silently takes the graph-only SNV path (a
-  different, narrower configuration, not an error) — documented in
-  the pipeline notes' flags table (re-verified as present
-  and correct).
-- `CAPS_PLOIDY=N` — required for T2.5 specifically (`N=4`); defaults to 2.
+- `CAPS_CALL_INDELS=1` is required for T2.3, T2.4 and T2.5. Without it, `capsule_decode call`
+  takes the narrower graph-only SNV path without an error. The comment at `decoder.cpp:2241`
+  documents it.
+- `CAPS_PLOIDY=N` is required for T2.5 (`N=4`) and defaults to 2.
+
+The full list of environment variables is in [`../configuration_reference.md`](../configuration_reference.md).
 
 ---
 
-# Result file index — exact source for every number cited in this folder
+# Source file of every number
 
-| Number / claim | File |
+| Number | Source |
 |---|---|
 | T2.1 (het-SNV, all rows) | `results/claim2/claim2_T2.1_snv.csv` |
 | T2.2 (coverage sweep, all rows) | `results/claim2/claim2_T2.2_coverage_sweep.csv` |
 | T2.3 (het-indel, all rows) | `results/claim2/claim2_T2.3_indel.csv` |
 | T2.4 (multi-allelic, 17/26) | `results/claim2/claim2_T2.4_multiallelic.csv` |
 | T2.5 (tetraploid, all rows) | `results/claim2/claim2_T2.5_tetraploid.csv` |
-| Withdrawn multi-allelic numbers (5/111, 11/18, 21/26) and why | Internal reproduction log, not included in this public repo; the surviving, correct number (17/26) is the one reported in this folder and in `results/claim2/claim2_T2.4_multiallelic.csv` |
-| Withdrawn het-indel numbers (0.637, 0.666) and why | the Claim 2 final-verdict note (marked SUPERSEDED at top) |
+| Withdrawn multi-allelic numbers (5/111, 11/18, 21/26) and why | An internal reproduction log that is not part of this repository. The current figure (17 of 26) is in `results/claim2/claim2_T2.4_multiallelic.csv` |
+| Withdrawn het-indel numbers (0.637, 0.666) and why | the development notes (the Claim 2 final-verdict note, marked superseded) |
 | Claim 2 development history | the first Claim 2 results note, the second Claim 2 results note, the Claim 2 tables and indel-scan note, the het-indel re-scan note |
 | Literature survey justifying DiscoSNP++/Kmer2SNP as comparators | the het-indel literature survey |
-| Ablation numbers (F1 0.431 vs 0.888) | Manuscript body text (verify against the Claim 2 data-and-tools inventory or the indel-loss analysis for the underlying run before citing in a new context) |
+| Ablation numbers (F1 0.431 vs 0.888) | Manuscript body text. The underlying run is recorded in the development notes |
 
-## What was verified vs cited from earlier work
+## What was re-derived and what is cited
 
-**Verified, directly, number by number**: T2.1, T2.3, T2.4,
-T2.5's manuscript tables cross-checked against their CSVs — exact match,
-zero discrepancies. `CAPS_PLOIDY` and `CAPS_CALL_INDELS` flag mechanics
-confirmed by reading the actual code, not assumed from documentation.
+The manuscript tables T2.1, T2.3, T2.4 and T2.5 were compared with their CSV files and match
+exactly. The mechanics of `CAPS_PLOIDY` and `CAPS_CALL_INDELS` were confirmed by reading the code.
 
-**Not independently re-verified** (cited from prior,
-documented work): the exact F1 0.431→0.888 ablation numbers' original run
-log, and whether `build_substrate`/`collapse_contigs` are precisely the
-functions that ablation toggled — strongly inferred from naming and commit
-history, not confirmed by re-running the ablation. Flag this
-distinction if the ablation numbers are cited in new analysis.
+The original run log of the F1 0.431 to 0.888 ablation is cited and was not re-run. Whether
+`build_substrate` and `collapse_contigs` are precisely the functions the ablation toggled is
+inferred from names and commit history. This distinction should be kept when the ablation numbers
+are cited.

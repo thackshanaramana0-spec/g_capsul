@@ -46,12 +46,10 @@ every duplicate read, because duplicates share one unique read's placement
 but are separate reads for coverage-depth purposes. Measured before the fix,
 on E. coli: 185,346,900 covered bases against the reads' true 232,988,850 —
 a **20% undercount**. Fixed by expanding originals through `orig2uid`
-exactly as the read-reconstruction path already does. This is a good,
-concrete example for the paper (or a reviewer response) of the kind of
-correctness issue this project actively hunts for and fixes, not something
-to hide.
+exactly as the read-reconstruction path already does. It is an example of the correctness issues that decoding
+and comparison against the original found during development.
 
-## Results — locked, dominant, no caveats
+## Results
 
 Source: `results/claim3/claim3_T3.1_T3.2_T3.3.csv`, table=T3.2 rows.
 
@@ -86,7 +84,7 @@ orchestration layer).
 
 ## The architecture claim, made concrete by measurement, not asserted
 
-Verified against the Claim 3 post-split audit — peak RSS per operation
+From the Claim 3 post-split audit, peak RSS per operation
 on the same archive:
 
 | operation | peak RSS | pseudogenome rebuilds |

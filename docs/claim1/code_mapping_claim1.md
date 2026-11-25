@@ -1,87 +1,66 @@
-# Code-to-table mapping
+# Code-to-table mapping (Claim 1)
 
-> Functions and files in src/encoder.cpp and the shared coder headers behind T1.1 and T1.2, and the source file of every number cited in this folder.
+This file maps the Claim 1 results (T1.1 archive size, T1.2 wall time) to the code that produces
+them and lists the source file of every number cited in this folder. Line references are to
+`src/encoder.cpp` (4,989 lines), `include/coders_inproc.h` (938), `include/coders_entropy.h` (240)
+and `include/seqpar_core.h` (324). They drift as the files change, so search for the stage name.
+The mechanism statements in [`mechanism_insight_claim1.md`](mechanism_insight_claim1.md) rest on
+them. For the full description of the encoder see
+[`../technical_architecture.md`](../technical_architecture.md).
 
-Line and stage references are to `src/encoder.cpp` (about 4,950 lines),
-`include/coders_inproc.h` (about 940 lines), `include/coders_entropy.h` (about 240 lines) and
-`include/seqpar_core.h` (about 320 lines). They were traced by targeted search and reading, not by a
-full line-by-line read, and they ground the mechanism statements in
-`mechanism_insight_claim1.md`. Line numbers drift as the files change, so search for the stage
-name.
+## Pipeline stages in `src/encoder.cpp` (the `phase(...)` markers)
 
-## Pipeline stages, `src/encoder.cpp` — confirmed via `phase(...)` markers
+1. **`greedy-sweep`** (line 2511) is the pseudogenome construction, by suffix-prefix overlap
+   chaining. Its cost explains the T1.2 result, and its output (the placement data) is what Claims
+   2 and 3 reuse.
+2. **`pre-call` and `call`** (lines 3251 and 3368) form the inline variant-calling path, run only
+   when `CAPS_CALL=1` (the caller is `include/caps_caller.h`, see the Claim 2 code mapping).
+   The T3.1 investigation found that `CAPS_CALL` costs about 20 times more than `CAPS_SPANS` alone,
+   because it runs this stage inline.
+3. **`MEM+positions`** (line 3583) builds the reference and position streams. A log line here
+   compares the coded position size with PgRC2's ("PgRC2 pays 683,370 B coded for its reads-list
+   offsets").
+4. **`assemble+map`** (line 3672) maps the remaining reads by pigeonhole after chaining (`MINMEM`,
+   `MEMSEED` and `STEP` are logged here).
+5. **`pre-coding` and `CODING`** (lines 4940 and 4984) are the stream-coding stage, where the
+   per-stream selector below runs.
 
-1. **`greedy-sweep`** (line 2331) — the pseudogenome construction stage:
-   suffix-prefix overlap chaining. This is the stage whose cost is the
-   direct explanation for T1.2's 0/19 speed result, and whose output
-   (placement data) is what Claims 2/3 reuse for free.
-2. **`pre-call` / `call`** (lines 3130, 3247) — the inline variant-calling
-   path, only run when `CAPS_CALL=1` (see Claim 2's code mapping file for
-   the caller itself, `include/caps_caller.h`). Confirmed
-   (Claim 3's T3.1 investigation) that `CAPS_CALL` costs ~20x more than
-   `CAPS_SPANS` alone, because it runs this full stage inline.
-3. **`MEM+positions`** (line 3513) — reference/position stream construction;
-   comment at this line explicitly compares this project's coded position
-   size against PgRC2's ("PgRC2 pays 683,370 B coded for its reads-list
-   offsets"), direct evidence the position-encoding comparison to PgRC2 is
-   a code-level concern in this project, not an afterthought.
-4. **`assemble+map`** (line 3602) — pigeonhole mapping of the remainder
-   after chaining (`MINMEM`/`MEMSEED`/`STEP` logged at this line).
-5. **`pre-coding` / `CODING`** (lines 4912, 4956) — the stream-coding stage,
-   where the per-stream selector (below) runs.
+## Stream coder selector (`include/coders_inproc.h`, line 560)
 
-## Stream coder selector — `include/coders_inproc.h:556`
+The comment reads "universal per-stream selector over the REAL coder set". Each stream (literal
+bases, match references, mismatches and so on) is coded by several candidate coders and the
+smallest result is kept, in place of one fixed generic compressor. `include/coders_entropy.h`
+provides the PPMd7, FSE and range-coder implementations that are among the candidates.
+`include/seqpar_core.h` is the DNA coder shared by the standalone binary and the in-process path.
 
-Comment: *"universal per-stream selector over the REAL coder set"* — this
-is the mechanism behind T1.1's size result: each stream (literal bases,
-match references, read order, mismatches, etc.) is coded by multiple
-candidate coders and the smallest result kept, rather than a fixed
-generic-compressor pass. `include/coders_entropy.h` provides PPMd7/FSE/range
-coder implementations that are among the candidates this selector chooses
-from. `include/seqpar_core.h` is the shared DNA coder used identically by
-both the standalone binary and the in-process path (per its own module
-comment, not re-verified line by line).
+## Losslessness verification
 
-## Losslessness verification discipline — the real history behind the "LOSSLESS" column
-
-Confirmed against the development notes §6.1/6.3 (read): this project
-previously shipped an incomplete verification path (`verify_lossless.sh`
-decoded dumped intermediate streams, not the actual archive) that hid four
-real silent data-loss bugs — a mismatch-position byte overflow above 256bp
-reads, two "orphaned unique read" reconstruction bugs, and an FSE-RLE
-constant-stream decode bug. All four were found only by actually decoding
-the shipped archives and diffing against source, not by trusting the dump-
-level check. **This is the concrete, real reason T1.1's methodology note
-("every archive was independently decoded and checked against its input")
-is stated as carefully as it is** — it is a corrected practice, not a
-default one.
+An earlier `verify_lossless.sh` decoded dumped intermediate streams and not the shipped archive.
+That check hid four silent data-loss bugs: a mismatch-position byte overflow for reads above
+256 bp, two "orphaned unique read" reconstruction bugs, and an FSE-RLE constant-stream decode
+bug. They were found only by decoding the shipped archives and comparing them with the source. This
+is the reason the T1.1 method note states that every archive was independently decoded and checked
+against its input.
 
 ---
 
-# Result file index — exact source for every number cited in this folder
+# Source file of every number
 
-| Number / claim | File |
+| Number | Source |
 |---|---|
-| T1.1 (archive size, all rows, aggregate) | `results/claim1/claim1_T1.1_T1.2.csv` |
-| T1.2 (wall time, all rows) | same CSV, `compress_s`/`decompress_s` columns |
-| 19/19, −6.03%, −43.26%, 57/57 LOSSLESS headline | the development notes (top section); independently re-derived from the CSV above |
-| PgRC2 sequence-only comparison (+1.88%, 6 wins/1 loss, ~1.7x/2.5x) | the development notes lines ~248-268, citing the Claim 1 final-verdict note §42 and the final-headroom note |
-| The four corrected silent data-loss bugs | the development notes §6.3 |
-| Claim 1 development history | the Claim 1 final-verdict note, the compactness-headroom note, the Claim 1 paper draft |
-| `CAPS_SPANS` free-byproduct verification (zero archive-byte cost) | The Claim 3 work — see `docs/claim3/t31_export_claim3.md` and the pipeline notes' flags table |
+| T1.1 archive sizes and aggregates | `results/claim1/claim1_T1.1_T1.2.csv` |
+| T1.2 wall times | same file, columns `compress_s` and `decompress_s` |
+| 19/19, -6.03%, -43.26%, 57/57 lossless | the development notes, and recomputed from the CSV above |
+| PgRC2 sequence-only comparison (+1.88%, 6 wins and 1 loss, about 1.7x and 2.5x) | the development notes, citing the Claim 1 final-verdict note and the headroom analysis |
+| The four silent data-loss bugs | the development notes, section 6.3 |
+| `CAPS_SPANS` adds zero archive bytes | [`../claim3/t31_export_claim3.md`](../claim3/t31_export_claim3.md) |
 
-## What was verified vs cited from earlier work
+## What was re-derived and what is cited
 
-**Verified, directly, by re-deriving from raw data**: the full
-T1.1 aggregate (19/19, −6.03%, −43.26%, 57/57 LOSSLESS) was independently
-recomputed from the CSV, not just read from the development notes. T1.2's 0/19-both-
-axes result was computed the same way, newly derived (not
-previously stated this explicitly as "0/19" — the manuscript's own
-"bold marks fastest per row" phrasing is consistent with it but does not
-state the aggregate count directly).
+The T1.1 aggregate (19/19, -6.03%, -43.26%, 57/57 lossless) was recomputed from the CSV. The T1.2
+count of 0 of 19 on both axes was computed the same way. The manuscript's "bold marks fastest per
+row" is consistent with it but does not state the count.
 
-**Not independently re-verified** (cited from prior,
-documented work): the PgRC2 sequence-only comparison numbers (+1.88%, 6/1,
-~1.7x/2.5x) — read from the development notes' own citation of
-the Claim 1 final-verdict note/the final-headroom note, not re-run. The four silent-data-loss bug descriptions — read from the development notes
-§6.3, not independently re-confirmed by re-decoding archives.
+The PgRC2 sequence-only numbers (+1.88%, 6 and 1, about 1.7x and 2.5x) and the descriptions of the
+four silent data-loss bugs are cited from the development notes. They were not re-run or
+re-confirmed by decoding archives again.

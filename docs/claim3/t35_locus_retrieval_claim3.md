@@ -97,7 +97,7 @@ earlier k-mer index, flipping the site to a correct het call), and the
 FM-index recovers the site too (HG004 400/400). That confirms the diagnosis
 and is why a content index closes exactly this class of miss.
 
-## The real cost, disclosed — do not present 100% as free
+## The cost of the 100%
 
 Homozygous negative-control false positives (400 control sites per
 individual) rise when the content index is added: HG002 29 to 48, HG003 35 to
@@ -109,10 +109,8 @@ locus-specific, not a property of the individual.
 ## Generalization claim — precise wording
 
 The mechanism (bilateral union) is geometric, not a completeness argument the
-way T3.4's FM-index is, which is an asymmetry, not a weakness to
-hide. It generalizes on the strength of: (a) every parameter is derived from
+way T3.4's FM-index is, which is an asymmetry and not a weakness. It generalizes on the strength of: (a) every parameter is derived from
 data, never fitted (seed floor, probe construction identical across runs),
 and (b) it held clean across two ancestries, two trios and a locus never
-tested before. State it that way, "broad, verified empirical
-generalization", not as a mathematical guarantee, which would overclaim
-relative to T3.4's actual construction-backed claim.
+tested before. It is a broad, verified empirical generalization and not a mathematical guarantee, which
+would overclaim relative to T3.4's construction-backed result.

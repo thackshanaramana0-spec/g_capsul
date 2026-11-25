@@ -1,6 +1,9 @@
-# Architecture vs DiscoSNP++, layer by layer
+# Architecture of the G_CAPSUL caller against DiscoSNP++, layer by layer
 
-> Layer-by-layer comparison of the G_CAPSUL caller with DiscoSNP++: an 18-row correspondence table and the differences that follow from it.
+This file compares the G_CAPSUL caller ("Method B" in the development notes) with DiscoSNP++ layer
+by layer. It has an 18-row correspondence table of the shared textbook algorithm, DiscoSNP++'s
+design and G_CAPSUL's, and it explains the differences that follow. The caller is described in
+[`../technical_architecture.md`](../technical_architecture.md), section 7.
 
 ## The shape of the comparison
 
@@ -95,8 +98,7 @@ does reference-free SNP calling this way.)
 
 ## Why a de Bruijn graph cannot simply be built over our contigs
 
-A tempting shortcut was tried and refuted (the pseudogenome-as-graph experiment,
-2026-09-04, on the full-chr20 HG002 run): transform the *existing*
+A tempting shortcut was tried and refuted (the pseudogenome-as-graph experiment on the full chromosome 20 HG002 run): transform the *existing*
 pseudogenome into a de Bruijn graph rather than re-reading raw reads, since
 DiscoSNP++'s bubble caller could then apply directly (a node with exactly 2
 outgoing edges is a het site; 3+ is a repeat/paralog to reject). A first
@@ -136,7 +138,7 @@ measurement rather than assumed.
 
 ## A general representational limit, not specific to this project's caller
 
-Verified against the indel-bound note. Tracing every indel this project's
+Tracing every indel this project's
 caller misses into its own k-mer graph found the branching node at each
 missed site has real coverage (12–30 reads) but exactly **one** successor
 base, with no coverage floor at play — raw successor counts return literal
@@ -160,8 +162,7 @@ can be tuned away.
 
 ## Eight precision mechanisms tried against the indel gap — two helped, six did not, in a consistent pattern
 
-Verified against the indel-precision root-cause note (2026-09-02), written
-after reading DiscoSNP++'s, eBWT2SNP's, and Kmer2SNP's precision mechanisms
+This analysis was written after reading DiscoSNP++'s, eBWT2SNP's, and Kmer2SNP's precision mechanisms
 directly from source/paper. Eight distinct precision-improving mechanisms
 were implemented and swept, not merely proposed: (1) read-level junction
 support via k-mer counts (kissreads2's principle) — **+0.18 precision, the
@@ -189,11 +190,10 @@ generator must read candidates out of the data rather than construct them),
 not a tuning exercise — consistent with the layer-4/5 architectural
 divergence already documented above, not a contradiction of it.
 
-**A follow-up self-correction, 2026-09-02 (later the same day), kept on the
-record**: the document's own §4 initially pointed at eBWT positional
+**A later correction.** The analysis's own §4 initially pointed at eBWT positional
 clustering as the strongest fix candidate, citing its 99.13% precision
-figure — the same figure the eBWT literature-correction note (2026-09-04)
-later found to be simulated-data-only (real-data figure 66.62%, see
+figure — the same figure a later check of the eBWT literature
+found to be simulated-data-only (real-data figure 66.62%, see
 `novelty_and_prior_art.md`). Running each indel channel in isolation
 (`CAPS_INDEL_ANCH=9999` suppresses the bubble channel, `CAPS_NO_PCLUSTER=1`
 suppresses the positional-clustering channel) found the positional-

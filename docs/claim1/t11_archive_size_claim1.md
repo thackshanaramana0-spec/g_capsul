@@ -1,58 +1,47 @@
-# T1.1 — Archive Size
+# T1.1: archive size on 19 datasets
 
-> Record of the T1.1 numbers, recomputed from the raw CSV, and the losslessness check behind the LOSSLESS column.
+This file records the T1.1 result of Claim 1 (see [`overview_claim1.md`](overview_claim1.md)). It
+gives the aggregate figures recomputed from the raw CSV and explains what the LOSSLESS column of
+that file does and does not establish.
 
 ## What it measures
 
-Lossless whole-FASTQ archive size (sequence + names + quality + line-3 mode
-+ read order — everything needed to reconstruct the exact original file),
-across 19 real datasets spanning seven kingdoms (human, bacteria, archaea,
-protista, fungi, virus, plantae), vs SPRING and Genozip.
+The size of the lossless whole-FASTQ archive (sequence, names, quality, line 3 and read order,
+which together reconstruct the original file) for G_CAPSUL, SPRING and Genozip on 19 real
+datasets from human, bacteria, archaea, protista, fungi, virus and plants.
 
-## Results — independently recomputed from `results/claim1/claim1_T1.1_T1.2.csv`, not just cited
+## Result
 
-**Aggregate (recomputed by summing all 19 datasets'
-`archive_bytes` per tool from the raw CSV and deriving the margin
-directly)**:
+The aggregate was recomputed by summing `archive_bytes` over the 19 datasets for each tool in
+`results/claim1/claim1_T1.1_T1.2.csv`:
 
-| | vs SPRING | vs Genozip |
+| | Against SPRING | Against Genozip |
 |---|---|---|
-| Datasets won | **19 / 19** | **19 / 19** |
-| Aggregate margin | **−6.03%** | **−43.26%** |
-| Losslessness | **57 / 57** archives (19 datasets × 3 tools) verified LOSSLESS |
+| Datasets where G_CAPSUL is smaller | 19 of 19 | 19 of 19 |
+| Aggregate margin | -6.03% | -43.26% |
+| Archives verified lossless | 57 of 57 (19 datasets, 3 tools) | |
 
-Exact match to the development notes' headline figure — confirmed independently, not
-assumed correct because it was previously stated.
+These match the headline figures of the development notes. For ERR5181310, the raw file of
+471,183,048 bytes gives 8,679,796 bytes for G_CAPSUL (8.68 MB), 9,984,000 for SPRING (9.98 MB) and
+9,222,378 for Genozip (9.22 MB). This agrees with the manuscript row `8.68 | 9.98 | 9.22`. All 19
+rows are in the CSV and in the manuscript table.
 
-**Sample row, cross-checked byte-for-byte against the manuscript table**
-(ERR5181310): raw 471,183,048 B → CAPSULE 8,679,796 B (8.68 MB) vs SPRING
-9,984,000 B (9.98 MB) vs Genozip 9,222,378 B (9.22 MB). Manuscript's T1.1
-row for this dataset: `8.68 | 9.98 | 9.22` — exact match.
+The two margins should be cited separately and not averaged. SPRING is the closer comparator
+(-6.03%), and the gap to Genozip (-43.26%) is much larger.
 
-Full 19-row table: `results/claim1/claim1_T1.1_T1.2.csv`, `archive_bytes`
-column per tool, or the manuscript's own T1.1 table (lines 364-393).
+## What the LOSSLESS column establishes
 
-## What "LOSSLESS" actually means here, verified — not just a column label
+The manuscript states that every archive was independently decoded and checked against its input
+by comparing the sorted read names, sequences and quality strings. All 57 archives, including the
+SPRING and Genozip outputs, were checked this way and none is assumed correct on the tool's own
+word.
 
-The manuscript states (verified against its own text): *"Every archive was
-independently decoded and checked against its input by comparing the sorted read names, sequences and quality strings."* This is a methodologically load-bearing
-claim: the CSV's `lossless` column reads `LOSSLESS` for all 57 rows (19
-datasets × 3 tools), meaning **every single archive**, including SPRING's
-and Genozip's own outputs, was actually decoded and diffed against the
-original — not assumed correct because the tool claims lossless
-compression. This matters because Claim 1's own project history (see
-`code_mapping_claim1.md` and the development notes §6.1/6.3) records that this
-project once shipped incomplete archive-decode verification and had to
-correct four silent data-loss bugs found only by actually decoding
-archives rather than trusting dump-level checks — the discipline behind
-this column is itself a previously-tested lesson, not a default
-assumption.
+The comparison is on sorted records, so it does not by itself test that the original read order
+and line 3 are reproduced. The exact byte-for-byte round trip, which does, is
+`scripts/build_scripts/verify_roundtrip.sh`. It is described in the
+[README](../../README.md) and was run on simulated inputs (including a shuffled-order file) and on
+SRR29296997. The benchmark makes only the sorted-record claim for the other datasets.
 
-## Why 19/19 with a mixed margin matters more than a single average
-
-Stating "19/19 wins" alongside the two separate margins (−6.03% vs SPRING,
-a competitive general compressor; −43.26% vs Genozip, a much larger gap) is
-more informative than a single blended percentage across
-both comparators — the two margins tell different stories (a close win
-against the stronger comparator, a decisive one against the other) and
-should be kept separate in any citation, not averaged.
+The discipline behind the column has a history. The project once shipped an incomplete verification
+path and had to correct four silent data-loss bugs that were found only by decoding archives and
+not by trusting dump-level checks (see [`code_mapping_claim1.md`](code_mapping_claim1.md)).

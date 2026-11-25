@@ -1,180 +1,109 @@
-# G_CAPSUL — the locked dataset set: 15 non-human + 4 human = 19
+# Benchmark datasets: 15 organisms and 4 human individuals
 
-**This file, not the locked-dataset list, is the source of truth for this repo.**
-The locked-dataset list is the outer ARCS project's 17-accession list; it is
-unchanged and does not govern G_CAPSUL/CAPSULE. This file records one
-deliberate swap made 2026-09-02, why, and the resulting exact set.
+This file lists the 19 datasets of the benchmark with their accessions, organisms and coverage,
+and states which datasets belong to which comparison. The 19 datasets give 57 archives (three
+tools each), and all 57 were verified lossless. The accessions are public (NCBI SRA, EBI ENA and
+DDBJ), and the download steps are in [`SERVER_SETUP_AND_DOWNLOADS.md`](SERVER_SETUP_AND_DOWNLOADS.md).
+The archive sizes are in `results/claim1/claim1_T1.1_T1.2.csv`, and the result file is
+authoritative where this file differs.
 
-**The published Claim 1 table has 19 rows, not 15.** The reconciliation, so
-nobody has to derive it:
+## How the 19 divide
 
-    15  non-human accessions      the SPRING/Genozip comparison set below
-  +  4  GIAB human chr20 @ 30x    HG002, HG003, HG004, HG005
-  ----
-    19  datasets x 3 tools = 57 archives, 57/57 verified LOSSLESS
+| Group | Datasets | Used for |
+|---|---|---|
+| 15 organisms | The table below | The SPRING and Genozip comparison (T1.1, T1.2) and Claim 3 |
+| 4 human individuals | HG002, HG003, HG004, HG005 (GIAB, chromosome 20, 30x) | Claim 2 (variant calling), and also carried in T1.1 and T1.2 because the same archive serves both claims |
 
-The four human sets are the **Claim 2** individuals (het-SNV, het-indel,
-multi-allelic, and the coverage sweep). They also carry Claim 1 compression
-numbers, because the same archive serves both claims — that is the whole point
-of the architecture — so they appear in `results/claim1/claim1_T1.1_T1.2.csv` as well. They
-are **not** part of the 15-dataset SPRING/Genozip *organism* comparison and
-should not be counted into it.
+The four human sets are not part of the 15-organism comparison and should not be counted into it.
+The published Claim 1 table therefore has 19 rows.
 
-Scope: `c_star_pg_advance` only (the G_CAPSUL sequence+order encoder). Not the
-outer `/root/arcs-clean` ARCS binary, not names/quality.
+## The 15 organisms
 
----
+Coverage is for the first mate file (`_1`) only, which is the file the benchmark uses.
 
-## The swap
+| # | Accession | Organism | Kingdom | Coverage |
+|---|-----------|----------|---------|----------|
+| 1 | SRR2584863 | E. coli B REL606 | Bacteria | about 59x |
+| 2 | ERR552797 | M. tuberculosis H37Rv | Bacteria | about 49x |
+| 3 | SRR554369 | P. aeruginosa PAO1 | Bacteria | about 24x |
+| 4 | ERR5181310 | SARS-CoV-2 | Virus | about 500x |
+| 5 | ERR17740259 | S. aureus | Bacteria | about 158x |
+| 6 | DRR976266 | S. cerevisiae | Fungi | about 63x |
+| 7 | SRR36741279 | Leishmania major | Protista | about 22x |
+| 8 | SRR37283774 | P. falciparum | Protista | about 12.6x |
+| 9 | SRR32429602 | Human betaherpesvirus 5 (HCMV) | Virus | not recorded |
+| 10 | SRR39257532 | Aspergillus fumigatus | Fungi | about 20x |
+| 11 | SRR29296997 | Halobacterium salinarum | Archaea | about 54x |
+| 12 | ERR12954017 | Sulfolobus acidocaldarius | Archaea | about 116x |
+| 13 | SRR40271341 | Helicobacter pylori | Bacteria | about 139x |
+| 14 | SRR065390 | C. elegans N2 WGS | Animalia | about 34x |
+| 15 | SRR10676752 | Utricularia gibba | Plantae | about 65x |
 
-**Removed: Drosophila melanogaster, both accessions.**
-- SRR40104876 (~19x, was slot 15 of the 17) — dropped from the main list.
-- SRR40104920 (2.6x) — this was a deliberate LOW-COVERAGE control, not part of
-  the main list, kept on disk at `/tmp/kd/SRR40104920_1.fastq`. Dropped
-  entirely now that Drosophila is not in the study at any coverage.
+By kingdom, the set has 5 bacteria, 2 viruses, 2 fungi, 2 protists, 2 archaea, 1 plant and 1
+animal.
 
-**Added: Utricularia gibba (Plantae), replacing Drosophila's slot.**
-Verified live via NCBI eutils 2026-09-02, not guessed:
-- Accession **SRR10676752**
-- Genome: **100,688,548 bp** (NCBI assembly U_gibba_v2) — the smallest known
-  sequenced plant genome, 4.3x smaller than T. cacao's ~430 Mb, which is why a
-  small-but-real Plantae run is possible here where it wasn't for Arabidopsis
-  or Drosophila (coverage x genome size
-  sets a floor, and searching SRA for "smallest run" in Plantae/Animalia just
-  selects for low coverage).
-- Coverage (_1 only, same convention as the rest of this table): **~65x**
-  (spots=26,658,699, per-mate length ~246bp -> 26,658,699 x 246 / 100,688,548)
-- Illumina MiSeq, PAIRED, WGS, GENOMIC source, full unsubsampled SRA run
-- BioProject PRJNA595351, study SRP237333, publicly consented
-- `_1` file size: ~3.5 GB (half of 6,973 MB total for both mates)
-- NOT on disk yet — queued for download
+Two entries need a note:
 
-**Second swap, 2026-09-03: Removed Campylobacter jejuni, added C. elegans (Animalia).**
-The 15-set as first locked had ZERO Animalia representation (Drosophila was
-removed in the first swap above, and C. elegans/T. cacao were excluded from
-this repo's set as "the big datasets" per the locked-dataset list). Auditing
-kingdom coverage found Bacteria over-represented at 6 of 15 while Animalia
-had none. C. jejuni (SRR40402583, an "extended set" addition, not one of
-the original primary-10 accessions) was the least structurally necessary of
-the 6 Bacteria entries to drop.
+- **Utricularia gibba (SRR10676752)** has a genome of 100,688,548 bp (assembly U_gibba_v2), the
+  smallest known sequenced plant genome, about 4.3 times smaller than T. cacao. This makes a
+  full-coverage plant run possible at a moderate size. The run is Illumina MiSeq, paired, WGS, from
+  BioProject PRJNA595351 (study SRP237333). It has 26,658,699 spots with mates of about 246 bp,
+  which gives about 65x for `_1`. The `_1` file is about 3.5 GB.
+- **C. elegans N2 (SRR065390)** has 33,808,546 reads of 100 bp (11,282,985,734 bytes for `_1`) and
+  about 34x coverage. It is a large single-pass input, so memory and time are proportionally higher
+  than for the small datasets.
 
-- **Removed:** SRR40402583, Campylobacter jejuni, Bacteria, ~162x.
-- **Added:** SRR065390, C. elegans N2 WGS, Animalia — one of the ORIGINAL
-  primary-10 accessions (the locked-dataset list #6), not a new discovery. Was
-  already on disk at `/data/fastq/SRR065390_1.fq` (11,282,985,734 B,
-  135,234,184 lines = 33,808,546 reads) from the outer project's own
-  earlier work — verified present, not re-downloaded. 100 bp reads, ~34×
-  coverage (_1 only).
-  **No auto-chunk env var applies here** -- `ARCS_AUTOCHUNK_MB` is the
-  OUTER ARCS binary's own mechanism; checked directly against this repo's
-  encoder (`src/encoder.cpp`, `grep -rn AUTOCHUNK`) and confirmed
-  it has no auto-chunking behavior at all, so there is nothing to suppress.
-  The only real implication of this file's size for THIS encoder is that
-  it is simply a large single-pass input like any other -- expect
-  proportionally higher RAM/time than the smaller datasets, not a special
-  flag. (the locked-dataset list's ~18 GB peak RAM figure for this accession is
-  measured on the OUTER `arcs` binary and is not assumed to transfer
-  unchanged to this repo's own encoder -- if this dataset's peak RAM here
-  needs stating, it should be measured fresh, not copied.)
-- SRR40402583 is NOT deleted from disk or from history — it remains a
-  valid, already-measured dataset (the earlier 14-dataset results
-  row `SRR40402583`), just no longer one of the current 15 headline
-  accessions. Its number stays on record, marked superseded, not erased.
+### Datasets considered and not used
 
-**Kept as-is: Arabidopsis thaliana, low-coverage control.**
-- ERR17716639, 2.8x coverage, on disk at `/tmp/kd/ERR17716639.fastq`
-- This is the ONE remaining deliberate low-coverage dataset. It stays outside
-  the "15" count below — it's a control for the low-coverage weakness
-  (G_CAPSUL is 2.74% larger than SPRING on it, and this is
-  reported), not a member of the main comparison set.
+Drosophila melanogaster (SRR40104876 and the low-coverage SRR40104920) was dropped, and Utricularia
+gibba took its place so that a plant is represented. Campylobacter jejuni (SRR40402583) was dropped
+to make room for C. elegans, because bacteria were over-represented (6 of 15) and no animal was
+included. Its earlier result row is superseded by the 19-dataset benchmark.
 
----
+### Low-coverage control
 
-## The 15 (main SPRING/Genozip comparison set)
+Arabidopsis thaliana ERR17716639 (2.8x) is a deliberate low-coverage control outside the 15. On it
+G_CAPSUL's archive is 2.74% larger than SPRING's, and this is reported as a limitation of the
+method at low coverage.
 
-| # | Accession | Organism | Kingdom | Coverage (_1) | Status |
-|---|-----------|----------|---------|---------------|--------|
-| 1 | SRR2584863 | E. coli B REL606 | Bacteria | ~59x | on disk |
-| 2 | ERR552797 | M. tuberculosis H37Rv | Bacteria | ~49x | on disk |
-| 3 | SRR554369 | P. aeruginosa PAO1 | Bacteria | ~24x | on disk |
-| 4 | ERR5181310 | SARS-CoV-2 | Virus | ~500x | on disk |
-| 5 | ERR17740259 | S. aureus | Bacteria | ~158x | on disk |
-| 6 | DRR976266 | S. cerevisiae | Fungi | ~63x | on disk |
-| 7 | SRR36741279 | Leishmania major | Protista | ~22x | on disk |
-| 8 | SRR37283774 | P. falciparum | Protista | ~12.6x | on disk |
-| 9 | SRR32429602 | Human betaherpesvirus 5 (HCMV) | Virus | n/a | **queued for download** |
-| 10 | SRR39257532 | Aspergillus fumigatus | Fungi | ~20x | on disk |
-| 11 | SRR29296997 | Halobacterium salinarum | Archaea | ~54x | on disk |
-| 12 | ERR12954017 | Sulfolobus acidocaldarius | Archaea | ~116x | on disk |
-| 13 | SRR40271341 | Helicobacter pylori | Bacteria | ~139x | on disk |
-| 14 | SRR065390 | C. elegans N2 WGS | Animalia | ~34x | on disk |
-| 15 | SRR10676752 | Utricularia gibba | Plantae | ~65x | on disk |
+## The four human individuals
 
-**Kingdom split:** Bacteria 5, Virus 2, Fungi 2, Protista 2, Archaea 2,
-Plantae 1, Animalia 1 — **all 6 standard kingdoms now represented**, one
-gap (Animalia) closed 2026-09-03 by the C. jejuni -> C. elegans swap above.
+All four were standardized to 30x on chromosome 20, so that the SNV and indel comparisons are not
+confounded by the source coverage of each GIAB individual (60x to 300x). They were streamed from the
+GIAB S3 whole-genome BAMs with samtools and downsampled.
 
-**Low-coverage supplementary control (outside the 15):**
-
-| Accession | Organism | Coverage | Status |
-|---|---|---|---|
-| ERR17716639 | Arabidopsis thaliana | 2.8x | on disk, `/tmp/kd/ERR17716639.fastq` |
-
----
-
-## The 4 (GIAB human, Claim 2 — and Claim 1 rows 16-19)
-
-Standardised to **30x chr20** so the T2.1/T2.3 comparison is not confounded by
-GIAB's per-individual source coverage (60-300x). Streamed from the GIAB S3 WGS
-BAMs via samtools, then downsampled.
-
-| # | file | individual | population | depth | role |
+| # | File | Individual | Population | Depth | Additional role |
 |---|---|---|---|---|---|
-| 16 | `HG002_pooled.fq` | NA24385 | Ashkenazi son | 30x chr20 | **also** the sole subject of the T2.2 coverage sweep (10/15/20/30x) |
-| 17 | `HG003_pooled.fq` | NA24149 | Ashkenazi father | 30x chr20 | **also** half of the T2.5 synthetic tetraploid |
-| 18 | `HG004_pooled.fq` | NA24143 | Ashkenazi mother | 30x chr20 | **also** the other half of the T2.5 tetraploid |
-| 19 | `HG005_pooled.fq` | NA24631 | Han Chinese son | 30x chr20 | **the published loss** — see the limitations draft §2 |
+| 16 | `HG002_pooled.fq` | NA24385 | Ashkenazi son | 30x chr20 | Sole subject of the T2.2 coverage sweep (10x, 15x, 20x, 30x) |
+| 17 | `HG003_pooled.fq` | NA24149 | Ashkenazi father | 30x chr20 | One half of the synthetic tetraploid of T2.5 |
+| 18 | `HG004_pooled.fq` | NA24143 | Ashkenazi mother | 30x chr20 | The other half of the T2.5 tetraploid |
+| 19 | `HG005_pooled.fq` | NA24631 | Han Chinese son | 30x chr20 | The one individual on which G_CAPSUL loses the SNV and indel comparison, see [`../limitations_and_scope.md`](../limitations_and_scope.md) |
 
-All four appear in T2.1 (het-SNV), T2.3 (het-indel) and T3.4 (locus fidelity,
-100 sites each = the 400). The "also" column is what is *additional* to that.
-T2.4 (multi-allelic) is HG002 only.
+All four appear in T2.1 (heterozygous SNVs), T2.3 (heterozygous indels), T3.4 (exact-match
+recall) and T3.5 (locus retrieval). T2.4 (multi-allelic sites) uses HG002 only.
 
-HG005 is the only variable-length set in the benchmark (250 bp trimmed, 216
-distinct lengths against 148 bp fixed for the other three). That is the
-identified cause of its T2.1/T2.3 loss, and it is reported as a loss rather
-than truncated to match.
+HG005 is the only variable-length set in the benchmark, with 250 bp trimmed reads and 216 distinct
+lengths, against a fixed 148 bp for the other three. This is the identified cause of its loss in
+T2.1 and T2.3. The loss is reported and the reads were not truncated to match the others.
 
-Truth sets: GIAB v4.2.1 VCF + high-confidence BED per individual, chr20 only.
-Reference for liftover/probe construction: GRCh37 chr20 (`~/refs/chr20.fa`,
-chromosome named "20"). Neither is used by the caller — CAPSULE calls from the
-archive with no reference; both are evaluation-side only.
+**Truth sets and reference.** The truth sets are the GIAB v4.2.1 VCF and high-confidence BED of each
+individual, for chromosome 20 only. The GRCh37 chromosome 20 sequence (`chr20.fa`, with the
+chromosome named "20") was used to build probes and for liftover. The caller uses none of these.
+G_CAPSUL calls from the archive without a reference, and the truth sets and the reference serve
+only to score the calls.
 
----
+## Where the files go
 
-## Downloads needed
+`scripts/benchmark_scripts/benchmark_1_run.sh` reads the FASTQ files from `$CAPSULE_DATA_DIR`,
+which defaults to `/data/fastq/`, as `<accession>_1.fq`. Substituting a dataset invalidates the
+comparison with the published tables.
 
-**None. All 15 confirmed on disk at `/data/fastq/<accession>_1.fq`,
-2026-09-03** (verified by direct file check, not assumed): the two
-originally queued (SRR32429602 HCMV, SRR10676752 Utricularia gibba) were
-completed and relocated from `/tmp/newdl/` — a non-persistent location,
-moved into place specifically so `scripts/benchmark_scripts/benchmark_1_run.sh` (which reads
-from `$CAPSULE_DATA_DIR`, i.e. `/data/fastq/`) can find them — and
-SRR065390 (C. elegans, added in the second swap above) was already present
-from earlier work.
+## Results for the two datasets added last
 
-**Both "outstanding" items below are CLOSED as of the 2026-09-09 sweep.**
-This paragraph is kept because this project marks retractions in place:
+These two were added after the first benchmark run and were run in full. The values are from
+`results/claim1/claim1_T1.1_T1.2.csv`, in bytes.
 
-> ~~SRR10676752 (Utricularia gibba) has had three real G_CAPSUL-side encode
-> attempts but no saved archive, no lossless verification, and no
-> SPRING/Genozip comparison yet. SRR065390 (C. elegans) has never been run
-> through this repo's own comparison at all.~~
-
-Both were run in full. From `results/claim1/claim1_T1.1_T1.2.csv`:
-
-| accession | CAPSULE | SPRING | Genozip | lossless |
+| Accession | G_CAPSUL | SPRING | Genozip | Lossless |
 |---|---|---|---|---|
-| SRR10676752 (U. gibba) | 1,650,034,057 | 1,718,548,480 | 2,954,900,932 | 3/3 LOSSLESS |
-| SRR065390 (C. elegans) | 887,410,845 | 942,643,200 | 1,597,083,547 | 3/3 LOSSLESS |
-
-Nothing in the locked set is unbenchmarked.
+| SRR10676752 (U. gibba) | 1,650,034,057 | 1,718,548,480 | 2,954,900,932 | 3 of 3 |
+| SRR065390 (C. elegans) | 887,410,845 | 942,643,200 | 1,597,083,547 | 3 of 3 |

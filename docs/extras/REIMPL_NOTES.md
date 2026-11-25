@@ -2,14 +2,13 @@
 
 > Engineering log from the development of the encoder. It records measurements and rejected approaches in the order they were made, and some figures were superseded by later work. The current results are in `results/` and in the claim folders under `docs/`.
 
-Written from the algorithm, not copied. PgRC2's source was read closely to
-understand what each stage does — and reading it is what found several of the
-results below — but every line here is our own. `method_c/` is the unmodified
-upstream clone used as the measurement target; it is GPL-3 and is never
-vendored (see `.gitignore` and the PgRC2 comparison note).
+This reimplementation follows the algorithm of PgRC2's assembler. PgRC2's source was read to understand what
+each stage does, and that reading is what exposed several of the results below. The code is
+written independently. `method_c/` is the unmodified upstream clone used as the measurement
+target. It is GPL-3 and is not vendored (see `.gitignore`).
 
 Purpose: settle whether PgRC2's speed, memory and assembly quality are
-reachable from textbook methods alone, and extract what transfers to ARCS.
+reachable from textbook methods alone, and extract what transfers to ARCS (the outer project described in `DATASETS.md`).
 These are throwaway measurement instruments, kept for the numbers in them.
 
 Target (yeast_sub.fq, 1M reads, 851,275 unique after N-filter and dedup):
@@ -85,7 +84,7 @@ into the main pg, and the main pg into itself, reverse complement enabled,
 minimum match 45 (their `CODER_LEVEL_NORMAL` default), replacing each maximal
 exact match with an (offset, length) reference.
 
-Not copied: they use CopMEM with sparse sampling, which can miss matches. This
+Differs from PgRC2: it uses CopMEM with sparse sampling, which can miss matches. This
 reuses the packed-32-base seed already in the file and samples the SOURCE every
 `45-32+1 = 14` positions, which is exact — a match of length >= 45 spans >= 14
 consecutive candidate seed starts, so it must cover a sampled one.
@@ -171,7 +170,7 @@ behaving like theirs rather than accidentally.
 Remaining gap is 668,806 B: 499,349 of it (75%) still the survivor pg, 169,457
 (25%) the main pg.
 
-Not copied: they re-scan and keep the BEST match per read (the "better-matches"
+Differs from PgRC2: it re-scans and keep the BEST match per read (the "better-matches"
 column in their log, `ReadsMatchers.cpp:315-328`). That shrinks their mismatch
 stream, which this progression does not measure, so first-acceptable wins here.
 

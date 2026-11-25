@@ -5,7 +5,7 @@
 ## What it measures
 
 Given a pseudogenome coordinate range `[start, end)`, return every read
-placed anywhere within it. Run across **all 19 locked datasets** (not just
+placed anywhere within it. Run across **all 19 benchmark datasets** (not just
 the 6-dataset T3.1/T3.2 subset — see `overview_claim3.md` and
 `mechanism_insight_claim3.md` for exactly why the dataset counts
 differ between tables).
@@ -50,7 +50,7 @@ literature (assembly evaluation without a shared reference is explicitly
 called "ambiguous" in the field — see PAQman/Merqury discussion cited in
 the literature check), and is not specific to this paper.
 
-## Results — locked, all 19 datasets, timing only
+## Results: all 19 datasets, timing only
 
 Source: `results/claim3/claim3_T3.1_T3.2_T3.3.csv`, table=T3.3 rows (19
 entries, `ours_s` column, `0.15s` to `118.48s`, no baseline columns

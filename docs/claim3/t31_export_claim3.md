@@ -1,6 +1,9 @@
-# T3.1 — Export
+# T3.1: export of the pseudogenome as a FASTA
 
-> Record of what T3.1 measures, the bug found and fixed, the final numbers, and the attempts to close the remaining correctness gap.
+This file records what T3.1 measures (the speed and the correctness of exporting the pseudogenome
+as a standalone FASTA, against SPAdes), the export bug that was found and fixed, the final numbers
+and the attempts to close the remaining correctness gap. It belongs to Claim 3
+([`overview_claim3.md`](overview_claim3.md)).
 
 ## What it measures
 
@@ -10,13 +13,10 @@ Two independent things, kept separate throughout:
 2. **Correctness**: how well that exported FASTA scores as a genome assembly
    against the true reference (QUAST), compared to SPAdes's own assembly.
 
-These are independent axes. A tool can be reported as faster
-without implying it is also more correct — standard field practice, not a
-project-specific excuse (verified against real precedent: no
-paper claims speed implies correctness, and correctness is always reported
-separately when claimed at all).
+These are independent axes. Reporting that a tool is faster does not imply that it is more
+correct, and correctness is reported separately.
 
-## Speed — locked, dominant, unconditional
+## Speed
 
 Source: `results/claim3/claim3_T3.1_T3.2_T3.3.csv`, table=T3.1 rows.
 
@@ -29,11 +29,11 @@ Source: `results/claim3/claim3_T3.1_T3.2_T3.3.csv`, table=T3.1 rows.
 | DRR976266 | 0.70 | 548.82 | 784.0x |
 | HG002 | 5.67 | 2,678.83 | 472.5x |
 
-No caveats on this half of the claim. Untouched by anything below.
+The speed result does not depend on the correctness work below.
 
 ## Correctness — the real story, in order
 
-### The bug (found and fixed 2026-09-19)
+### The export bug and its fix
 
 The default `export` path concatenates the entire pseudogenome into **2
 FASTA records** (the main region + the second/appended region), regardless
@@ -74,7 +74,7 @@ NOT be used just to get `contig_spans` for export.
 what `export` chooses to write; it never touches encode or read
 reconstruction.
 
-### Final, locked correctness numbers (E. coli, shipping/archive-optimal config)
+### Final correctness numbers (E. coli, shipping/archive-optimal config)
 
 Source: The T3.1 correctness note, "SUPERSEDES" section (the
 final, authoritative numbers in that file — read the whole file for the full
@@ -132,18 +132,16 @@ algorithmic content of a dedicated assembler like SPAdes (multi-k de Bruijn
 graph, bubble-popping, BayesHammer-style correction). The pseudogenome is
 built by **greedy overlap-chaining optimized to minimize compressed size**,
 not optimized for assembly correctness. Both are "assembly" in the
-mechanical sense (confirmed against the project's own methods draft,
-which says "the compressor assembles reads into a pseudogenome by greedy
+mechanical sense (the manuscript's methods say "the compressor assembles reads into a pseudogenome by greedy
 suffix-prefix overlap") — they simply optimize for different objective
 functions, and that objective difference is the entire, sufficient
 explanation for the win/loss pattern above.
 
-## What NOT to write in the paper
+## How these results should be cited
 
-- Do not cite 80.8% genome fraction, 90% unaligned, or any number from
-  before the export-bug fix — all withdrawn.
-- Do not imply the pseudogenome is being offered as a competing de novo
-  assembler. It is not. See `mechanism_insight_claim3.md`.
-- Do not claim "future work will close the remaining gap" as if a fix is
-  expected — four real attempts found none available without new algorithm
-  work. State it as a structural, disclosed limitation, not a pending TODO.
+- The figures of 80.8% genome fraction and 90% unaligned, and every number from before the export
+  bug fix, are withdrawn. The current figure is 98.698% genome fraction.
+- The pseudogenome is not offered as a competing de novo assembler. See
+  [`mechanism_insight_claim3.md`](mechanism_insight_claim3.md).
+- The remaining gap is a structural, disclosed limitation. Four attempts found no way to close it
+  without new algorithm work, so it is not presented as future work that is expected to succeed.

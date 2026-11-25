@@ -32,12 +32,11 @@ consistent with a SNV-only, conservative-candidate-generation design.
 DiscoSNP++ wins F1 on HG005 (0.863 vs 0.834) — the only individual where
 this happens in T2.1. Precision is the driver: ours drops to 0.899 on
 HG005 (vs 0.956-0.958 on the other three) while recall stays comparable
-(0.777 vs 0.830-0.835). This is stated in the CSV and should be
-stated in the paper — do not average it away or omit the row.
+(0.777 vs 0.830-0.835). The CSV and the manuscript both report it, and the row is not averaged away.
 
 ## Why DiscoSNP++ and Kmer2SNP are the right comparators, not a weak set
 
-Verified against the het-indel literature survey:
+According to the heterozygous-indel literature survey:
 DiscoSNP++ is the only other general-purpose reference-free caller handling
 heterozygous variants from a single diploid sample with zero reference.
 Everything else considered (DeepVariant, GATK, Strelka2, ska lo, eBWT2SNP)

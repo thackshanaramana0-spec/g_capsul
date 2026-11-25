@@ -1,101 +1,90 @@
-# Code-to-table mapping
+# Code-to-table mapping (Claim 3)
 
-> Functions and files in src/decoder.cpp behind each Claim 3 operation, and the source file of every number cited in this folder.
+This file maps the Claim 3 operations (T3.1 to T3.5: export, coverage, range query, exact-match
+retrieval and locus retrieval) to the code that performs them and lists the source file of every
+number cited in this folder. Line numbers are given for `src/decoder.cpp` and `src/encoder.cpp` as
+of the current source and drift as the files change, so search for the identifier. The overall
+design is in [`../technical_architecture.md`](../technical_architecture.md), sections 5 and 6.
 
-All line numbers are from `src/decoder.cpp` as committed at
-`e447ab4` ("Claim 3 multi-individual generalization + T3.1 export-bug fix,
-flags documented"). If the file has since changed, re-verify
-with `grep -n` before trusting a specific number below — the surrounding
-prose describing the mechanism should still hold even if a line shifts.
+## T3.1 Export
 
-## T3.1 — Export
+- **Per-contig export from `contig_spans`** is in the export block of `decoder.cpp` (the
+  `has("contig_spans") && getenv("CAPSULE_EXPORT_CONTIGS")` branch, line 1216). It reads the
+  `contig_spans` stream (LEB128 gap and length pairs relative to the pseudogenome buffer already
+  in memory) and slices `pg.data()+offset` into contigs, with no FASTA round trip and no re-decode
+  of another stream.
+- **The two-record form** is the `else if(out_contigs && !getenv("CAPSULE_EXPORT_CONTIGS"))` branch
+  (line 1068). It emits `pg[0:MAINEND]` and `pg[MAINEND:end]` as two records, and the internal
+  ploidy-gate path still uses it.
+- **`contig_spans` at encode time.** `src/encoder.cpp` declares `g_contig_spans` (line 440), gated by
+  `CAPS_SPANS`, defined as `getenv("CAPS_SPANS") || CAPS_CALL` (line 431). The comment above it
+  (from line 420) explains the cost difference: `CAPS_CALL` is about 20 times heavier, because it
+  also runs the full variant caller inline.
 
-- **Per-contig export via `contig_spans`**: `decoder.cpp:903-957`.
-  Reads the `contig_spans` stream (LEB128-encoded gap/length pairs relative
-  to the already-in-memory `pg` buffer), slices `pg.data()+offset` directly
-  into contigs — no FASTA round-trip, no re-decode of any stream. Gated by
-  `getenv("CAPSULE_EXPORT_CONTIGS")`.
-- **Two-record legacy form** (what was being used before the fix, still
-  used deliberately by the internal ploidy-gate path): same code block,
-  the `else if(out_contigs && !getenv("CAPSULE_EXPORT_CONTIGS"))` branch —
-  emits `pg[0:MAINEND]` and `pg[MAINEND:end]` as two records.
-- **`contig_spans` written at encode time**: `src/encoder.cpp`,
-  `g_contig_spans` populated at lines 2154, 2162, 3115 — gated by
-  `CAPS_SPANS` (line 337: `CAPS_SPANS = getenv("CAPS_SPANS") || CAPS_CALL`).
-  Comment at lines 320-336 explains the CAPS_SPANS-vs-CAPS_CALL cost
-  asymmetry (~20x heavier with CAPS_CALL, since it also runs the full
-  inline variant caller).
+## T3.2 Coverage
 
-## T3.2 — Coverage
+- The `if(mode=="coverage")` block (`decoder.cpp:528`) exits before the pseudogenome is rebuilt. It
+  reads `pos_abs`, `pos_sec`, `pos_region` (through `caps_join_positions`), `read_lengths`, and
+  `orig2uid_flags` and `orig2uid_vals`.
+- Depth is computed by a sweep line, `diff[a]++` and `diff[b]--` over an array of the pseudogenome
+  length, followed by one pass that emits runs.
+- A duplicate-undercount bug is documented inline in the same block. The `orig2uid` expansion is
+  required, and without it the depth was 20% too low on E. coli.
 
-- **Fast-exit before pg rebuild**: `decoder.cpp:417-490`
-  (`if(mode=="coverage")` block). Reads `pos_abs`/`pos_sec`/`pos_region`
-  (via `caps_join_positions`), `read_lengths`, `orig2uid_flags`/`orig2uid_vals`.
-- **Sweep-line mechanism**: lines ~458-465, `diff[a]++, diff[b]--` over a
-  `PGLEN`-sized array, one pass to emit runs.
-- **Duplicate-undercount bug fix**: documented inline at lines 424-432 of
-  the same block (`orig2uid` expansion required, else 20% undercount
-  measured on E. coli).
+## T3.3 and T3.4 Query (shared function)
 
-## T3.3 / T3.4 — Query (shared function)
+- **The decoded sidecar (`.qidx`)** is loaded in the `mode=="query"` block (`decoder.cpp:615`). It
+  holds the 2-bit packed pseudogenome, the placements `P` and lengths `L`, the optional deviations
+  (`mmix`, `mmoffs`, `mmsyms`), the strand bitmap `qstr` and the N positions (`nix`, `noffs`). `L`
+  has one length per unique read and is written by `caps_unique_lengths()` (line 423), because the
+  stored `read_lengths` stream is per original read.
+- **T3.3** fills `rr` from literal coordinates, with `strtoull(modearg, "-")` in the same block
+  after the sequence-probe branch.
+- **T3.4** fills `rr` by searching the pseudogenome with `find_occurrences()` (line 276), a
+  pigeonhole seed-and-extend search whose seed length `MINSEED` is derived from the haystack size.
+- **FM-index completion** (`CAPS_QUERY_CONTAIN=1`, `want_contain` near line 768) loads
+  `<qidx>.fmi` and runs one backward search per probe and strand (`FMIndex::find`,
+  `include/caps_fmi.h`). The reads it returns are added to the pseudogenome hits. Reads stored
+  verbatim in the `.fmi` are emitted as themselves after the main emit loop.
+  `CAPS_QUERY_INDEX=xmi` selects the older k-mer completion index, and `CAPS_QUERY_INDEX=fmi`
+  makes a missing `.fmi` an error.
+- **Building the FM-index at `index` time** is gated by `CAPS_FMI=1`, which implies the deviations
+  (`WANT_PILEUP`, line 1158). It indexes every unique read whose emitted record is not a plain
+  pseudogenome slice, plus a verbatim copy of every original read that the emitted record does not
+  reproduce. The index itself (SA-IS, 2-bit BWT, rank checkpoints, save and load) is
+  `include/caps_fmi.h`. The older k-mer index build (`CAPS_XMI=1`) is still in the same function.
 
-- **Decoded sidecar** (`.qidx` file): loaded in `mode=="query"` at `decoder.cpp:558` onward —
-  2-bit packed pg, placements `P`/`L`, optional deviations (`mmix`/`mmoffs`/
-  `mmsyms`), strand bitmap (`qstr`), N positions (`nix`/`noffs`). `L` holds the
-  length per unique read, written by `caps_unique_lengths()` (`decoder.cpp:368`),
-  because the stored `read_lengths` stream is per original read.
-- **T3.3's `rr` population** (literal coordinates): `strtoull(modearg, "-")`
-  in the same function, after the sequence-probe branch.
-- **T3.4's `rr` population** (pg-search): `find_occurrences()`, defined at
-  `decoder.cpp:229` onward (pigeonhole seed-and-extend,
-  `MINSEED` derived from haystack size inside it).
-- **FM-index completion** (`CAPS_QUERY_CONTAIN=1`): `decoder.cpp:698` onward. Loads
-  `<qidx>.fmi`, runs one backward search per probe and strand
-  (`FMIndex::find`, `include/caps_fmi.h`), and adds the reads it returns to
-  the pseudogenome hits. Reads stored verbatim in the `.fmi` are emitted as
-  themselves after the main emit loop (`decoder.cpp:876`).
-  `CAPS_QUERY_INDEX=xmi` selects the older k-mer completion index instead;
-  `CAPS_QUERY_INDEX=fmi` makes a missing `.fmi` an error.
-- **FM-index build (at `index` time)**: gated by `CAPS_FMI=1`, which implies the
-  deviations (`WANT_PILEUP`, `decoder.cpp:1064`). The block at
-  `decoder.cpp:1747` indexes every unique read whose emitted record is not a
-  plain pseudogenome slice, plus a verbatim copy of every original read the
-  emitted record does not reproduce. The index itself (SA-IS, 2-bit BWT, rank
-  checkpoints, save/load) is `include/caps_fmi.h`. The older k-mer index
-  build (`CAPS_XMI=1`) is still in the same function, `decoder.cpp:1648`.
+## T3.5 Locus retrieval
 
-## T3.5 — Locus Retrieval
+- It is not in `decoder.cpp`. It is built at the orchestration layer by
+  `scripts/claim3_scripts/run_locus_retrieval_capsule.sh` (its `query()` function calls
+  `capsule_decode query` twice per site, once per probe direction) and
+  `scripts/claim3_scripts/score_locus_retrieval.py` (reads the two `.occ` and `.fa` output sets,
+  unions them, assigns each read to its best-overlapping occurrence and tallies REF and ALT).
+- The same script serves all four individuals. Its arguments are the individual, the chromosome 20
+  window and a work directory (`run_locus_retrieval_capsule.sh HG003 3000000 3600000 <workdir>`). It
+  downloads the public BAM, VCF and reference slice, encodes, checks that the archive is lossless,
+  builds the index and scores both tables. `benchmark_1_run.sh` runs it for all four individuals as
+  phase 4.
 
-- **Not in `decoder.cpp` at all.** Built at the orchestration layer:
-  `scripts/claim3_scripts/run_locus_retrieval_capsule.sh` (the `query()` shell function
-  — calls `capsule_decode query` twice per site, once per probe direction) and `scripts/claim3_scripts/score_locus_retrieval.py` (reads the two
-  `.occ`/`.fa` output sets, unions them, assigns each read to its
-  best-overlapping occurrence, tallies REF/ALT).
-- The same script serves all four individuals: it takes the individual, the
-  chr20 window and a work directory (`run_locus_retrieval_capsule.sh HG003 3000000
-  3600000 <workdir>`), downloads the public BAM, VCF and reference slice, encodes,
-  checks the archive is lossless, builds the index and scores both tables.
-  `benchmark_1_run.sh` runs it for all four individuals as phase 4.
+## The `.sites` pileup
 
-## The `.sites` pileup (referenced in T3.1's refuted consensus-polish
-## attempt and T3.5's mechanism discussion)
-
-- Tally built during `index`, `decoder.cpp` ~line 1474-1512
-  (`tally[{a0+j, obs[off+m]}]++`). **Known strand bug, deliberately left
-  unfixed** — documented as a comment at the tally site (see the commit
-  message for why it was not adopted).
+The pileup is built during `index` (the `tally[{a0+j,obs[off+m]}]++` statement, `decoder.cpp:1720`).
+It is referenced in the refuted consensus-polish attempt for T3.1 and in the T3.5 mechanism
+discussion. It has a known strand bug that was left unfixed on purpose, as a comment at the tally
+site records.
 
 ---
 
-# Result file index — exact source for every number cited in this folder
+# Source file of every number
 
-| Number / claim | File |
+| Number | Source |
 |---|---|
-| T3.1/T3.2/T3.3 speed table (all rows in files 01-03) | `results/claim3/claim3_T3.1_T3.2_T3.3.csv` |
+| T3.1/T3.2/T3.3 speed table (all rows) | `results/claim3/claim3_T3.1_T3.2_T3.3.csv` |
 | T3.1 final correctness numbers (98.698% genome fraction etc.) | the T3.1 correctness note, "SUPERSEDES" section at the bottom |
 | T3.1's withdrawn 80.8%/90%-unaligned numbers, and why | same file, body sections above the SUPERSEDES marker |
 | Why ERR5181310/SARS-CoV-2 is excluded from T3.1's fair-comparison set | the ERR5181310 assembly-check note |
-| T3.4/T3.5 multi-individual results (all tables in files 04-05) | `docs/claim3/t34_t35_multi_individual_claim3.md` |
+| T3.4/T3.5 multi-individual results (all tables) | `docs/claim3/t34_t35_multi_individual_claim3.md` |
 | T3.4/T3.5's original single-individual (HG002-only) real-data trail | the Claim 3 locus-addressability write-up, the T3.4 residue diagnosis |
 | Raw CSVs behind the HG002 real-data trail | not shipped. The published T3.4 and T3.5 numbers are in `results/claim3/claim3_T3.4_exact_match_recall.csv`, `claim3_T3.5_locus_fidelity_100site.csv` and `claim3_T3.5_locus_retrieval.csv` |
 | PgRC2 comparison (confirmed vs inferred) | the PgRC2 extension analysis |
@@ -104,22 +93,19 @@ prose describing the mechanism should still hold even if a line shifts.
 | Architecture diagram source (Mermaid) | the Claim 3 architecture-diagram draft |
 | Future work: BEETL speed/size comparison, not yet run | the T3.4 speed-benchmark plan |
 
-## What was benchmarked in the final verification vs what is documentation-only
+## What was run and what is cited
 
-**Run, with output captured** (not just cited
-from earlier work): T3.1 at multiple configurations (archive-optimal,
-tuned, dedup, consensus-polish, strand-fixed consensus-polish) via QUAST
-against `NC_012967.1`; T3.4/T3.5 on HG003/HG004/HG005 and a second HG005
-locus, via `scripts/claim3_scripts/run_locus_retrieval_capsule.sh` +
-`scripts/claim3_scripts/score_locus_retrieval.py` +
-`scripts/claim3_scripts/score_exact_match_recall.py`; the FM-index tests
-(`tests/fmi_selftest.cpp`, `tests/fmi_end_to_end.py`) and its size check across all
-four individuals; a `.sites` strand-fix build-and-gate cycle (reverted).
+**Run, with the output captured:** T3.1 in several configurations (archive-optimal, tuned, dedup,
+consensus-polish and strand-fixed consensus-polish) through QUAST against `NC_012967.1`. T3.4 and
+T3.5 on HG003, HG004 and HG005 and a second HG005 locus, with
+`scripts/claim3_scripts/run_locus_retrieval_capsule.sh`, `score_locus_retrieval.py` and
+`score_exact_match_recall.py`. The FM-index tests (`tests/fmi_selftest.cpp`,
+`tests/fmi_end_to_end.py`) and its size check on all four individuals. A `.sites` strand-fix
+build-and-gate cycle, which was reverted.
 
-**Not run, cited from earlier work**: the original T3.1/T3.2/T3.3
-CSV (`results/claim3/claim3_T3.1_T3.2_T3.3.csv`) and the original
-single-individual T3.4/T3.5 real-data trail — both pre-date the final
-verification and were read, not regenerated.
+**Cited and not regenerated:** the original T3.1 to T3.3 CSV
+(`results/claim3/claim3_T3.1_T3.2_T3.3.csv`) and the original single-individual T3.4 and T3.5
+real-data trail, both of which pre-date the final verification.
 
-**Not run at all, anywhere, explicitly future work**: any benchmark against
-BEETL, CIndex, or sFASTQ (speed or index size).
+**Not run:** any benchmark against BEETL, CIndex or sFASTQ, for speed or index size. This is future
+work.

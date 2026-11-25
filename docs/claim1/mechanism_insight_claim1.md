@@ -1,73 +1,46 @@
-# How Claim 1 connects to the paper's insight
+# Claim 1 mechanism: variable-length support and the comparison with PgRC2
 
-> Mechanism of Claim 1: the contribution of the DNA-sequence stream, and a stream-by-stream comparison with PgRC2.
+This document explains why G_CAPSUL's lossless archives are smaller than those of SPRING and
+Genozip (Claim 1), what the compression stage contributes beyond the size ratio, and how the
+sequence stream compares with PgRC2, the one architecturally similar tool. The numbers come from
+`docs/extras/SOTA_COMPARISON.md` and the result files in `results/claim1/`. Where a source is
+cited as "the development notes", it is the author's internal working record, which is not part
+of this repository.
 
-## Note on an earlier version of this file
+## What Claim 1 contributes besides the ratio
 
-An earlier version of this file stated that Claim 1 has no distinct insight and is a competitive
-execution of PgRC2's pseudogenome-compression idea. That was incorrect. It compared only the
-ratio and not the field-by-field technical comparison, which shows a capability difference
-(detailed below).
+PgRC2 is also pseudogenome-based. On 6 of the 14 datasets of the original benchmark it fails on
+variable-length reads. It either refuses (`"Unsupported variable length reads"` on SARS-CoV-2,
+HCMV and C. jejuni) or crashes (`*** stack smashing detected ***` on H. pylori and
+`free(): invalid next size` on A. fumigatus). G_CAPSUL processes all 14. This is a difference in
+which inputs can be handled, and a ratio improvement of a few percent does not capture it. Reads
+of variable length are common in practice, for example after adapter or quality trimming and in
+many amplicon protocols.
 
-## Claim 1's contribution: capability, not only ratio
+## How variable length is handled
 
-**The headline fact, verified against `docs/extras/SOTA_COMPARISON.md`**: PgRC2 —
-the only architecturally comparable tool (also pseudogenome-based) — **fails
-outright on 6 of the 14 originally-locked datasets** when reads are
-variable-length, either refusing (`"Unsupported variable length reads"` —
-SARS-CoV-2, HCMV, C. jejuni) or hard-crashing (`*** stack smashing
-detected ***` on H. pylori; `free(): invalid next size` on A. fumigatus).
-**G_CAPSUL processes all 14, including the ones that crash PgRC2.** Stated
-precisely in the source document: *"G_CAPSUL wins by capability, not just
-ratio — a citable advantage: PgRC2 cannot even attempt 6 of the 14
-datasets in this benchmark."*
+1. **Prefix-containment removal generalizes exact deduplication.** For fixed-length reads a
+   duplicate is an identical string and a hash finds it. With variable length, a 3'-trimmed read
+   is a strict prefix of its untrimmed twin. The two strings differ in length and hash
+   differently, so a hash-based deduplication cannot see the relationship. Containment removal
+   treats prefix relationships as the general case, with exact deduplication as a special case.
+2. **Mismatch positions are varint-coded.** A fixed-width code cannot represent reads longer than
+   256 bp, so a variable-length design needs a different encoding.
+3. **Reads containing N are substituted (N to A) and pass through the same pipeline.** The original
+   N positions are kept in a side stream, so there is one path for every read.
 
-**This is a capability gap, not a margin.** A compression-ratio improvement
-of a few percent is a matter of degree; an entire class of real sequencing
-data (anything with variable-length reads — adapter-trimmed reads, quality-
-trimmed reads, many real Illumina/amplicon protocols) that the closest
-comparable tool cannot process at all is a matter of kind. **This belongs
-in the paper's Results/Discussion as Claim 1's primary novel contribution,
-not buried as an implementation detail below the ratio numbers.**
-
-## The mechanism — why variable length is hard, and how it is handled as a first-class case, not a patch
-
-Verified against the methods draft and the variable-length design note:
-
-1. **Prefix-containment removal generalizes exact deduplication.** At fixed
-   read length, a duplicate is trivially detected (identical string, hash
-   match). At variable length, a 3'-trimmed read is a *strict prefix* of
-   its untrimmed twin — a real duplicate relationship a plain hash-based
-   dedup structurally cannot see, because the two strings are different
-   lengths and therefore hash differently. Containment removal treats
-   prefix relationships as the general case dedup is a special case of.
-2. **Mismatch positions are varint-coded**, not fixed-width, so reads
-   longer than 256bp are representable at all — a different
-   encoding choice than a fixed-length design would ever need to make.
-3. **N-containing reads are substituted (N→A) and routed through the same
-   pipeline**, with original N positions tracked in a side stream — one
-   unified path for every read, not a special case carved out for reads
-   containing ambiguity codes.
-
-**Variable-length support and the bug history**: per
-the failures and refuted-ideas record Part A (also cited in the development notes §6.3
-and `code_mapping_claim1.md`), at least two of the four silent data-loss
-bugs found earlier in this project were **triggered by variable-length input**: the mismatch-position byte clamp
-(only reachable once reads exceed 256bp, which fixed-length designs never
-do) and the orphaned-unique-read desync (explicitly noted in the bug's own
-file: *"Trigger: containment, which can only occur with variable-length
-reads"*). **Variable-length support produced two of the four most serious historical correctness bugs in
-this project. Both were found and fixed by the decode-and-diff check described in the
-bug-history section below.**
+Variable-length input also triggered two of the four silent data-loss bugs found during
+development. The mismatch-position byte clamp is reachable only once reads exceed 256 bp. The
+orphaned-unique-read desync can occur only through containment, which exists only for
+variable-length reads. Both were found by decoding an archive and comparing it with the original
+file, which is the check described under "Bug history" below.
 
 ## Stream-by-stream comparison with PgRC2
 
-Source: `docs/extras/SOTA_COMPARISON.md` Table 1 (its
-own reasoning, not its superseded headline numbers, per its own
-superseded-banner rule). Both tools solve the same core problem
-(pseudogenome-based read compression) with recognizably similar internal
-stages, so this is the one comparison makeable at individual-stream
-granularity rather than whole-archive totals:
+Both tools solve the same core problem with similar internal stages, so this is the one
+comparison that can be made at the level of individual streams. The source is Table 1 of
+`docs/extras/SOTA_COMPARISON.md`. Its reasoning is used here, and its superseded headline numbers
+are not.
 
 | Layer | PgRC2's approach | G_CAPSUL's approach | Result |
 |---|---|---|---|
@@ -83,141 +56,111 @@ granularity rather than whole-archive totals:
 | **Variable-length support** | **Fails on 6/14 datasets** (refuses or crashes) | Handles all 14 | **Capability win — see above, this is the headline** |
 | Speed / RAM | Faster, lighter (baseline) | ~1.6-1.7x slower, ~2.5-2.8x heavier | PgRC2 wins — expected, disclosed, the standard assembly-vs-speed trade-off |
 
-**Net read, stated precisely**: G_CAPSUL wins on ratio (thin but real,
-+1.88% aggregate on the 7-dataset sequence-only comparison), wins outright
-on robustness (PgRC2 cannot process 6 of 14 real datasets at all), and
-loses on speed/RAM by a known, disclosed, expected margin. The mismatch-
-symbol coder's +40% margin is Claim 1's single strongest per-stream
-technical result and belongs in the paper alongside the capability claim,
-not omitted in favor of the aggregate ratio alone.
+The "Read order/permutation" row describes the order information of the measurement that produced
+this table. In the current archive format the original read order is carried by the streams
+`orig2uid_flags` and `orig2uid_vals`, and there is no separate permutation stream (see
+[`../technical_architecture.md`](../technical_architecture.md), section 3.6). The remaining rows
+describe streams that exist under the same names or the same roles in the current format.
 
-## T1.2's cost is the price of T1.1's structure, and Claims 2 and 3 reuse it at no further cost
+**Net result.** G_CAPSUL is ahead on ratio, by a thin but real margin (+1.88% aggregate on the 7
+datasets that both tools can process, sequence only). It is ahead on robustness, since PgRC2
+cannot process 6 of the 14 datasets. It is behind on speed and memory, by a known margin that is
+expected for an assembly-based method. The mismatch-symbol coder, 40% smaller than PgRC2's
+per-symbol code, is the largest per-stream margin found.
 
-**The mechanism, as traced in the code**: building the
-pseudogenome (`greedy-sweep` stage) requires computing per-read overlap and
-placement, which a simpler compressor (SPRING, Genozip) does not need to do
-the same way. This is measured extra work, and it is why T1.2 shows
-0/19 speed wins. **The same placement/deviation data this stage produces
-is then available, completely free, to every downstream claim**: Claim 3's
-`contig_spans` (T3.1 export), `pos_abs`/`read_lengths` (T3.2 coverage), and
-the whole query machinery (T3.3/T3.4/T3.5) are all built from data this
-stage already computed for compression's own purposes. **`CAPS_SPANS=1`
-was measured to add zero archive bytes** (18,282,397 B
-identical with or without it). The time cost is paid once, at Claim 1, and the downstream
-reuse adds no archive cost.
+## The time cost of Claim 1 is reused by Claims 2 and 3
 
-## What predicts the compression margin, and a self-correction about it
+Building the pseudogenome requires per-read overlap and placement, which SPRING and Genozip do not
+compute in the same way. This is extra work, and it is why G_CAPSUL is the fastest tool on none
+of the 19 datasets in T1.2. The placement and deviation data that this stage produces is then
+available to the later claims without further archive cost. `contig_spans` (T3.1 export),
+`pos_abs` and `read_lengths` (T3.2 coverage), and the query machinery (T3.3 to T3.5) are all
+built from data that compression already computed. Setting `CAPS_SPANS=1` was measured to add
+zero archive bytes (18,282,397 bytes with and without it). The time is paid once, at compression.
 
-Verified against the size-work roadmap. Across the 7-dataset PgRC2
-comparison, the fraction of a dataset's pseudogenome that ends up in the
-**second region** (the append-and-reassemble pool for reads that failed
-both chaining and pigeonhole mapping) correlates with margin at **+0.607**;
-the fraction of reads placed via mapping correlates at **−0.445**. H.
-salinarum (70.5% second-region share) wins by +8.58%; S. acidocaldarius
-(8.9% share, 51.3% mapped — the extreme on both axes) is the one loss,
-−0.83%.
+## What predicts the compression margin
 
-**This inverts an earlier, since-corrected thesis.** The PgRC2 three-way-split note
-had argued the *opposite* — that an oversized second region was itself the
-problem, estimating the "span penalty" at ~87 KB on S. acidocaldarius,
-"essentially its entire loss." Measured after later coder work brought
-positions to 0.996× their information-theoretic bound (closing the span
-penalty that analysis was built on), the correlation runs the other way: a
-*larger* second region goes with a *better* margin, not a worse one. Kept
-here specifically because the earlier framing sounds like it might still be
-true and is a natural instinct to reach for — it measurably is not, once
-positions are coded near their bound. The real story for the one loss is
-narrower: S. acidocaldarius is where the mapper places the most reads
-(51.3%, against 15–27% elsewhere), generating 983,565 mismatches that make
-its mismatch-position stream 23.4% of the archive — and PgRC2 spends
-23.2% on the identical stream, so this is not a case where either tool
-handles the data shape well; theirs simply handles it 0.83% better.
+Across the 7-dataset PgRC2 comparison, the fraction of a pseudogenome that lies in the second
+region (the pool of reads that failed both chaining and pigeonhole mapping) correlates with the
+margin at +0.607. The fraction of reads placed by mapping correlates at -0.445. H. salinarum has
+a 70.5% second-region share and wins by +8.58%. S. acidocaldarius has an 8.9% share and 51.3% of
+its reads mapped, which is the extreme on both axes, and it is the one loss, at -0.83%.
 
-## Historical dataset gap, and its resolution
+An earlier analysis had argued the opposite, that an oversized second region was itself the
+problem, with a span penalty of about 87 KB on S. acidocaldarius. After later coder work brought
+position coding to 0.996 times its information-theoretic bound, that penalty no longer exists,
+and the correlation runs the other way. The loss on S. acidocaldarius has a narrower cause. The
+mapper places the most reads there (51.3%, against 15 to 27% elsewhere) and generates 983,565
+mismatches, so the mismatch-position stream is 23.4% of the archive. PgRC2 spends 23.2% on the
+same stream, so the difference is 0.83% in PgRC2's favor on a data shape that is hard for both.
 
-The Claim 1 final-verdict note's body (predating the 2026-09-10 sweep)
-records the SPRING/Genozip comparison as **14/15**, not 15/15 — Utricularia
-gibba (SRR10676752) was on disk but not yet run, named explicitly as an
-open gap. **Resolved**: SRR10676752 is one
-of the final 19 rows, with CAPSULE winning it too (1,650.03 MB vs SPRING
-1,718.55 MB vs Genozip 2,954.90 MB).
+## Dataset coverage of the comparison
 
-## Earlier bug history: the origin of the decode-and-diff check
+An earlier record of the SPRING and Genozip comparison listed 14 of 15 datasets, because
+Utricularia gibba (SRR10676752) had not yet been run. It is one of the final 19 datasets, and
+G_CAPSUL is smallest on it (1,650.03 MB, against 1,718.55 MB for SPRING and 2,954.90 MB for
+Genozip).
 
-Before the final verification: (1) the archive was once
-incomplete — `refc::encode` stored a reference's source but not its
-destination gap/length/RC flag, found only because `verify_lossless.sh`'s
-own limitation was itself questioned; margin corrected from a
-previously-claimed +4.65% to the real +1.90%. (2) Four further silent
-data-loss bugs (the development notes §6.3, the failures and refuted-ideas record Part
-A) — two of them specifically triggered by variable-length input, as
-detailed above. **All five were found by decoding archives and
-diffing against the original file and not by trusting a passing size
-table.** The Claim 2 and Claim 3 findings follow the same practice.
+## Bug history
 
-## PgRC2 ratio comparison (sequence-only)
+Before the final verification, the archive was once incomplete. `refc::encode` stored the source
+of a reference but not its destination gap, length and reverse-complement flag. This was found
+only because the limitation of `verify_lossless.sh` was itself questioned, and it changed the
+margin from a claimed +4.65% to the actual +1.90%. Four further silent data-loss bugs were found
+later (two of them triggered by variable-length input, as described above). All five were found by
+decoding the archives and comparing them with the original file, and none by a passing size table.
+The Claim 2 and Claim 3 results were checked the same way.
 
-**Not comparable to T1.1's whole-FASTQ numbers.** PgRC2 stores DNA sequence
-only — no names, quality, or line-3 — so the ratio comparison is
-restricted to the 7 datasets both tools can process at all (a strict
-subset of the 6-datasets-PgRC2-fails-on point above; these 7 are ones with
-fixed-enough-length reads for PgRC2 to attempt). **+1.88% aggregate, 6
-wins, 1 loss** — the loss is S. acidocaldarius, exact disclosed margin
-**−0.83%**, confirmed structural (not a tuning miss) by sweeping `MINMEM`
-and `MAXMAP` and finding both already at interior optima on that dataset.
-Speed/RAM: **~1.7x slower, ~2.5x heavier at worst**.
+## PgRC2 ratio comparison (sequence only)
 
-**Precisely why S. acidocaldarius still loses, verified against
-the PgRC2 stream-comparison note** (full per-stream instrumentation of
-PgRC2's own real archive on this dataset, accounting for 99.9% of its
-bytes): the deficit is not spread evenly. Mismatch symbols are a **win**
-(124,280 B vs PgRC2's 208,234 — 40% smaller, the largest single margin in
-either direction), and mismatch positions are within 1.4% (731,919 vs
-721,906 — both already near-entropy, not where this is lost. **References
-are the entire story**: this project's `mem_triples`+`mem_dstgap`+
-`mem_len`+`mem_rc` cost 94,935 B against PgRC2's offsets+lengths+RC-info
-cost of 26,388 B — **3.6× theirs, and larger than the whole dataset's
-deficit** (+24,662 B). Without the reference-coding gap alone, this project
-would *win* S. acidocaldarius by roughly 44 KB. Root cause: PgRC2 never
-stores a match's destination at all — it embeds a marker byte directly
-inside the literal stream at the destination position, so the decoder
-already knows where it is when it reads the marker; this project stores
-`mem_dstgap` (destination) explicitly as a separate stream. This is an
-architectural difference in what gets coded, not a coder-quality gap on
-either side.
+PgRC2 stores only the DNA sequence, with no names, qualities or line 3. Its ratio therefore cannot
+be compared with the whole-FASTQ numbers of T1.1, and the comparison is restricted to the 7
+datasets that PgRC2 can process (those with reads of near-fixed length). The result is +1.88%
+aggregate, with 6 wins and 1 loss. The loss is S. acidocaldarius at -0.83%, and sweeping `MINMEM`
+and `MAXMAP` showed both already at interior optima on that dataset, so the loss is structural and
+not a tuning miss. G_CAPSUL is about 1.7 times slower and 2.5 times heavier in memory at worst.
 
-**What "sequence-only" precisely means, verified against
-the locked-scope note**: confirmed directly from PgRC2's own
-source (its `-q` flag only uses quality as an internal read-division
-heuristic; there is no quality- or header-compression code path anywhere
-in its encoder), so its one archive-size number is the complete
-sequence+order cost, not an undercount. On this project's side, a
-sequence+order total requires **six** real layers, and an earlier version
-of this comparison used only three of them, making E. coli look like a
-39.3% win when the complete number is 18.6%. The error was found internally: (1) sequence literal, (2) read
-order/permutation, (3) MEM self-match references, (4) positions + strand,
-(5) mismatch symbols for mapped (non-exact) placements, and (6)
-N-containing reads — which, at the time this scope was locked, had been
-**dropped with no storage anywhere** by every earlier stage in
-the project's history. This was a data-loss bug distinct from the
-four cataloged in the development notes §6.3. All six are required for a decoder to
-reconstruct every read's sequence and original file position; any subset
-is an incomplete number that overstates the margin.
+The deficit on S. acidocaldarius comes from the reference streams alone. It was established by
+instrumenting every stream of PgRC2's own archive on this dataset, which accounts for 99.9% of its
+bytes.
 
-## Summary paragraph for the discussion section
+| Stream | G_CAPSUL (bytes) | PgRC2 (bytes) | Comment |
+|---|---|---|---|
+| Mismatch symbols | 124,280 | 208,234 | G_CAPSUL 40% smaller, the largest single margin |
+| Mismatch positions | 731,919 | 721,906 | Within 1.4%, both near the entropy |
+| References (`mem_triples`, `mem_dstgap`, `mem_len`, `mem_rc` against offsets, lengths and RC info) | 94,935 | 26,388 | 3.6 times PgRC2, larger than the whole deficit of 24,662 bytes |
 
-*Claim 1's contribution is not solely a compression-ratio margin. Against
-PgRC2, the only architecturally comparable tool, G_CAPSUL wins on ratio
-(+1.88% aggregate where both tools can run), wins on
-capability (PgRC2 fails outright, by refusal or crash, on 6 of the 14
-originally-tested real datasets due to variable-length reads, which
-G_CAPSUL handles as a first-class case), and loses on speed and memory by a
-disclosed, expected margin consistent with assembly-based methods
-generally. Within individual streams, G_CAPSUL's adaptive mismatch-symbol
-coder measured 40% smaller than PgRC2's independent per-symbol code, the
-largest per-stream margin found in this comparison. This capability, in addition to the ratio, is a
-main advantage of Claim 1: a class of
-sequencing data that the closest comparable architecture cannot process at
-all. Separately, T1.2's wall-time cost (CAPSULE fastest on 0 of 19 datasets
-against SPRING/Genozip) is the one-time price of computing the placement
-structure Claims 2 and 3 reuse without any further archive cost.*
+Without the reference-coding gap, G_CAPSUL would win this dataset by roughly 44 KB. PgRC2 never
+stores the destination of a match. It places a marker byte inside the literal stream at the
+destination position, so the decoder already knows where it is when it reads the marker.
+G_CAPSUL stores the destination explicitly in `mem_dstgap`. The difference is in what is coded,
+and it does not reflect the quality of either coder.
+
+### What "sequence only" means for this comparison
+
+PgRC2's `-q` option uses quality only as an internal heuristic for dividing reads, and its encoder
+has no path that compresses quality or headers (confirmed from its source). Its archive size is
+therefore the complete sequence and order cost. The matching G_CAPSUL total needs six layers:
+
+1. the sequence literal
+2. the read order
+3. the MEM self-match references
+4. positions and strand
+5. mismatch symbols of mapped (non-exact) placements
+6. reads containing N
+
+All six are needed to reconstruct every read and its position in the file, and any subset
+overstates the margin. An earlier version of this comparison used only three layers, which made
+E. coli look like a 39.3% win when the complete figure is 18.6%. Reads containing N had also been
+dropped with no storage anywhere at an earlier stage of development. That was a data-loss bug
+separate from the four listed under "Bug history".
+
+## Summary
+
+Against PgRC2, the only architecturally comparable tool, G_CAPSUL has a smaller sequence-only
+archive (+1.88% aggregate where both can run). It processes variable-length reads, on which PgRC2
+refuses or crashes for 6 of the 14 original datasets. It is slower and heavier, as is usual for
+assembly-based methods. Its adaptive mismatch-symbol coder is 40% smaller than PgRC2's independent
+per-symbol code. The wall-time cost seen in T1.2 (G_CAPSUL fastest on 0 of 19 datasets against
+SPRING and Genozip) is the one-time price of computing the placement structure that Claims 2 and
+3 reuse without further archive cost.

@@ -42,8 +42,6 @@ once. See `mechanism_insight_claim2.md`.
 ## Scope
 
 This is a **400kb region**, not a full chromosome — smaller in scope than
-T2.1/T2.3's full-chr20 tests. The manuscript states this precisely via the
-explicit coordinate range in its caption; do not imply full-chromosome
-scale for this specific table when citing it. It remains a real-data test
-(no simulated sequence), which is the more important scope claim to
-preserve.
+T2.1/T2.3's full-chr20 tests. The manuscript gives the coordinate range in
+its caption, so this table should not be cited as full-chromosome. It is a real-data test, with no
+simulated sequence.
