@@ -1,6 +1,6 @@
 # T3.2 — Coverage
 
-> Record of what T3.2 measures and its mechanism.
+This file gives the results of T3.2. It reports how fast per-base coverage can be computed from the archive, compared with aligning the reads with bwa and counting with samtools and mosdepth. It also explains why the coverage values are identical to the aligned result and not approximations.
 
 ## What it measures
 

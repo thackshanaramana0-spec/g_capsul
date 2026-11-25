@@ -1,6 +1,6 @@
 # T2.3 — Heterozygous Indel Calling
 
-> Record of the T2.3 numbers, the dependency on CAPS_CALL_INDELS, and the withdrawn numbers this table replaced.
+This file gives the results of T2.3. It reports how well G_CAPSUL and DiscoSNP++ find heterozygous indels (short insertions and deletions) in the four individuals. It notes that the setting `CAPS_CALL_INDELS=1` is required, and it lists the earlier figures that this table replaces.
 
 ## What it measures
 

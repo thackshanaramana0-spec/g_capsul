@@ -1,6 +1,6 @@
 # T2.2 — Coverage Sweep
 
-> Record of the T2.2 numbers. The table is a sensitivity curve, not a win/loss comparison.
+This file gives the results of T2.2. It shows how the F1 score for heterozygous SNVs in individual HG002 changes with sequencing depth (10x, 15x, 20x and 30x). It is a sensitivity curve and has no winner column.
 
 ## What it measures
 

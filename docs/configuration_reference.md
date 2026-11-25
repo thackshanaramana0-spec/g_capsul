@@ -12,6 +12,28 @@ debugging settings that are not part of the supported interface. The line number
 the current source and move when the code changes, so look a name up with a text search in
 `src/` and `include/` when a line no longer matches.
 
+## How to read this page
+
+G_CAPSUL has a small number of settings that a normal run needs, and many more that exist for
+experiments and debugging. This page keeps them apart so that you can find what you need without
+reading the whole inventory.
+
+- **What a setting is.** Almost all settings are environment variables. You set one in front of the
+  command, for example `CAPS_NAMES=1 CAPS_QUAL=1 INPUT=reads.fq ARCHIVE=out.capsule` before
+  `bash scripts/build_scripts/encode_adaptive.sh`, the compression script described in the
+  [README](../README.md). The first two make the archive also store the read names and the quality
+  values, so that the original FASTQ file can be rebuilt exactly. The other two name the input file
+  and the archive to write.
+- **Where to look.** Part A covers the settings of a normal run, grouped by the program they belong
+  to: compression (A.1), index building (A.2), queries (A.3) and variant calling (A.4). If you only
+  want to compress, decompress and verify a file, A.1 is enough.
+- **What Part B is for.** Part B lists every environment variable that appears anywhere in the code,
+  with the file and line where it is read. Use it when you meet a variable in the source or in a log
+  and want to know what it does. Variables that are not in Part A are not part of the supported
+  interface.
+- **Defaults.** Each row states its default. If a setting is not given, the default applies and the
+  archive is still valid.
+
 ## How switches work
 
 * Almost every switch is **presence-based**: the code tests `getenv("NAME") != nullptr`. Setting the

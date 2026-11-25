@@ -222,7 +222,8 @@ Function and line references for each operation, by claim, are in
 
 ## Input requirements
 
-The archive is lossless for single-end FASTQ in which:
+G_CAPSUL accepts plain-text, uncompressed, single-end short-read FASTQ (four lines per record). Compressed
+input such as `.gz`, FASTA, SAM and BAM is not accepted. The archive is lossless for FASTQ in which:
 
 - sequences use upper-case `A`, `C`, `G`, `T`, `N` only;
 - lines end in LF, not CRLF;
@@ -239,6 +240,10 @@ the same verdicts without encoding. Convert CRLF with `tr -d '\r'`. Paired-end d
 supplied as separate single-end files, and mate relationships are not kept. Mixed line-3
 content is refused because line 3 is stored as a mode. Without `CAPS_NAMES=1 CAPS_QUAL=1` the
 archive holds sequences only and is not a full FASTQ.
+
+For the complete input contract, including every limit and what happens outside it, see
+[`docs/PROJECT_SCOPE.md`](docs/PROJECT_SCOPE.md). For what the method does not cover, see
+[`docs/limitations_and_scope.md`](docs/limitations_and_scope.md).
 
 ---
 

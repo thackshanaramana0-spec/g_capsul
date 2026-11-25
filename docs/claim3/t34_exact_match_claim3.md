@@ -1,6 +1,6 @@
 # T3.4 — Exact-Match Retrieval
 
-> Record of what T3.4 measures, how the FM-index completes exact-match search (complete by construction), the four-individual result, and its costs.
+This file gives the results of T3.4. It tests whether every read that contains a given sequence can be found, using an FM-index built from the archive after compression. It reports the recall on four individuals, explains why the search is complete by construction, and states what the index costs in size.
 
 ## What it measures
 

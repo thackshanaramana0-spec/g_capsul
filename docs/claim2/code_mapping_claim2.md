@@ -7,14 +7,36 @@ name. The file maps entry points and structure, and it does not claim a line-by-
 caller. The caller is described in [`../technical_architecture.md`](../technical_architecture.md),
 section 7.
 
-## Entry point
+## How to read this file
+
+Each result table of the manuscript is produced by a specific part of the program. This file links the two in three steps:
+
+1. **Summary table.** For each result it gives the operation, the code that performs it, and the result file that holds the numbers. Start here.
+2. **Walkthrough.** The sections after the summary describe each piece of code in a few sentences, so that you can find the function and understand what it does.
+3. **Number sources.** The last two sections list where every number in this folder comes from, and which numbers were recomputed and which are cited from earlier work.
+
+Names in backticks are functions, variables or environment variables. A line number such as `decoder.cpp:528` is the line in the current source. Line numbers move when the code is edited, so use the function name to search for the code if a line no longer matches.
+
+## Summary
+
+| Result | What the code does | Where | Result file |
+|---|---|---|---|
+| T2.1 SNVs | Reconciles the contigs, then finds bubbles that mark heterozygous SNVs | `collapse_contigs`, `build_substrate`, `extract_snv_bubble`, `run_variant_call` in `include/caps_caller.h` | `results/claim2/claim2_T2.1_snv.csv` |
+| T2.2 depth sweep | The same code on HG002 reads downsampled to 10x, 15x, 20x and 30x | the same functions | `results/claim2/claim2_T2.2_coverage_sweep.csv` |
+| T2.3 indels | Adds the read-level gapped scan and the indel bubbles, switched on by `CAPS_CALL_INDELS=1` | `gapped_indel_scan`, `extract_bubble`, `scan_pair` | `results/claim2/claim2_T2.3_indel.csv` |
+| T2.4 multi-allelic sites | Emits more than one alternate allele at a site, within the configured ploidy | the `MAF_K` and `n_multi_overploidy` logic in `run_variant_call` | `results/claim2/claim2_T2.4_multiallelic.csv` |
+| T2.5 tetraploid | The same caller with ploidy 4, set by `CAPS_PLOIDY=4` | the ploidy handling in `run_variant_call` | `results/claim2/claim2_T2.5_tetraploid.csv` |
+
+## Walkthrough
+
+### Entry point
 
 - `src/decoder.cpp:2512` dispatches `capsule_decode call <in.capsule> <out.vcf> [workdir]` to
   `capsule_call_from_archive`, defined at `decoder.cpp:2233`.
 - The call reads a stored `.capsule` file. It does not use in-memory state from compression, which
   confirms at the code level that calling is archive-native and does not read the FASTQ again.
 
-## Core functions in `include/caps_caller.h`
+### Core functions in `include/caps_caller.h`
 
 - **`extract_bubble` (line 258) and `extract_snv_bubble` (line 427)** find divergent regions between
   two contig sequences (bubbles), the signal that a heterozygous site produces when its two alleles
@@ -37,7 +59,7 @@ section 7.
   the mechanism behind T2.4 (ploidy 2, multi-allelic within that ploidy) and T2.5 (ploidy 4, set by
   `CAPS_PLOIDY=4`).
 
-## Flags the tables depend on
+### Flags the tables depend on
 
 - `CAPS_CALL_INDELS=1` is required for T2.3, T2.4 and T2.5. Without it, `capsule_decode call`
   takes the narrower graph-only SNV path without an error. The comment at `decoder.cpp:2241`
@@ -46,9 +68,7 @@ section 7.
 
 The full list of environment variables is in [`../configuration_reference.md`](../configuration_reference.md).
 
----
-
-# Source file of every number
+## Number sources
 
 | Number | Source |
 |---|---|

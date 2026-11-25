@@ -1,6 +1,6 @@
 # T3.5 — Locus Retrieval
 
-> Record of the T3.5 mechanism, the multi-individual and multi-locus result, the one diagnosed miss, and the cost of reaching a clean sweep.
+This file gives the results of T3.5. It tests whether both alleles of a heterozygous site can be recovered when compression has placed them at different positions. It reports the result for four individuals and two loci, the one miss that was diagnosed, and the cost of reaching a full sweep.
 
 ## What it measures — and why this is the actual novel claim of Claim 3
 

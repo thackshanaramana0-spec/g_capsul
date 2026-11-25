@@ -8,7 +8,27 @@ The mechanism statements in [`mechanism_insight_claim1.md`](mechanism_insight_cl
 them. For the full description of the encoder see
 [`../technical_architecture.md`](../technical_architecture.md).
 
-## Pipeline stages in `src/encoder.cpp` (the `phase(...)` markers)
+## How to read this file
+
+Each result table of the manuscript is produced by a specific part of the program. This file links the two in three steps:
+
+1. **Summary table.** For each result it gives the operation, the code that performs it, and the result file that holds the numbers. Start here.
+2. **Walkthrough.** The sections after the summary describe each piece of code in a few sentences, so that you can find the function and understand what it does.
+3. **Number sources.** The last two sections list where every number in this folder comes from, and which numbers were recomputed and which are cited from earlier work.
+
+Names in backticks are functions, variables or environment variables. A line number such as `decoder.cpp:528` is the line in the current source. Line numbers move when the code is edited, so use the function name to search for the code if a line no longer matches.
+
+## Summary
+
+| Result | What the code does | Where | Result file |
+|---|---|---|---|
+| T1.1 archive size | Builds the pseudogenome from the reads, then codes each stream with the smallest of several coders | `greedy-sweep` to `CODING` in `src/encoder.cpp`, selector in `include/coders_inproc.h` | `results/claim1/claim1_T1.1_T1.2.csv` |
+| T1.2 wall time | The same pipeline, timed for compression and for decompression | the same code, timing from the benchmark script | `results/claim1/claim1_T1.1_T1.2.csv` |
+| Lossless column | Decodes each archive and compares it with the input | `scripts/build_scripts/verify_lossless.sh` and `verify_roundtrip.sh` | `results/claim1/claim1_T1.1_T1.2.csv` |
+
+## Walkthrough
+
+### Pipeline stages in `src/encoder.cpp` (the `phase(...)` markers)
 
 1. **`greedy-sweep`** (line 2511) is the pseudogenome construction, by suffix-prefix overlap
    chaining. Its cost explains the T1.2 result, and its output (the placement data) is what Claims
@@ -25,7 +45,7 @@ them. For the full description of the encoder see
 5. **`pre-coding` and `CODING`** (lines 4940 and 4984) are the stream-coding stage, where the
    per-stream selector below runs.
 
-## Stream coder selector (`include/coders_inproc.h`, line 560)
+### Stream coder selector (`include/coders_inproc.h`, line 560)
 
 The comment reads "universal per-stream selector over the REAL coder set". Each stream (literal
 bases, match references, mismatches and so on) is coded by several candidate coders and the
@@ -33,7 +53,7 @@ smallest result is kept, in place of one fixed generic compressor. `include/code
 provides the PPMd7, FSE and range-coder implementations that are among the candidates.
 `include/seqpar_core.h` is the DNA coder shared by the standalone binary and the in-process path.
 
-## Losslessness verification
+### Losslessness verification
 
 An earlier `verify_lossless.sh` decoded dumped intermediate streams and not the shipped archive.
 That check hid four silent data-loss bugs: a mismatch-position byte overflow for reads above
@@ -42,9 +62,7 @@ bug. They were found only by decoding the shipped archives and comparing them wi
 is the reason the T1.1 method note states that every archive was independently decoded and checked
 against its input.
 
----
-
-# Source file of every number
+## Number sources
 
 | Number | Source |
 |---|---|

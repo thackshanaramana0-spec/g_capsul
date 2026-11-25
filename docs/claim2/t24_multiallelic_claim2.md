@@ -1,6 +1,6 @@
 # T2.4 — Multi-Allelic Sites
 
-> Record of the T2.4 numbers. The table is a census of the whole chromosome, not a sample. It also lists the withdrawn numbers (21/26, 11/18, 5/111).
+This file gives the results of T2.4. It reports how many of the multi-allelic SNV sites (positions with more than one alternate allele) on chromosome 20 of HG002 are recovered. The table is a complete count of the chromosome and not a sample. The file also lists the earlier figures that were withdrawn.
 
 ## What it measures
 

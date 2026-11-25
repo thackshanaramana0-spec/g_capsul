@@ -1,6 +1,6 @@
 # T2.1 — Heterozygous SNV Calling
 
-> Record of the T2.1 numbers and comparators, including the one dataset where G_CAPSUL does not win (HG005).
+This file gives the results of T2.1, the first Claim 2 table. It reports how well G_CAPSUL, DiscoSNP++ and Kmer2SNP find heterozygous SNVs (single-base differences between the two copies of a chromosome) in four human individuals. It also explains the one individual, HG005, where DiscoSNP++ scores higher.
 
 ## What it measures
 

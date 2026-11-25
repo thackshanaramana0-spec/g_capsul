@@ -1,6 +1,6 @@
 # T2.5 — Tetraploid Calling
 
-> Record of the T2.5 numbers, why nothing at the sequence level is simulated, and what the table shows about ploidy.
+This file gives the results of T2.5. It tests variant calling at ploidy 4 on real HG003 and HG004 reads combined. Nothing at the sequence level is simulated, and only the ploidy relationship is constructed. The file also shows what the table says about how the caller handles ploidy.
 
 ## What it measures
 

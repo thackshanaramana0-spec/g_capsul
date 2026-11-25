@@ -1,6 +1,8 @@
 # Reimplementation of PgRC2's assembler
 
-> Engineering log from the development of the encoder. It records measurements and rejected approaches in the order they were made, and some figures were superseded by later work. The current results are in `results/` and in the claim folders under `docs/`.
+This file is the log of a reimplementation of PgRC2's assembler, made to measure how far its speed, memory and assembly quality can be reached with standard methods. It is a development record.
+
+Engineering log from the development of the encoder. It records measurements and rejected approaches in the order they were made, and some figures were superseded by later work. The current results are in `results/` and in the claim folders under `docs/`.
 
 This reimplementation follows the algorithm of PgRC2's assembler. PgRC2's source was read to understand what
 each stage does, and that reading is what exposed several of the results below. The code was written for this project. `method_c/` is the unmodified upstream clone used as the measurement

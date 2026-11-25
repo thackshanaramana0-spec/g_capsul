@@ -6,7 +6,29 @@ number cited in this folder. Line numbers are given for `src/decoder.cpp` and `s
 of the current source and drift as the files change, so search for the identifier. The overall
 design is in [`../technical_architecture.md`](../technical_architecture.md), sections 5 and 6.
 
-## T3.1 Export
+## How to read this file
+
+Each result table of the manuscript is produced by a specific part of the program. This file links the two in three steps:
+
+1. **Summary table.** For each result it gives the operation, the code that performs it, and the result file that holds the numbers. Start here.
+2. **Walkthrough.** The sections after the summary describe each piece of code in a few sentences, so that you can find the function and understand what it does.
+3. **Number sources.** The last two sections list where every number in this folder comes from, and which numbers were recomputed and which are cited from earlier work.
+
+Names in backticks are functions, variables or environment variables. A line number such as `decoder.cpp:528` is the line in the current source. Line numbers move when the code is edited, so use the function name to search for the code if a line no longer matches.
+
+## Summary
+
+| Result | What the code does | Where | Result file |
+|---|---|---|---|
+| T3.1 export | Writes the pseudogenome as FASTA, cut into contigs by `contig_spans` | the export block in `src/decoder.cpp` | `results/claim3/claim3_T3.1_T3.2_T3.3.csv` |
+| T3.2 coverage | Computes depth per base from placements and lengths, without rebuilding the pseudogenome | the `coverage` block in `src/decoder.cpp` | `results/claim3/claim3_T3.1_T3.2_T3.3.csv` |
+| T3.3 range query | Returns the reads placed in a coordinate range | the `query` block in `src/decoder.cpp` | `results/claim3/claim3_T3.1_T3.2_T3.3.csv` |
+| T3.4 exact match | Finds every read containing a sequence, using the pseudogenome search plus the FM-index | `find_occurrences` in `src/decoder.cpp`, `include/caps_fmi.h` | `results/claim3/claim3_T3.4_exact_match_recall.csv` |
+| T3.5 locus retrieval | Queries both sides of a heterozygous site and combines the answers | `scripts/claim3_scripts/run_locus_retrieval_capsule.sh` and `score_locus_retrieval.py` | `results/claim3/claim3_T3.5_locus_retrieval.csv` |
+
+## Walkthrough
+
+### T3.1 Export
 
 - **Per-contig export from `contig_spans`** is in the export block of `decoder.cpp` (the
   `has("contig_spans") && getenv("CAPSULE_EXPORT_CONTIGS")` branch, line 1216). It reads the
@@ -21,7 +43,7 @@ design is in [`../technical_architecture.md`](../technical_architecture.md), sec
   (from line 420) explains the cost difference: `CAPS_CALL` is about 20 times heavier, because it
   also runs the full variant caller inline.
 
-## T3.2 Coverage
+### T3.2 Coverage
 
 - The `if(mode=="coverage")` block (`decoder.cpp:528`) exits before the pseudogenome is rebuilt. It
   reads `pos_abs`, `pos_sec`, `pos_region` (through `caps_join_positions`), `read_lengths`, and
@@ -31,7 +53,7 @@ design is in [`../technical_architecture.md`](../technical_architecture.md), sec
 - A duplicate-undercount bug is documented inline in the same block. The `orig2uid` expansion is
   required, and without it the depth was 20% too low on E. coli.
 
-## T3.3 and T3.4 Query (shared function)
+### T3.3 and T3.4 Query (shared function)
 
 - **The decoded sidecar (`.qidx`)** is loaded in the `mode=="query"` block (`decoder.cpp:615`). It
   holds the 2-bit packed pseudogenome, the placements `P` and lengths `L`, the optional deviations
@@ -54,7 +76,7 @@ design is in [`../technical_architecture.md`](../technical_architecture.md), sec
   reproduce. The index itself (SA-IS, 2-bit BWT, rank checkpoints, save and load) is
   `include/caps_fmi.h`. The older k-mer index build (`CAPS_XMI=1`) is still in the same function.
 
-## T3.5 Locus retrieval
+### T3.5 Locus retrieval
 
 - It is not in `decoder.cpp`. It is built at the orchestration layer by
   `scripts/claim3_scripts/run_locus_retrieval_capsule.sh` (its `query()` function calls
@@ -67,16 +89,14 @@ design is in [`../technical_architecture.md`](../technical_architecture.md), sec
   builds the index and scores both tables. `benchmark_1_run.sh` runs it for all four individuals as
   phase 4.
 
-## The `.sites` pileup
+### The `.sites` pileup
 
 The pileup is built during `index` (the `tally[{a0+j,obs[off+m]}]++` statement, `decoder.cpp:1720`).
 It is referenced in the refuted consensus-polish attempt for T3.1 and in the T3.5 mechanism
 discussion. It has a known strand bug that was left unfixed on purpose, as a comment at the tally
 site records.
 
----
-
-# Source file of every number
+## Number sources
 
 | Number | Source |
 |---|---|

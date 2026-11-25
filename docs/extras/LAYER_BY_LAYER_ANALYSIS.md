@@ -1,8 +1,10 @@
-# Layer-by-layer analysis: ours vs PgRC2, real profiling, no changes
+# Layer-by-layer analysis: G_CAPSUL against PgRC2, from profiling
 
-> Engineering log from the development of the encoder. It records measurements and rejected approaches in the order they were made, and some figures were superseded by later work. The current results are in `results/` and in the claim folders under `docs/`.
+This file profiles each stage of the encoder on one E. coli dataset and compares each stage with PgRC2. It is a development record, and the current results are in `results/` and in the claim folders.
 
-Pure analysis, no code touched. Real numbers from real runs, both sides, same
+Engineering log from the development of the encoder. It records measurements and rejected approaches in the order they were made, and some figures were superseded by later work. The current results are in `results/` and in the claim folders under `docs/`.
+
+This is analysis only, with no code changed. The numbers come from runs of both tools on the same
 file (E. coli, `ecoli_test.fq`, 1,000,000 reads, 150bp, byte-identical
 verified on our side — see the locked-scope note for that proof).
 

@@ -1,5 +1,7 @@
 # T3.4 / T3.5 multi-individual replication — HG003, HG004, HG005
 
+This file records the first test of T3.4 and T3.5 on three more individuals (HG003, HG004 and HG005), to show that the earlier result, which came from HG002 alone, does not depend on one person. It explains what was measured, what failed and why, and why the result generalizes.
+
 > **Status of this document.** This is the record of the first multi-individual replication,
 > kept as written. It was measured with
 > the earlier k-mer completion index (`.xmi`, `CAPS_XMI=1`), which has since been

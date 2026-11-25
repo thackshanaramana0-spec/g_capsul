@@ -1,6 +1,6 @@
 # T3.3 — Coordinate-Range Query
 
-> Record of what T3.3 measures, why it has no baseline column, and its code-level relationship to T3.4 (they are the same function).
+This file gives the results of T3.3. It tests whether any coordinate range can be read directly from the archive, on all 19 datasets. No other tool offers this operation, so the table reports timing only. The file also explains that T3.3 and T3.4 are the same function in the decoder.
 
 ## What it measures
 

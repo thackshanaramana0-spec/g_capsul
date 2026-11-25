@@ -1,6 +1,6 @@
 # How Claim 2 connects to the paper's actual insight
 
-> Mechanism of Claim 2: how archive-native calling relates to the mechanism behind Claim 3 retrieval, with the capabilities of comparator tools checked against their documentation.
+This file explains why variant calling from the archive works. When the compressor places the two alleles of one heterozygous site at separate places in the pseudogenome, the caller has to bring them back together before it can call the site. The manuscript's ablation measures the gain from doing this. The file also covers what DiscoSNP++ and Kmer2SNP can and cannot do, and how Claim 2 relates to Claim 3.
 
 ## The insight, restated from the Claim 3 mechanism file, applied here
 
