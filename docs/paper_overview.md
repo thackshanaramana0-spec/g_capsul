@@ -1,48 +1,45 @@
-# Paper overview
+# Documentation guide
 
-> Entry point: how the paper maps onto the three claims and onto the documents in this folder.
+This folder explains how the G_CAPSUL results were produced and where each statement in the
+manuscript can be checked. It complements the README, which covers installation and usage, and it
+does not repeat the manuscript or its supplementary material.
 
-## Names
+## What G_CAPSUL is
 
-**G_CAPSUL** (Genomic, Compact, Addressable, Pseudogenome-Structured, Unified Lossless) is the
-name of the tool and the subject of the paper.
+G_CAPSUL is a lossless, reference-free compressor for short-read FASTQ files. It assembles the
+reads into a pseudogenome while compressing and keeps the read placements and local sequence
+differences in the archive. The same retained structure serves three purposes, which the
+documentation groups as three claims.
 
-**ARCH** (Assemble, Retain, Compress, Harness) is the name of the design principle the tool
-follows. During compression the reads are assembled into a pseudogenome, the resulting structure
-is retained in the archive, and it is reused for downstream analysis. The allele-splitting
-mechanism described in `central_insight_and_mechanism.md` is evidence for the principle and is not
-the principle itself.
+| Claim | Question it answers | Detail |
+|---|---|---|
+| 1. Compression | Is the archive smaller than that of general-purpose FASTQ compressors, and is it lossless? | [`claim1/`](claim1/) |
+| 2. Variant calling | Can heterozygous variants be called from the archive without the original reads or a reference? | [`claim2/`](claim2/) |
+| 3. Addressability | Can the archive export sequence, report coverage and retrieve reads by locus or by content? | [`claim3/`](claim3/) |
 
-## The three claims
+The claims are connected. Claim 1 builds the structure, and Claims 2 and 3 are two separate
+demonstrations that the structure can be reused. The argument is in
+[`central_insight_and_mechanism.md`](central_insight_and_mechanism.md).
 
-| Claim | Name | Question | Folder |
-|---|---|---|---|
-| 1 | COMPACT | Is the archive smaller than general-purpose FASTQ compressors, and is it lossless? | `docs/claim1/` |
-| 2 | FAITHFUL | Does the retained structure still support reference-free variant calling? | `docs/claim2/` |
-| 3 | ADDRESSABLE | Can the same archive serve export, coverage, range query, exact match and locus retrieval? | `docs/claim3/` |
+The name G_CAPSUL stands for Genomic, Compact, Addressable, Pseudogenome-Structured, Unified
+Lossless. ARCH (Assemble, Retain, Compress, Harness) names the design principle behind it.
 
-The three claims are not independent results. Claim 1 builds the structure. Claims 2 and 3 are two
-separately measured demonstrations that the structure can be reused. The full argument is in
-`central_insight_and_mechanism.md`.
+## Which document to read
 
-## Which documents are authoritative
+| If you want | Read |
+|---|---|
+| to see how each claim connects to its figure, code, results and documents | [`REPO_MAP.md`](REPO_MAP.md) |
+| to understand the idea and the mechanism behind the three capabilities | [`central_insight_and_mechanism.md`](central_insight_and_mechanism.md) |
+| to see how the archive and the pseudogenome are built | [`technical_architecture.md`](technical_architecture.md) |
+| to see how G_CAPSUL relates to other tools, area by area | [`novelty_and_prior_art.md`](novelty_and_prior_art.md) |
+| to look up a reported number, its source file and how it was checked | [`numbers_and_verification_index.md`](numbers_and_verification_index.md) |
+| to know what is supported, what is refused and what was not evaluated | [`PROJECT_SCOPE.md`](PROJECT_SCOPE.md) and [`limitations_and_scope.md`](limitations_and_scope.md) |
+| to find every environment variable and positional argument | [`configuration_reference.md`](configuration_reference.md) |
+| background engineering notes and the dataset and server setup | [`extras/`](extras/) |
 
-For every number, the CSV files in `results/` are the authoritative source. Where a document in
-`docs/` disagrees with a result file, the result file wins. The folders `docs/claim1/`,
-`docs/claim2/` and `docs/claim3/` are the current explanation of each claim. Some documents refer
-by title to the project's internal working notes. Those notes are not part of this repository and
-nothing in `docs/` depends on reading them.
+## Authoritative sources
 
-## File index
-
-- `technical_architecture.md`: the container format and the assembly pipeline (chaining,
-  pigeonhole mapping, the MAXMAP ramp, the second region, MEM self-match). How the archive is
-  built, independent of any one claim's results.
-- `central_insight_and_mechanism.md`: the mechanism shared by all three claims.
-- `novelty_and_prior_art.md`: comparison with PgRC2, BEETL, CIndex, sFASTQ, DiscoSNP++, Kmer2SNP,
-  SPAdes and bwa.
-- `limitations_and_scope.md`: trade-offs, withdrawn numbers and scope limits in one place.
-- `numbers_and_verification_index.md`: index of every headline number with its source and
-  verification status.
-- `configuration_reference.md`: every environment variable and positional argument.
-- `claim1/`, `claim2/`, `claim3/`: per-claim detail.
+Numbers come from the CSV files in [`../results/`](../results/). If a document and a result file
+disagree, the result file is correct. Each result file records the script that produced it, and
+[`numbers_and_verification_index.md`](numbers_and_verification_index.md) lists them together with
+how each number was checked.

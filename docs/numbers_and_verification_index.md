@@ -1,18 +1,27 @@
 # Numbers and verification index
 
-> Row-by-row record of every table in the paper, with the source file of each number and its verification status.
+This file lists the tables behind the manuscript, the result file each number comes from, and how
+each was checked. Cite a number from here together with its result file.
 
-**Verification status legend**: **RE-DERIVED** = independently recomputed
-from raw data during the verification audit. **CROSS-CHECKED** = manuscript number compared
-directly against its CSV source, row by row, during the audit. **CITED** =
-read from a prior, documented source, not independently re-run in the
-audit.
+## How numbers were checked
+
+| Status | Meaning |
+|---|---|
+| Re-derived | Recomputed independently from raw data. |
+| Cross-checked | Compared with its result file, row by row. |
+| Cited | Taken from a result file produced by the benchmark scripts and not recomputed separately. |
+
+The result files in [`../results/`](../results/) are authoritative. Where this file and a result file
+disagree, the result file is correct. Scripts that produce each file are listed in
+[`../README.md`](../README.md#reproducing-the-results).
 
 ---
 
-# CLAIM 1 — COMPACT
+# Compression
 
-## T1.1 — Archive size, all 19 datasets (MB). Status: RE-DERIVED (aggregate) + spot cross-checked (rows). Source: `results/claim1/claim1_T1.1_T1.2.csv`.
+## Archive size, all 19 datasets (MB)
+
+Status: re-derived for the aggregate and cross-checked row by row. Source: `results/claim1/claim1_T1.1_T1.2.csv`.
 
 | Dataset | Raw MB | CAPSULE MB | SPRING MB | Genozip MB |
 |---|---|---|---|---|
@@ -36,12 +45,13 @@ audit.
 | SRR40271341 | 290.89 | 40.55 | 45.78 | 62.26 |
 | SRR554369 | 456.44 | 57.29 | 59.20 | 88.81 |
 
-**CAPSULE is smaller than SPRING on all 19, and smaller than Genozip on all
-19 — verified by inspection of every row above, not just the aggregate.**
-Aggregate: 19/19 vs SPRING (−6.03%), 19/19 vs Genozip (−43.26%). Every one
-of the 57 archives (19×3 tools) is `LOSSLESS` per the CSV's own column.
+G_CAPSUL is smaller than SPRING on all 19 datasets (aggregate -6.03%) and smaller than Genozip on
+all 19 (aggregate -43.26%). All 57 archives (19 datasets, 3 tools) are marked lossless in the CSV.
+This is a sorted-record comparison, see [`limitations_and_scope.md`](limitations_and_scope.md).
 
-## T1.2 — Wall time (s), compress and decompress, same 19 datasets. Status: RE-DERIVED. Source: same CSV.
+## Wall time (s), compression and decompression
+
+Status: re-derived. Source: same CSV.
 
 | Dataset | CAPS compress | SPRING compress | Genozip compress | CAPS decompress | SPRING decompress | Genozip decompress | Fastest compress | Fastest decompress |
 |---|---|---|---|---|---|---|---|---|
@@ -65,16 +75,17 @@ of the 57 archives (19×3 tools) is `LOSSLESS` per the CSV's own column.
 | SRR40271341 | 6.44 | 10.87 | 1.35 | 3.38 | 9.26 | 0.50 | Genozip | Genozip |
 | SRR554369 | 11.68 | 5.57 | 3.47 | 4.66 | 3.41 | 1.65 | Genozip | Genozip |
 
-**CAPSULE is the fastest tool in exactly 0 of these 38 cells** (19 compress
-+ 19 decompress). Genozip wins 37/38; SPRING wins 1/38 (ERR5181310
-compress). Confirmed against the manuscript's own bold-marking, which
+G_CAPSUL is the fastest tool in none of these 38 cells (19 compression and 19 decompression).
+Genozip is fastest in 37 and SPRING in 1 (ERR5181310 compression). The manuscript's bold marking
 agrees cell for cell.
 
 ---
 
-# CLAIM 2 — FAITHFUL
+# Variant calling
 
-## T2.1 — Het-SNV calling, full counts, 4 individuals. Status: CROSS-CHECKED against manuscript. Source: `results/claim2/claim2_T2.1_snv.csv`.
+## Heterozygous SNVs, four individuals
+
+Status: cross-checked against the manuscript. Source: `results/claim2/claim2_T2.1_snv.csv`.
 
 | Individual | Tool | TP | FP | FN | Precision | Recall | F1 |
 |---|---|---|---|---|---|---|---|
@@ -91,10 +102,12 @@ agrees cell for cell.
 | HG005 | DiscoSNP++ | 30,726 | 1,331 | 8,396 | 0.959 | 0.785 | **0.863** |
 | HG005 | Kmer2SNP | 13,294 | 220 | 25,809 | 0.984 | 0.340 | 0.505 |
 
-**Mean F1: CAPSULE 0.876, DiscoSNP++ 0.853, Kmer2SNP 0.475.** CAPSULE wins
-3/4 individuals; DiscoSNP++ wins HG005.
+Mean F1 is 0.876 for G_CAPSUL, 0.853 for DiscoSNP++ and 0.475 for Kmer2SNP. G_CAPSUL is ahead on
+three individuals and DiscoSNP++ on HG005.
 
-## T2.2 — Het-SNV F1 vs sequencing depth, HG002. Status: CROSS-CHECKED. Source: `results/claim2/claim2_T2.2_coverage_sweep.csv`.
+## Heterozygous SNV F1 against depth, HG002
+
+Status: cross-checked. Source: `results/claim2/claim2_T2.2_coverage_sweep.csv`.
 
 | Depth | Reads | Archive bytes | TP | FP | FN | Precision | Recall | F1 |
 |---|---|---|---|---|---|---|---|---|
@@ -103,10 +116,11 @@ agrees cell for cell.
 | 20x | 8,402,407 | 388,576,775 | 30,792 | 1,903 | 13,783 | 0.942 | 0.691 | 0.797 |
 | 30x | 12,604,917 | 573,767,964 | 37,011 | 1,721 | 7,564 | 0.956 | 0.830 | 0.888 |
 
-30x row is identical to T2.1's HG002/CAPSULE row (carried, not re-run, per
-the manuscript's own stated methodology).
+The 30x row is identical to the HG002 row above and was carried over, not re-run.
 
-## T2.3 — Het-indel calling, full counts, 4 individuals. Status: CROSS-CHECKED. Source: `results/claim2/claim2_T2.3_indel.csv`.
+## Heterozygous indels, four individuals
+
+Status: cross-checked. Source: `results/claim2/claim2_T2.3_indel.csv`.
 
 | Individual | Tool | TP | FP | FN | Precision | Recall | F1 |
 |---|---|---|---|---|---|---|---|
@@ -119,22 +133,23 @@ the manuscript's own stated methodology).
 | HG005 | CAPSULE | 2,483 | 582 | 2,827 | 0.810 | 0.467 | 0.593 |
 | HG005 | DiscoSNP++ | 2,400 | 223 | 2,907 | 0.915 | 0.452 | **0.605** |
 
-Kmer2SNP: `NOT_APPLICABLE_SNP_ONLY` on all four individuals — no indel
-model, by construction. **Mean F1: CAPSULE 0.621, DiscoSNP++ 0.591.**
-CAPSULE wins 3/4; DiscoSNP++ wins HG005 (same individual as T2.1's
-exception).
+Kmer2SNP is marked `NOT_APPLICABLE_SNP_ONLY` for all four individuals because it has no indel
+model. Mean F1 is 0.621 for G_CAPSUL and 0.591 for DiscoSNP++. DiscoSNP++ is ahead on HG005.
 
-## T2.4 — Multi-allelic SNV sites, complete chr20 census. Status: CROSS-CHECKED. Source: `results/claim2/claim2_T2.4_multiallelic.csv`.
+## Multi-allelic SNV sites, complete census of chromosome 20
+
+Status: cross-checked. Source: `results/claim2/claim2_T2.4_multiallelic.csv`.
 
 | Individual | Scope | Sites | CAPSULE both alleles | CAPSULE rate | DiscoSNP++ multi-allelic records emitted | DiscoSNP++ total records |
 |---|---|---|---|---|---|---|
 | HG002 | chr20 COMPLETE CENSUS | 26 | **17** | 65.4% | 0 | 3,989 |
 
-Status field in CSV: `CORRECTED_20260910`. DiscoSNP++ emitted zero
-multi-allelic records across its ENTIRE output on this individual, not
-just these 26 sites.
+DiscoSNP++ emitted no multi-allelic record anywhere in its output for this individual, not only at
+these 26 sites.
 
-## T2.5 — Tetraploid calling, HG003+HG004 real reads, chr20:3,000,000-3,400,000. Status: CROSS-CHECKED. Source: `results/claim2/claim2_T2.5_tetraploid.csv`.
+## Tetraploid calling, HG003 and HG004 reads, chr20:3,000,000-3,400,000
+
+Status: cross-checked. Source: `results/claim2/claim2_T2.5_tetraploid.csv`.
 
 | Class | Tool | TP | FP | FN | Precision | Recall | F1 |
 |---|---|---|---|---|---|---|---|
@@ -143,13 +158,15 @@ just these 26 sites.
 | INDEL | CAPSULE | 51 | 8 | 61 | 0.864 | 0.455 | **0.597** |
 | INDEL | DiscoSNP++ | 44 | 3 | 68 | 0.936 | 0.393 | 0.553 |
 
-Both classes: CAPSULE wins.
+G_CAPSUL is ahead in both classes.
 
 ---
 
-# CLAIM 3 — ADDRESSABLE
+# Addressability
 
-## T3.1 — Export speed, 6 datasets. Status: CITED. Source: `results/claim3/claim3_T3.1_T3.2_T3.3.csv`.
+## Export speed, 6 datasets
+
+Status: cited. Source: `results/claim3/claim3_T3.1_T3.2_T3.3.csv`.
 
 | Dataset | CAPSULE (s) | SPAdes (s) | Speedup |
 |---|---|---|---|
@@ -160,7 +177,9 @@ Both classes: CAPSULE wins.
 | DRR976266 | 0.70 | 548.82 | 784.0x |
 | HG002 | 5.67 | 2,678.83 | 472.5x |
 
-## T3.1 — Correctness (E. coli/SRR2584863 only, the one dataset both tools can be fairly compared on). Status: RE-DERIVED. Source: The T3.1 correctness note.
+## Export correctness, SRR2584863 (E. coli)
+
+Status: re-derived. The one dataset on which both tools can be compared fairly.
 
 | Metric | CAPSULE (final, shipping config) | SPAdes | Winner |
 |---|---|---|---|
@@ -172,7 +191,9 @@ Both classes: CAPSULE wins.
 | Unaligned length | 1,895,813 | 9,582 | SPAdes |
 | Misassemblies | 7 | 1 | SPAdes |
 
-## T3.2 — Coverage speed, same 6 datasets. Status: CITED. Source: `results/claim3/claim3_T3.1_T3.2_T3.3.csv`.
+## Coverage speed, 6 datasets
+
+Status: cited. Source: `results/claim3/claim3_T3.1_T3.2_T3.3.csv`.
 
 | Dataset | CAPSULE (s) | bwa+samtools+mosdepth (s) | Speedup |
 |---|---|---|---|
@@ -183,7 +204,9 @@ Both classes: CAPSULE wins.
 | DRR976266 | 1.49 | 23.98 | 16.1x |
 | HG002 | 3.04 | 164.90 | 54.2x |
 
-## T3.3 — Range query timing, all 19 datasets, no comparator. Status: CITED. Source: `results/claim3/claim3_T3.1_T3.2_T3.3.csv`.
+## Range query timing, all 19 datasets
+
+Status: cited. Source: same CSV. There is no comparator.
 
 | Dataset | Time (s) | Rows |
 |---|---|---|
@@ -207,7 +230,10 @@ Both classes: CAPSULE wins.
 | SRR065390 | 12.11 | 30,458 |
 | SRR10676752 | 118.48 | 4,990 |
 
-## T3.4 — Exact-match recall, 4 individuals. Status: RE-DERIVED 2026-11-21. Source: `docs/claim3/t34_exact_match_claim3.md`; result file `results/claim3/claim3_T3.4_exact_match_recall.csv`.
+## Exact-match recall, four individuals
+
+Status: re-derived. Sources: `docs/claim3/t34_exact_match_claim3.md` and
+`results/claim3/claim3_T3.4_exact_match_recall.csv`.
 
 | Individual | Reads with a probe | Recall, archive | Recall, archive + FM-index |
 |---|---:|---:|---:|
@@ -216,9 +242,15 @@ Both classes: CAPSULE wins.
 | HG004 | 12,455 | 0.8099 | **1.0000** |
 | HG005 | 10,121 | 0.6047 | **1.0000** |
 
-Measured on a build of the repo source with `scripts/claim3_scripts/run_locus_retrieval_capsule.sh` (the same probes and scorer for every column). The earlier server-run archive-alone values (0.9619, 0.9612, 0.8563) could not be reproduced from the repo and are replaced. A query that also has the decoded read deviations gives 0.9999, 0.9998, 1.0000 and 0.9990. The FM-index gives 1.0000 at mismatch tolerance 0 and 3.
+Measured with `scripts/claim3_scripts/run_locus_retrieval_capsule.sh`, using the same probes and
+scorer in every column. A query that also has the decoded read deviations gives 0.9999, 0.9998,
+1.0000 and 0.9990. The FM-index gives 1.0000 at mismatch tolerance 0 and 3. Earlier archive-only
+values (0.9619, 0.9612, 0.8563) could not be reproduced from the repository and are replaced.
 
-## T3.5 — Locus retrieval, 4 individuals, 1 locus. Status: RE-DERIVED 2026-11-21. Source: `docs/claim3/t35_locus_retrieval_claim3.md`; result file `results/claim3/claim3_T3.5_locus_retrieval.csv`.
+## Locus retrieval, four individuals, one locus
+
+Status: re-derived. Sources: `docs/claim3/t35_locus_retrieval_claim3.md` and
+`results/claim3/claim3_T3.5_locus_retrieval.csv`.
 
 | Individual | Locus | Sites | Position query (tolerance 2) | Archive + FM-index | Negative-control hits, position query / FM-index |
 |---|---|---|---|---|---|
@@ -228,7 +260,8 @@ Measured on a build of the repo source with `scripts/claim3_scripts/run_locus_re
 | HG005 | chr20:3.0-3.6Mb | 317 | 317/317 | 317/317 | 66 / 87 of 400 |
 | *HG005, additional check (not in the aggregate, earlier k-mer index)* | chr20:4.0-4.6Mb | 400 | 400/400 | 400/400 | 63 of 400 |
 
-**Aggregate over the four chr20:3.0-3.6Mb rows: 1,452/1,452 (100%) with the FM-index; 1,451/1,452 (99.93%) by position alone.**
+Over the four chr20:3.0-3.6 Mb rows, 1,452 of 1,452 sites (100%) are recovered with the FM-index
+and 1,451 of 1,452 (99.93%) by position alone. The extra HG005 window is not part of this total.
 
 ---
 
@@ -236,83 +269,79 @@ Measured on a build of the repo source with `scripts/claim3_scripts/run_locus_re
 
 | Number | Value | Status | Source |
 |---|---|---|---|
-| PgRC2 sequence-only margin | +1.88%, 6 wins/1 loss | CITED | the development notes, the Claim 1 final-verdict note §42, the final-headroom note |
-| PgRC2 speed/RAM vs G_CAPSUL | ~1.7x slower, ~2.5x heavier | CITED | same |
-| Ablation: allele-split collapse effect | F1 0.431 → 0.888 | CITED, not re-run | manuscript Results, ~line 306 |
-| `contig_spans` archive cost | 0 bytes (18,282,397 B identical with/without) | RE-DERIVED | the T3.1 correctness note |
-| FM-index size vs archive | 1.9-3.5x (0.9-2.6 MB per individual); the k-mer index it replaces was 7-13x | RE-DERIVED 2026-11-21 | `docs/claim3/t34_exact_match_claim3.md` |
+| PgRC2 sequence-only margin | +1.88%, 6 wins and 1 loss | Cited | `docs/claim1/mechanism_insight_claim1.md` |
+| PgRC2 speed and memory against G_CAPSUL | about 1.7 times slower and 2.5 times heavier | Cited | same |
+| Ablation, collapse and re-placement | F1 0.431 to 0.888 (HG002, chr20) | Cited | manuscript Results, `docs/claim2/` |
+| `contig_spans` archive cost | 0 bytes (18,282,397 bytes with and without) | Re-derived | `docs/claim3/t31_export_claim3.md` |
+| FM-index size against archive | 1.9 to 3.5 times (0.9 to 2.6 MB per individual), against 7 to 13 times for the k-mer index it replaces | Re-derived | `docs/claim3/t34_exact_match_claim3.md` |
 
-## Cross-machine / cross-core reproducibility — verified, not assumed
+## Reproducibility across cores
 
-Every number in the paper was produced on one 12-core, 82 GB machine.
-**Confirmed** (the reproducibility note, tested 2026-09-10): re-running the
-identical encode on E. coli (SRR2584863) at 2, 3, 7, and 12 cores produces
-a **byte-identical archive** at every core count (68,429,027 B, unchanged);
-only wall time varies (36.17 s → 12.38 s, 2.9× range). The encoder derives
-how many adaptive candidates run concurrently from measured free RAM, so
-machine state enters the *schedule* but never the *selection* — every
-candidate is always evaluated regardless of concurrency, confirmed
-identical archives whether candidates run sequentially (`K=1`) or in
-parallel (`K=4`). Decoded reads are MD5-identical at 2, 7, and 12 cores and
-lossless against the original FASTQ. **Answer: yes for output, no for wall
-time — which is the correct, expected behavior**, not a caveat to qualify
-away.
-
-## Verification audit: method, findings and limits
-
-The tables were checked in two tiers. Ten tables were verified in total. Four of them were
-re-executed against an independent measurement (T2.4, T2.5, the HG002 row of T3.4, and the
-HG002 rows of T2.1 and T2.3). The rest were checked by parsing the run log and comparing it
-with the CSV (transcription-checked). Transcription checking is the weaker tier: the log line
-and the CSV row are written from the same shell variables in the same run, so a wrong
-underlying measurement would appear in both places and the comparison would pass. The one
-defect the audit found (T2.4) lay in the re-executed tier and could not have been found by
-transcription checking.
-
-**Defects found**
-
-1. **T2.4 reported 21/26, which had no supporting raw log.** The denominator was re-derived
-   independently from the GIAB HG002 truth set (952 multi-allelic truth sites, 26 of them
-   SNV-only), which matched the published denominator. The caller was then re-run three times
-   to test three explanations. A re-run on identical reads tested nondeterminism and gave 17/26
-   again. A build at the preceding commit (via `git worktree`) tested an intervening encoder
-   change and gave 17/26 again. Tracing the original working directory showed that its
-   `regions.bed` spans a 5 Mb window rather than the full chromosome and its truth file has 111
-   sites (7 SNV-only). The 21/26 figure was a stale window result carried forward as the
-   full-chromosome number. It was corrected to 17/26 in every file that cited it.
-2. **T3.4 needs `CAPS_PILEUP=1` when building the query sidecar.** Without it the sidecar holds
-   placements but not each read's deviations, so `query` returns the consensus instead of the
-   reads and the coordinate arm scores 0 by construction. The requirement was missing from the
-   documentation and is now documented in
-   `docs/claim3/t34_t35_multi_individual_claim3.md`.
-3. **`.gitignore` excluded evidence files.** The pattern `*.log` excluded reproduction logs that
-   were cited as being in the repository, and `*.vcf` excluded the truth file of the T2.4
-   correction. Both were fixed with targeted exceptions.
-4. **The file-integrity manifest was generated incorrectly.** A fresh clone failed with eight
-   `No such file` errors because the manifest had been built with a plain `find` that included
-   untracked files. It was regenerated from `git ls-files`.
-
-**What the audit does not establish**
-- No second physical machine was available. A fresh clone with a restricted core count was the
-  closest substitute and it passed, but that is not equivalent to an independent machine.
-- The T3.4 rows for HG003, HG004 and HG005 were not re-run. They are confirmed by inheritance
-  from the HG002 run, not by execution.
-- The verification was carried out by a single party. The highest-value next steps are to
-  re-execute the transcription-checked tier and to obtain a second reviewer.
-
-One bad number was found in ten tables. That does not show there was only one, and the audit is
-not exhaustive.
-
-**Canonical version for citation:** `v1.2.0`. The verification in this file was carried out at `v1.0.2-capsule`. Five tags were cut on one day. Four of
-the five are identical in code and results to their predecessor and differ only in
-documentation. The last commit that changed any code or result was `58cc6a9` (the T2.4
-correction). Everything after it is documentation only.
+Every number was produced on one 12-core machine with 82 GB of memory. Re-running the same encode
+on E. coli (SRR2584863) with 2, 3, 7 and 12 cores produced the same archive each time (68,429,027
+bytes), and only the wall time changed (36.17 s down to 12.38 s). The encoder chooses how many
+adaptive candidates run at once from the free memory, so machine state affects the schedule and
+never the selection: every candidate is always evaluated, and running them one at a time or four
+at a time gives identical archives. Decoded reads were MD5-identical at 2, 7 and 12 cores and
+matched the original FASTQ.
 
 ---
 
-# How to use this file
+# Verification notes
 
-Find the table and the row, and cite it. Each number above was traced to a specific CSV cell or
-a specific dated document. A status of CITED, as opposed to RE-DERIVED or CROSS-CHECKED, means
-the number was read from earlier verified work and not re-run. Say so if asked whether a number
-was freshly verified.
+The tables were verified in two tiers. Ten tables were checked in total. Four were re-executed
+against an independent measurement (multi-allelic, tetraploid, the HG002 row of exact-match
+recall, and the HG002 rows of SNV and indel calling). The rest were checked by parsing the run log
+and comparing it with the CSV. The second tier is weaker, because the log line and the CSV row are
+written from the same variables in the same run.
+
+**Defects found and corrected**
+
+1. **Multi-allelic recovery was first reported as 21 of 26.** The denominator was re-derived from
+   the GIAB HG002 truth set (952 multi-allelic truth sites, 26 of them SNV-only), which matched.
+   Three re-runs, on identical reads, at the preceding commit and with the original working
+   directory traced, all gave 17 of 26. The 21 came from a stale 5 Mb window result carried
+   forward as the full-chromosome number. It was corrected to 17 of 26 everywhere.
+2. **Exact-match and locus retrieval need `CAPS_PILEUP=1` when the query sidecar is built.**
+   Without it `query` returns the consensus instead of the reads and the coordinate-only arm scores
+   zero by construction. The requirement is documented in
+   `docs/claim3/t34_t35_multi_individual_claim3.md`.
+3. **Two ignore patterns hid evidence files.** `*.log` hid reproduction logs and `*.vcf` hid the
+   truth file used for the multi-allelic correction. Both were fixed with targeted exceptions.
+4. **The file-integrity manifest included untracked files.** A fresh clone failed with eight
+   missing-file errors. The manifest was regenerated from `git ls-files`.
+
+**Limits of the verification**
+
+- No second physical machine was available. A fresh clone with a restricted core count was used
+  instead, and it passed.
+- The exact-match rows for HG003, HG004 and HG005 were not re-executed independently of the
+  HG002 run.
+- The verification was carried out by one person. A second reviewer and a re-execution of the
+  log-checked tier remain the most useful next steps.
+
+One incorrect number was found in ten tables. That does not show that there was only one, and the
+check was not exhaustive.
+
+**Canonical version for citation:** `v1.2.0`. The verification above was carried out at
+`v1.0.2-capsule`. Later tags changed documentation, and the exact-match and locus-retrieval
+results were re-derived on the current source.
+
+---
+
+# Superseded figures
+
+Older documents in `docs/extras/` may quote the values on the left. Use the replacement.
+
+| Superseded value | Measure | Replacement | Reason |
+|---|---|---|---|
+| 80.8% genome fraction, 90% unaligned | Export correctness | 98.698% genome fraction | Measured on an export that concatenated all contigs into two records |
+| 345 of 400 | Locus retrieval | 1,452 of 1,452 | Measured with an earlier query that had a strand error and covered one individual |
+| 0 of 400 | Coordinate-only retrieval | a small fraction of sites | The query emitted the consensus instead of the reads |
+| 21 of 26 | Multi-allelic recovery | 17 of 26 | No supporting raw log, see the verification notes |
+| 5 of 111 and 11 of 18 | Multi-allelic recovery | 17 of 26 | One used a check that cannot score indel sites, and one was not reproducible |
+| 0.637 and 0.666 | Heterozygous indel F1 | 0.621 | Measured on 8 chromosome 20 windows |
+| 0.890 | Heterozygous SNV F1 | 0.876 | Measured before the 19-dataset sweep |
+| 0.836 | Tetraploid SNV F1 | 0.897 | Measured before the final sweep |
+| 555 to 656 times | Export speed-up | 129 to 784 times | Measured before the final sweep |
+| 1.0000 recall without an index | Exact-match recall | 0.60 to 0.85 archive only, 1.0000 with the FM-index | The earlier figure held only for HG002 |

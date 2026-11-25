@@ -1,108 +1,91 @@
-# Technical architecture — container format and assembly
+# Technical architecture
 
-> How the pseudogenome and the archive are built, layer by layer, independent of any single claim's results.
+This document describes how the encoder builds the pseudogenome and how the archive is laid out.
+It is independent of any single claim. The implementation is in `src/encoder.cpp` and
+`src/decoder.cpp`, and every switch mentioned here is listed in
+[`configuration_reference.md`](configuration_reference.md).
+
+## Pipeline overview
+
+| Stage | Purpose | Result |
+|---|---|---|
+| 1. Input check | Refuse unsupported input before any work is done. | A clean error, or a validated read set. |
+| 2. Duplicate collapse | Merge exact duplicate reads when they are frequent. | A unique read set and a map back to the original order. |
+| 3. Overlap chaining | Join reads whose suffix and prefix overlap exactly. | The main region of the pseudogenome. |
+| 4. Pigeonhole mapping | Place the remaining reads on the existing pseudogenome. | Placements with a small number of mismatches. |
+| 5. Second region | Chain the reads that could not be mapped. | A second pseudogenome region. |
+| 6. MEM self-match | Replace repeated stretches by references. | A shorter literal stream. |
+| 7. Stream coding | Entropy-code each stream with the coder that suits it. | The archive. |
 
 ## Container format
 
-File: `src/encoder.cpp`, struct `Archive`. On-disk layout: an 8-byte
-magic, a version field, pseudogenome length + main-region boundary, and then
-a sequence of self-identifying streams (name, length, payload). The decoder
-(`src/decoder.cpp`) reads every stream into a name-keyed map and
-looks each one up by name rather than by position — adding a stream is
-additive and cannot shift any other stream's offset, a property an earlier
-positional format lacked (it broke silently once; see
-the failures and refuted-ideas record). Header cost is ~300 B against archives
-of 2.6–150 MB (0.001–0.01% of archive size).
+An archive is a fixed header followed by self-identifying streams. The header holds an 8-byte magic,
+a version, the pseudogenome length and the boundary between the two regions. Each stream stores its
+name, its length and its payload. The decoder reads every stream into a map keyed by name instead of
+relying on position, so adding a stream cannot shift any other stream's offset. The header costs
+about 300 bytes, which is 0.001 to 0.01% of the archives measured (2.6 to 150 MB). The exact layout
+is shown in the README, and each stream is described in the table above `main()` in
+`src/encoder.cpp`.
 
-## Assembly: building the pseudogenome, in order
+## Building the pseudogenome
 
-**Round 1 — greedy exact suffix-prefix chaining.** Every read is packed 2
-bits/base. A seed index maps every fixed-width k-mer to the reads containing
-it at that offset. For each read, the algorithm looks for another read whose
-prefix exactly matches this read's suffix for at least `MINOV` bases, and
-chains them into one contiguous pseudogenome span instead of two separate
-literal copies. This is single-pass and **exact** — no approximate matching
-in the shipped path. **The most important fix in the project's
-history** (commit `6596554`): the sweep used to start one base below the read
-length, which makes an exact duplicate read structurally invisible to
-chaining (two identical 251-base reads only overlap at L=251, not L=250).
-Starting the sweep at the true max length let duplicates chain for free; on
-S. acidocaldarius (9.4% duplication) this cut the pseudogenome from 9,134,100
-to 6,157,270 bytes and flipped the project's one remaining compression loss
-against PgRC2 into a win.
+**Exact overlap chaining.** Reads are packed at two bits per base. A seed index maps fixed-width
+k-mers to the reads that contain them. For each read, the encoder looks for another read whose
+prefix equals this read's suffix over at least `MINOV` bases, and chains the two into one
+contiguous span instead of storing both. Matching is exact. The overlap sweep starts at the full
+read length, so that exact duplicate reads, which overlap only at that length, chain without extra
+handling. On S. acidocaldarius, where 9.4% of reads are duplicates, this reduced the pseudogenome
+from 9,134,100 to 6,157,270 bytes.
 
-**Round 2 — division and second-pass chaining.** Reads that chained in round
-1 are set aside; a second, looser sweep tries to attach the remaining reads
-to the ends of already-formed chains.
+**Second chaining pass.** Reads that did not chain in the first pass are set aside, and a second,
+less strict sweep tries to attach them to the ends of existing chains.
 
-**Pigeonhole mapping.** Reads that still have not chained are mapped onto the
-pseudogenome built so far via a cheap read-relative placement: find an exact
-k-mer seed hit inside the existing pseudogenome, verify against a bounded
-mismatch tolerance (default 3), and record `(dst, src, len, rc)` — a
-reference — instead of storing the read's bases again.
+**Pigeonhole mapping.** Reads that are still unplaced are mapped onto the pseudogenome built so
+far. The encoder finds an exact seed hit, checks the read against a bounded mismatch tolerance
+(3 by default), and records a reference `(destination, source, length, strand)` instead of storing
+the read's bases again.
 
-**The MAXMAP coverage ramp.** `MAXMAP` (the per-read candidate-mapping
-ceiling) widens automatically as a function of `leftover_frac` — the fraction
-of reads that failed round-1 chaining, known only after round 1 completes.
-This is a measured-input-property lever, not a fitted constant: it is keyed
-fresh on every run, with a floor set safely above every locked dataset's
-measured leftover fraction, so normal-coverage behavior is provably
-unchanged (byte-identical, verified). It engages only on inputs that
-measurably need it — e.g. low-coverage data.
+**Mapping ceiling.** The per-read candidate ceiling (`MAXMAP`) widens automatically with the
+fraction of reads left over after the first chaining pass. That fraction is measured on every run,
+so the ramp is derived from the input and is not a fitted constant. Its floor lies above the
+leftover fraction of every benchmark dataset, so output on normal-coverage data is unchanged
+(checked byte for byte). The ramp engages only on inputs, such as low-coverage data, that
+measurably need it.
 
-**The second region.** Reads that fail even pigeonhole mapping are not
-stored raw. They are run through their own independent instance of the
-round-1/round-2 chaining process, producing a **second pseudogenome region**,
-appended after the main region's boundary. This turns unmatched leftovers
-into more compressible sequence instead of literal padding.
+**Second region.** Reads that cannot be mapped are not stored raw. They are chained by their own
+instance of the two-pass procedure, which produces a second pseudogenome region after the boundary
+of the main one. This turns unmatched leftovers into sequence that compresses well.
 
-**MEM self-match — the real workhorse of the size result.** Once both
-regions exist, a maximal-exact-match pass (`copMEM`-style: hash k-mers,
-verify to a full MEM) matches the whole pseudogenome against itself, looking
-for repeated stretches at *any* position, not just chain-adjacent ones. Every
-accepted MEM becomes a `(dst, src, len, rc)` reference exactly like a
-pigeonhole placement, and the pg bytes it covers are removed from the literal
-stream. Acceptance is cost-aware: a candidate MEM is accepted only if its
-actual encoded cost is smaller than the literal cost ceiling (2.0 bits/base)
-it would replace — a real algorithmic improvement over a blunt fixed-length
-threshold, gated on where it was measured to help.
+**MEM self-match.** With both regions built, a maximal-exact-match pass hashes k-mers and verifies
+full matches to find repeated stretches anywhere in the pseudogenome. Each accepted match becomes a
+`(destination, source, length, strand)` reference like a mapping placement, and the bases it
+covers leave the literal stream. A match is accepted only if its encoded cost is below the literal
+cost it replaces (2.0 bits per base). This stage accounts for much of the size reduction.
 
-**Extension mismatch tolerance exists in the code but ships OFF.** A MEM
-match can in principle extend past its first mismatch, trading a few extra
-mismatch-stream bytes for a longer, cheaper-per-base reference. Measured and
-rejected: it cost 490,763 B more than it saved on the dataset it was tested
-on. It is kept behind an override flag only to reproduce that measurement.
+**Extension past a mismatch.** A match can in principle extend beyond its first mismatch. This
+option is implemented but off. On the dataset where it was tested it cost 490,763 bytes more than
+it saved, and it remains behind an override flag only to reproduce that measurement.
 
-**Why the shipped encoder searches a 4-point candidate grid, not a wider
-one — measured, not assumed.** `scripts/build_scripts/encode_adaptive.sh` tries several
-`(MAXMAP, MINOV)` candidates per encode and keeps whichever produces the
-smallest archive. Verified against the raw measurement data
-(the grid-cost measurements, the second grid-cost measurements, 14 real
-locked datasets, sizes 8.7 MB to 574 MB): widening the search from 4 points
-to 8 costs **+0.000% archive size on 10 of 14 datasets**, with the 4 real
-deviations tiny (SRR2584863 +0.012%, SRR40271341 +0.032%, SRR29296997
-+0.028–0.472% depending on which grid variant, SRR39257532 the one real
-outlier at +0.357%) — mean **+0.031%** across all 14. A single fixed
-candidate point, by contrast, costs a mean of **+0.41%**, swinging as high
-as +0.782% on individual datasets — an order of magnitude worse and highly
-dataset-dependent, exactly as predicted by this project's own finding that
-no fixed ratio of read length can express the optimal mapping ceiling
-(§"MAXMAP coverage ramp" above). The 4-point grid is therefore the measured
-sweet spot: it captures nearly all of the 8-point grid's benefit (mean
-+0.031% vs +0.000%, i.e. leaves 0.031% on the table) while searching half
-the space, and searching only one point would cost more than 13× as much
-archive size for the time saved.
+## Parameter search
 
-## Why this section is the mechanism, not just the implementation
+`scripts/build_scripts/encode_adaptive.sh` encodes with several `(MAXMAP, MINOV)` candidates and
+keeps the smallest archive. Four candidates were chosen from measurements on 14 datasets of 8.7 to
+574 MB:
 
-`central_insight_and_mechanism.md` states the paper's central finding as a
-consequence of "a size-minimizing, reference-free compressor" without
-re-deriving the specific code path. This file is that code path: round-1
-exact chaining is what forces two divergent alleles of a het site onto
-separate contigs the moment their difference exceeds one seed's worth of
-exactness, and MEM self-match is what then independently re-discovers and
-collapses any allele that *does* still share enough sequence to be
-worth referencing — the two mechanisms operating together are why the
-paper's ablation (F1 0.431 → 0.888) and Claim 3's bilateral anchoring both
-exist as corrections to the *same* underlying assembly decision, not two
-unrelated fixes.
+| Search | Mean archive size relative to the 8-point grid | Worst dataset |
+|---|---|---|
+| 4-point grid (shipped) | +0.031% | +0.47% |
+| 1 fixed point | +0.41% | +0.782% |
+
+Widening from four to eight candidates changed the archive size by 0.000% on 10 of the 14
+datasets. A single fixed candidate was about thirteen times worse on average and varied widely
+between datasets, which is consistent with there being no fixed read-length ratio that gives the
+best mapping ceiling.
+
+## Why this matters for the other capabilities
+
+Exact chaining is what places two divergent alleles of a heterozygous site on separate contigs once
+their difference exceeds one seed's worth of exactness. The MEM self-match then collapses alleles
+that still share enough sequence to be worth referencing. These two stages are the origin of the
+effect that variant calling and locus retrieval reconcile, as described in
+[`central_insight_and_mechanism.md`](central_insight_and_mechanism.md).

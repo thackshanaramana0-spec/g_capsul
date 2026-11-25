@@ -1,156 +1,100 @@
-# G_CAPSUL — project scope: what it does, what it can do, and its input contract
+# Capabilities and input contract
 
-This file is the code-level scope reference: what the tool actually does,
-what it can be used for, and exactly what input it will and will not accept.
-It is not about benchmark results or paper claims — for that, see
-[`limitations_and_scope.md`](limitations_and_scope.md). Every
-number here is taken directly from the current source
-(`src/encoder.cpp`, `src/decoder.cpp`, `include/`), not from memory or the
-paper — where the two could ever disagree, the source wins.
+This document describes what the program does and exactly which input it accepts, refuses or
+leaves unsupported. Every limit below was taken from the source (`src/encoder.cpp`,
+`src/decoder.cpp`, `include/`). If this document and the source ever disagree, the source is
+correct. Results and their limits are in [`limitations_and_scope.md`](limitations_and_scope.md).
 
----
+## 1. What the program does
 
-## 1. What it does, in one sentence
+G_CAPSUL compresses short-read FASTQ into a lossless archive. While compressing, it assembles the
+reads into a pseudogenome and keeps that structure in the archive. The archive can then be queried
+for variants, coverage and sequence without a reference genome and without decompressing it
+completely first.
 
-G_CAPSUL compresses short-read FASTQ into a compact, lossless archive by
-assembling the reads into a de novo "pseudogenome" as it compresses, then
-keeps that assembly around after compression so the archive itself can be
-queried — for variants, coverage, and sequence — without a reference genome
-and without fully decompressing first.
+## 2. Capabilities
 
-## 2. The three capabilities
-
-- **COMPACT** — lossless FASTQ compression. Byte-exact round-trip of
-  sequence, and optionally read order, names, quality, and the FASTQ line-3
-  field, all reconstructible from the archive alone.
-- **FAITHFUL** — reference-free variant calling directly from the archive
-  (heterozygous SNVs, indels, multi-allelic sites), with no FASTQ
-  decompression and no external reference genome.
-- **ADDRESSABLE** — direct queries against the archive: export the
-  assembled sequence, compute per-base depth/coverage, or retrieve every
-  read covering an arbitrary coordinate range — all without a separate
-  decompress-then-search step.
-
-## 3. What it can do
-
-- Losslessly compress single-end short-read FASTQ, reconstructing the
-  original sequence byte-for-byte.
-- Optionally preserve exact read order, read names/IDs (`CAPS_NAMES=1`),
-  quality scores (`CAPS_QUAL=1`, vendored fqzcomp/htscodecs), and the FASTQ
-  line-3 field, each independently toggleable and gated to zero cost when
-  unset.
-- Call heterozygous SNVs, indels, and multi-allelic variants with no
-  reference genome (`CAPS_CALL=1`), for ploidy 2 through 4
-  (`CAPS_PLOIDY`, default 2/diploid).
-- Export the assembled pseudogenome as FASTA directly from the archive.
-- Compute per-base sequencing depth/coverage directly from the archive.
-- Retrieve every read covering a given coordinate range of the
-  pseudogenome via bilateral (upstream + downstream) probing, and return
-  every read that contains a query sequence, using an optional post-archive
-  FM-index (`CAPS_FMI=1` at `index` time, `CAPS_QUERY_CONTAIN=1` at query
-  time) that trades archive-adjacent disk space and a higher homozygous
-  false-positive rate in locus retrieval for complete recall.
-- Adaptively select its own compression parameters by sweeping candidate
-  settings and keeping the smallest resulting archive
-  (`scripts/build_scripts/encode_adaptive.sh`), rather than requiring the caller to tune
-  them.
-- Assess a FASTQ file's fitness for this pipeline before committing to a
-  full encode, via a standalone pre-flight report
-  (`scripts/benchmark_scripts/check_input_scope.py`) that derives its numbers from the live
-  encoder source rather than a hardcoded copy.
-- Refuse cleanly and loudly on out-of-scope or malformed input (see §5),
-  with a specific, actionable message rather than a crash or a silently
-  wrong/empty archive.
-- Build and run on Linux (native) and macOS (via CMake, real Homebrew GCC
-  rather than AppleClang) — verified in CI on both. Native Windows is not
-  currently supported (see §5).
-- Run via Docker with no local build at all: `docker pull
-  ghcr.io/thackshanaramana0-spec/g_capsul:1.1.0`. Publicly pullable, no
-  login required (verified with a clean `docker logout` before publishing).
-  Rebuilt and round-trip-verified — a real compress/decompress/`cmp` check,
-  not just "it builds" — on every push and again against the published
-  image itself on every release (`.github/workflows/ci.yml`'s `docker` job
-  and `.github/workflows/publish-image.yml`).
-- Install a specific, citable version via a tagged GitHub Release
-  (<https://github.com/thackshanaramana0-spec/g_capsul/releases>), each one
-  tied to a `CAPS_VERSION`/`CITATION.cff` pair that are kept in sync (they
-  drifted independently once before this was fixed — see the release notes
-  for v1.1.0).
-
-## 4. Input this tool requires and accepts
-
-| Property | Accepted range | Enforced? |
+| Capability | What it provides | How to use it |
 |---|---|---|
-| File format | Plain-text FASTQ, standard 4 lines/record (`@header`, sequence, `+`/description, quality) | Malformed records refused |
-| Compression | Uncompressed only — no `.gz`/`.bz2`/etc. | Not applicable, see §5 |
-| Read length | 1–1023 bases per read (`MAX_READ_LEN`, `src/encoder.cpp`) | Hard refusal above this |
-| Read count | Up to 536,870,911 reads per input (2²⁹−1, the MEM stage's 29-bit packed read-id ceiling) | Hard refusal above this |
-| Sequence alphabet | Uppercase `A`/`C`/`G`/`T`; `N` is substituted internally and tracked separately | See §5 for what is *not* validated |
-| Header length | Up to 1023 characters if `CAPS_NAMES=1` (`nmc::MAXTOK`); unbounded if unset | Hard refusal above this, `CAPS_NAMES=1` only |
-| Seq/quality parity | Quality line length must equal sequence line length, per record | Hard refusal on any mismatch |
-| Read shape | Single-end; fixed or variable length within one file | No built-in paired-end/mate awareness (see §5) |
-| Validated read-length range | 40–301 bp (this project's locked benchmark datasets) | Reads up to 1023 bp are processed but unvalidated for compression ratio/calling accuracy past 301 bp |
+| Lossless compression | Byte-identical reconstruction of the sequence, and optionally read order, read names, quality scores and the line-3 field, from the archive alone | `encode_adaptive.sh`, `capsule_decode <archive> <outdir> [reads]` |
+| Read names | Names stored and restored | `CAPS_NAMES=1` |
+| Quality scores | Stored with the vendored fqzcomp coder | `CAPS_QUAL=1` |
+| Variant calling | Heterozygous SNVs, indels and multi-allelic sites, ploidy 2 to 4, with no reference genome | `CAPS_CALL=1` at compression and `capsule_decode call`, with `CAPS_PLOIDY` |
+| Export | The pseudogenome as FASTA | `capsule_decode export` |
+| Coverage | Per-base depth from the retained placements | `capsule_decode coverage` |
+| Locus retrieval | Every read covering a coordinate range, probed upstream and downstream | `capsule_decode query` |
+| Content retrieval | Every read containing a query sequence, through an optional FM-index | `CAPS_FMI=1` at `index` time and `CAPS_QUERY_CONTAIN=1` at query time |
+| Parameter selection | Candidate settings are tried and the smallest archive is kept | `scripts/build_scripts/encode_adaptive.sh` |
+| Input pre-check | A report on whether a file is supported, with numbers taken from the encoder source | `scripts/benchmark_scripts/check_input_scope.py` |
 
-## 5. What this tool explicitly cannot, or should not, be given
+The names, quality and line-3 options are independent switches that cost nothing when unset. The
+default archive holds the sequence and read order only. See the Configuration table in the README.
 
-**Hard-refused (the encoder will exit with a `FATAL:` message, not process the file):**
-- Long-read data (Oxford Nanopore, PacBio, or anything else over 1023 bases
-  per read) — this is a fixed per-read stack buffer size, not a policy
-  threshold.
-- A file with more than 536,870,911 usable records.
-- A read header longer than 1023 characters, if `CAPS_NAMES=1` is set.
-- Any record whose quality-line length doesn't match its sequence-line
-  length.
-- An empty file, or a file with zero usable (well-formed) FASTQ records.
-- CRLF line endings, any sequence byte other than upper-case `A`, `C`, `G`, `T`, `N`
-  (lower case and IUPAC codes included), an `N` after base 256 of a read or more than
-  255 `N` in one read, truncated or malformed records, and (with `CAPS_NAMES=1`) mixed
-  line-3 content.
-- Running the encoder with no arguments, or pointing it at a file that
-  doesn't exist or can't be opened.
+## 3. Platforms
 
-**Not supported, and not specially detected (most are still refused by the general record and alphabet checks):**
-- Gzip-compressed FASTQ (`.fastq.gz`) — must be decompressed to plain text
-  first; the encoder does not detect or reject this specially, it will
-  simply fail to parse valid FASTQ records from it and most likely hit the
-  "zero usable records" refusal.
-- FASTA (no quality line), SAM/BAM/CRAM, or any other non-FASTQ format —
-  same as above, not specially detected.
-- Protein sequence or RNA (with `U`) are refused by the same alphabet check, since `U` and
-  every other byte outside `A`, `C`, `G`, `T`, `N` is rejected.
-- Paired-end/mate-pair reads — there is no R1/R2 linking or interleaving
-  awareness anywhere in the format; each input file is treated as one
-  independent stream of reads. Paired data can be given to the tool (e.g.
-  concatenated, or as two separate encodes), but the format itself does
-  not know or care that two reads are mates.
-- Numeric CLI tuning parameters (`MAXMM`, `MINOV`, and similar positional
-  arguments) are parsed with `atoi` and are not range-checked — an invalid
-  value (negative, non-numeric) will not be refused, and the resulting
-  behavior is not validated for out-of-range inputs.
-- An unrecognized mode string passed to the decoder (anything other than
-  `export`, `coverage`, `query`, or `call`) does not produce an "unknown
-  command" message — it falls through to the plain-decode path, which then
-  fails with a generic "bad archive" error because the mode string is
-  treated as a file path. The failure is still a clean refusal (confirmed:
-  a nonzero exit, no crash, no wrong output), just not a message that names
-  the actual mistake.
-- Native Windows — the encoder and decoder use POSIX-only APIs
-  (`fork()`/`waitpid()`, `sys/wait.h`) for their adaptive parameter-sweep
-  and huge-page-hint code paths; these do not exist on native Windows.
-  Linux and macOS (including Apple Silicon) are supported and CI-verified;
-  Windows would require either WSL or a source-level port of that specific
-  process-management code, neither of which is currently done.
-- Human whole-genome-scale datasets (full ~3.1 Gb) are outside this
-  project's validated scope by an explicit prior decision — chr20-region
-  and 19-dataset-sweep scale inputs are what has actually been measured.
-  This is a validation-scope statement, not a hard code-level block beyond
-  the read-count ceiling above.
+| Platform | Status |
+|---|---|
+| Linux | Supported. Built and tested in CI. |
+| macOS | Supported through CMake with Homebrew GCC, because Apple Clang has no OpenMP. Built and tested in CI. |
+| Docker | `ghcr.io/thackshanaramana0-spec/g_capsul:1.2.0`, publicly pullable. CI rebuilds the image and runs a compress, decompress and `cmp` round trip on every push, and again against the published image on every release. |
+| Windows | Not supported natively, because the encoder and decoder use POSIX process calls (`fork`, `waitpid`). Use WSL or Docker. |
 
----
+Specific versions are installable from the tagged
+[releases](https://github.com/thackshanaramana0-spec/g_capsul/releases). Each release keeps
+`CAPS_VERSION` in the source and `CITATION.cff` in step.
 
-*Every hard limit and every disclosed gap in this file was verified against
-the current source during the edge-case audit and
-the SPRING/PgRC2 comparison, and re-confirmed with an adversarial test pass
-against the built binaries (zero-arg, missing/empty/garbage/truncated input,
-corrupted archives, malformed queries) — not asserted from documentation
-alone.*
+## 4. Input contract
+
+| Property | Accepted | Behaviour outside it |
+|---|---|---|
+| File format | Plain-text FASTQ with four lines per record | Malformed or truncated records are refused |
+| Compression | Uncompressed only, no `.gz` or `.bz2` | Not detected specially, and usually ends in the "no usable records" refusal |
+| Read length | 1 to 1023 bases (`MAX_READ_LEN`) | Refused above 1023 |
+| Read count | Up to 536,870,911 reads (2²⁹ − 1, the limit of the 29-bit read id in the MEM stage) | Refused above this |
+| Sequence alphabet | Upper-case `A`, `C`, `G`, `T`, `N` | Any other byte is refused. `N` is substituted internally and its positions are stored separately. |
+| N bases | No `N` after base 256 of a read, and at most 255 `N` per read | Refused |
+| Header length | Up to 1023 characters when `CAPS_NAMES=1` | Refused above this. Unbounded when names are not stored. |
+| Line endings | LF | CRLF is refused |
+| Quality line | Same length as the sequence | Any mismatch is refused |
+| Line 3 | A bare `+` in every record, or `+` followed by the header in every record | Mixed content is refused when names are stored |
+| Read layout | Single-end, fixed or variable length within one file | Mate relationships are not kept |
+| Validated read lengths | 40 to 301 bp | Reads up to 1023 bp are processed, but compression ratio and calling accuracy are not validated beyond 301 bp |
+
+## 5. Input that is refused
+
+The encoder prints a `FATAL:` message naming the first offending record and exits without writing
+an archive. Refused cases:
+
+- reads longer than 1023 bases, which includes Oxford Nanopore and PacBio data (this is a fixed
+  per-read buffer size and not a policy threshold)
+- more than 536,870,911 usable records
+- a read header of 1023 or more characters when `CAPS_NAMES=1`
+- a record whose quality line differs in length from its sequence line
+- an empty file, or a file with no usable record
+- CRLF line endings
+- any sequence byte other than upper-case `A`, `C`, `G`, `T`, `N` (including lower case and IUPAC
+  codes), an `N` after base 256, or more than 255 `N` in one read
+- truncated or malformed records
+- mixed line-3 content when `CAPS_NAMES=1`
+- no arguments, or an input file that does not exist or cannot be opened
+
+## 6. Input that is not supported and not specially detected
+
+Most of these are still stopped by the general record and alphabet checks.
+
+- **Gzip-compressed FASTQ.** The file must be decompressed first.
+- **FASTA, SAM, BAM, CRAM and other formats.** They are not FASTQ and are not detected as a special
+  case.
+- **Protein sequence and RNA with `U`.** Refused by the alphabet check.
+- **Paired-end data.** There is no R1 and R2 linking or interleaving. Each input file is treated
+  as an independent stream of reads, so paired data can be encoded as two files, but the format
+  does not record which reads are mates.
+- **Numeric command-line parameters.** `MAXMM`, `MINOV` and similar positional arguments are
+  parsed with `atoi` and are not range-checked. An invalid value is not refused, and the behaviour
+  is not validated.
+- **An unrecognized decoder mode.** Anything other than `export`, `coverage`, `query`, `index` or
+  `call` is treated as a file path and fails with a generic "bad archive" error. The exit status is
+  nonzero and no output is written, but the message does not name the mistake.
+- **Whole human genomes.** Full 3.1 Gb datasets were outside the evaluation, which covers
+  chromosome 20 regions and the 19-dataset collection. Beyond the read-count ceiling above, this is
+  a statement about validation and not a code-level block.

@@ -1,239 +1,149 @@
-# Novelty and prior art — consolidated
+# Related work and positioning
 
-> Comparison with prior work, collected from the three claim folders. Confirmed facts and inferred arguments are kept separate.
+This document places G_CAPSUL next to existing tools, one capability at a time. For each area it
+states what the other tools do, how G_CAPSUL differs, and how that statement was established.
+Reference details are in the manuscript bibliography.
 
-## Rule followed throughout this file, and throughout the three claim folders it draws from
+**Evidence labels used in the tables**
 
-Every claim below is labeled **confirmed** (verified by reading source code
-or a primary document, in the final verification or in earlier cited work) or
-**inferred** (a reasonable argument from documented behavior, not verified
-against the comparator's own source). This distinction was enforced
-strictly in each claim folder's mechanism file and is preserved here, not
-flattened into one confident voice.
+| Label | Meaning |
+|---|---|
+| Measured | Compared on the same data in this repository, with the result in `results/`. |
+| Source read | Established by reading the other tool's source code or primary paper. |
+| Documented | Taken from the tool's documentation or paper and not checked in its source. |
+| Inferred | An argument from documented design or observed output, not directly verified. |
 
-## Compression comparators — Claim 1
+## 1. Summary
 
-- **SPRING, Genozip**: general-purpose FASTQ compressors, the correct
-  primary comparators — both handle full FASTQ (sequence + names + quality
-  + line-3), matching G_CAPSUL's own scope. **Confirmed**: 19/19 wins vs
-  both, independently re-derived from raw data.
-- **PgRC2**: the closest architectural relative (also pseudogenome-based).
-  **Confirmed not directly comparable** to the whole-FASTQ numbers — PgRC2
-  stores sequence only, no names/quality/line-3. Correctly scoped
-  sequence-only comparison: +1.88%, 6 wins/1 loss, ~1.7x slower/2.5x
-  heavier (7 datasets both tools can process). See
-  `claim1/mechanism_insight_claim1.md`.
+| Capability | Closest existing tools | What G_CAPSUL adds | Main evidence |
+|---|---|---|---|
+| Lossless FASTQ compression | SPRING, Genozip, PgRC2 | A retained placement structure in the archive, at a size smaller than SPRING and Genozip on all 19 datasets | Measured |
+| Variant calling without a reference | DiscoSNP++, Kmer2SNP | Calling from the compressed archive, without the original reads | Measured |
+| Sequence export | SPAdes | Export from the archive, much faster, with different correctness trade-offs | Measured |
+| Per-base coverage | bwa, samtools, mosdepth | Coverage from retained placements, without alignment | Measured |
+| Retrieval by content | BEETL-fastq, CIndex | An optional index over the reads that deviate from the pseudogenome | Measured and Source read |
+| Retrieval by locus | none identified | Recovery of both allelic read sets at a locus | Measured |
 
-## Variant-calling comparators — Claim 2
+The combination of the capabilities in one archive is the contribution. Several individual
+capabilities have established tools, and the tables below say where G_CAPSUL is better, worse or
+only different.
 
-- **DiscoSNP++**: **confirmed** (via literature survey, the het-indel literature survey)
-  to be the only other general-purpose reference-free caller handling
-  heterozygous indels from a single diploid sample with zero reference —
-  the right primary comparator, not a weak strawman.
-- **Kmer2SNP**: reference-free, SNV-capable, included as a second baseline
-  even though it loses badly on recall — included alongside the stronger comparator. **Confirmed** no indel or
-  multi-allelic model, by construction (its own documented design).
-- **DiscoSNP++'s 0/26 on multi-allelic sites (T2.4)**: explained by its
-  bubble-based output format being inherently biallelic. **This is
-  INFERRED from documented design and observed output (0 multi-allelic
-  records across 3,989 total emitted), NOT verified by reading DiscoSNP++'s
-  own source.** State this distinction if citing the explanation, not just
-  the 0/26 result. See `claim2/mechanism_insight_claim2.md`.
-- **eBWT2SNP's precision figure — self-correction, verified applied.**
-  This project once cited eBWT2SNP's "99.13% precision" as motivation for
-  an abandoned design direction (read-support clustering). **Confirmed**
-  (the eBWT literature-correction note, reading the primary source —
-  Prezza, Pisanti, Sciortino, Rosone, *Algorithms Mol Biol* 2019,
-  PMC6364478): that figure is from a **simulated**-data experiment; on the
-  paper's one real-data experiment (chr1, real reads) the ordering flips
-  and **DiscoSNP++ is more precise than eBWT2SNP** (74.57% vs 66.62%). The
-  positional-clustering channel eBWT2SNP inspired was kept (it measurably
-  improved indel recall), but the precision-superiority argument was
-  dropped. **Verified applied**: the current manuscript
-  (`capsul_paper/copy.tex` line 911) already states this —
-  "eBWT2SNP's own published evaluation uses two simulated chromosomes and
-  one real one" — so this is not an outstanding action item, only a fact
-  worth keeping visible for provenance.
+## 2. FASTQ compression
 
-## Assembly comparator — Claim 3, T3.1
+| Tool | Approach | Relation to G_CAPSUL | Evidence |
+|---|---|---|---|
+| SPRING (Chandak et al., 2019) | Reordering and hash-based read matching | Primary comparator for whole-FASTQ size. G_CAPSUL is smaller on 19 of 19 datasets (aggregate −6.03%). | Measured |
+| Genozip (Lan et al., 2021) | Universal genomic data compressor | Second comparator. G_CAPSUL is smaller on 19 of 19 datasets (aggregate −43.26%). | Measured |
+| PgRC and PgRC2 (Kowalski and Grabowski, 2020, 2025) | Pseudogenome-based read compression | Closest architecture. PgRC2 stores sequence only (no names, quality or line 3), so the comparison is restricted to sequence and to 7 datasets it can process: +1.88% aggregate, 6 wins and 1 loss, with G_CAPSUL about 1.7 times slower and up to 2.5 times heavier. | Measured |
+| CRAM 3.1 (Bonfield, 2022) and reference-based compressors (Fritz et al., 2011) | Alignment against a reference genome | Need a reference. G_CAPSUL needs none. | Documented |
+| fqzcomp (Bonfield and Mahoney, 2013) | Context-mixing coding of FASTQ fields | The quality coder is vendored from it (see `THIRD_PARTY_NOTICES.md`), so quality compression is not claimed as new. | Source read |
+| DSRC 2, FaStore, SCALCE, minicom, NanoSpring | Other FASTQ and read compressors | Cited as context. Not benchmarked here. | Documented |
 
-- **SPAdes**: **confirmed** correct comparator for 5 of 6 T3.1 datasets;
-  the 6th (ERR5181310/SARS-CoV-2, amplicon sequencing, >1000x PCR-duplicated
-  coverage) is explicitly outside SPAdes's own documented scope too (read
-  directly from the SPAdes paper) — flagged,
-  not silently included as a fair comparison.
-- **Result, mixed**: speed dominant (129-784x). Correctness: wins
-  genome fraction and indel rate, loses mismatch rate/duplication/N50 —
-  explained by SPAdes optimizing for assembly correctness (dedicated
-  repeat resolution + error correction) while this system optimizes for
-  compressed size, both "assembly" in the mechanical sense
-  (**confirmed** against the methods draft's own wording), just different
-  objective functions. See `claim3/t31_export_claim3.md` and
-  `claim3/mechanism_insight_claim3.md`.
+Wall time and memory are the cost of the added structure. G_CAPSUL is the fastest tool in none of
+the 38 compression and decompression cells measured, and uses more memory than SPRING and Genozip
+on larger datasets. See [`limitations_and_scope.md`](limitations_and_scope.md).
 
-## Alignment comparator — Claim 3, T3.2
+## 3. Reference-free variant calling
 
-- **bwa+samtools+mosdepth**: a standard, uncontroversial conventional
-  pipeline for the same output (per-base coverage) — clean comparison, no
-  caveats needed, dominant win (16-54x, identical numbers not approximated).
+| Tool | Approach | Relation to G_CAPSUL | Evidence |
+|---|---|---|---|
+| DiscoSNP++ (Peterlongo et al., 2017) | Bubbles in a de Bruijn graph built from raw reads | Primary comparator. It is the other general-purpose reference-free caller that handles heterozygous indels from one diploid sample. Mean het-SNV F1 is 0.853 against 0.876 for G_CAPSUL, and DiscoSNP++ is ahead on HG005. | Measured |
+| Kmer2SNP (Li et al., 2020) | k-mer matching for SNPs | Second baseline. SNV only by design. Mean het-SNV F1 0.475. | Measured |
+| Cortex (Iqbal et al., 2012) | Coloured de Bruijn graphs | Needs several samples or a reference to genotype. Cited as background. | Documented |
+| eBWT2SNP (Prezza et al., 2019) and BWT-based discovery (Prezza et al., 2020) | Positional clustering on the extended BWT | The positional-clustering idea inspired one indel channel in the G_CAPSUL caller. The precision reported for eBWT2SNP comes from simulated chromosomes. On the one real-data chromosome in that paper, DiscoSNP++ was more precise (74.57% against 66.62%). | Source read |
 
-## Two named prior-art lines, verified as already correctly cited in the manuscript
+Two further points about DiscoSNP++:
 
-- **Compressive genomics (CaBLAST/CaBLAT — Loh, Baym, Berger, *Nature
-  Biotechnology* 2012)**: **confirmed** cited (`gcapsul_manuscript.tex` line
-  118) as the paradigm this project belongs to (computing directly on a
-  compressed representation rather than decompressing first) — but
-  correctly distinguished as solving a *different* problem: accelerating
-  sequence *search* across many reference genome/protein *databases*, not
-  compressing and serving variant evidence from *one sample's reads*.
-- **Haplotig purging (Purge Haplotigs, Roach et al. 2018; Redundans,
-  Pryszcz & Gabaldón 2016)**: **confirmed** cited (line 122) as the
-  established assembly-literature precedent for "heterozygous regions
-  assemble into separate contigs" — the phenomenon Claim 2's central
-  mechanism depends on is not a novel *observation*, only the response to
-  it is inverted. Both tools *remove* the duplicate haplotig to recover a
-  single pseudo-haploid reference, because redundancy is noise for an
-  assembly whose goal is one representative genome. For a **lossless
-  archive** that remedy is inadmissible — deleting a haplotig deletes an
-  allele, a variant, and losslessness itself. The correct response in a
-  retained-archive setting is the opposite: keep every representative and
-  resolve them by content, not purge them. This inversion, not the
-  underlying observation, is what is novel.
+- It emitted no multi-allelic record across its entire output on the multi-allelic census (0 of
+  3,989 records, and 0 of 26 multi-allelic sites). The explanation, that its bubble output is
+  biallelic by design, is **inferred** from its documented behaviour and was not verified in its
+  source.
+- Its VCF positions are shifted by one relative to its own description. All comparisons use
+  positions corrected for this shift. Without the correction its accuracy would be measured as
+  close to zero.
 
-## BFQzip — the single closest prior work by intent, verified as already the manuscript's own centerpiece comparison
+## 4. Assembly and export
 
-**Confirmed** (the de Bruijn-channel novelty scan, flagged there as "the
-most important citation we were missing," and confirmed already
-resolved — `guerrini2023bfqzip` is cited in the manuscript with a
-dedicated comparison table, `gcapsul_manuscript.tex` line 336). BFQzip
-(Guerrini, Louza, Rosone, arXiv:2304.08534) modifies bases *and* quality
-scores of a FASTQ archive built on the extended BWT and positional
-clustering, explicitly to preserve variant-calling information for a
-downstream caller — **the same shape of claim this project makes**: one
-structure serving compression and variant evidence together. The
-distinctions are load-bearing, not cosmetic:
+| Tool | Approach | Relation to G_CAPSUL | Evidence |
+|---|---|---|---|
+| SPAdes (Bankevich et al., 2012) | De Bruijn assembly with repeat resolution and error correction | Comparator for sequence export. Export is 129 to 784 times faster. Genome fraction is 98.7% against 98.3% and the indel rate is lower. SPAdes is better on mismatch rate, duplication ratio, N50 and misassemblies. | Measured |
+| Eulerian-path assembly (Pevzner et al., 2001) | Graph formulation of assembly | Background for de Bruijn assembly. | Documented |
+| Purge Haplotigs (Roach et al., 2018) and Redundans (Pryszcz and Gabaldón, 2016) | Remove duplicated heterozygous contigs from an assembly | They show that heterozygous regions often assemble into separate contigs, which is the phenomenon described in [`central_insight_and_mechanism.md`](central_insight_and_mechanism.md). They remove the duplicate to obtain one representative sequence. A lossless archive cannot delete a contig, because that would delete an allele, so G_CAPSUL keeps both and reconciles them by content. | Documented |
 
-| | BFQzip | G_CAPSUL |
+SPAdes is the right comparator for 5 of the 6 export datasets. The sixth, ERR5181310, is amplicon
+data with more than 1000-fold duplicated coverage, which is outside SPAdes's own documented scope
+and where the exported pseudogenome is far larger than the 29,903 bp genome. That dataset is
+reported for speed only. See [`limitations_and_scope.md`](limitations_and_scope.md).
+
+## 5. Coverage
+
+| Tool | Approach | Relation to G_CAPSUL | Evidence |
+|---|---|---|---|
+| bwa-mem (Li, 2013), samtools (Li et al., 2009) and mosdepth (Pedersen and Quinlan, 2018) | Align, sort, then count depth | The standard pipeline for the same output. G_CAPSUL reads depth from retained read positions and lengths, so no alignment is needed. It is 16 to 54 times faster, with exact depth values. | Measured |
+
+## 6. Retrieval by content and by locus
+
+| Tool | Approach | Relation to G_CAPSUL | Evidence |
+|---|---|---|---|
+| BEETL (Cox et al., 2012) and BEETL-fastq (Janin et al., 2014) | BWT-based compressed archive of reads | Search by sequence content is already available from BWT indexes, so it is not new. A BWT stores reads as independent strings and has no coordinate system. | Source read |
+| CIndex (Huo et al., 2022) | Compressed indexes for FASTQ retrieval | Same class. Content search from a compressed index. | Documented |
+| FM-index (Ferragina and Manzini, 2000) | Compressed full-text index | G_CAPSUL builds one after compression, over the reads that differ from the pseudogenome. | Measured |
+| Population BWT (Dolle et al., 2017) | Compressed structure over many samples | Targeted queries at pre-specified sites, and quality scores are not kept. | Documented |
+| Compressive genomics (Loh et al., 2012) | Search on compressed sequence databases | Same general idea of computing on compressed data. It accelerates search across many reference databases, whereas G_CAPSUL serves variant evidence from one sample's reads. | Documented |
+
+What G_CAPSUL adds in this area is retrieval by **locus** rather than by exact match. A query
+returns the reads that cover a site, including reads whose sequence differs from the pseudogenome
+and therefore cannot be found by exact search. Measured: archive-only search finds 0.60 to 0.85 of
+reads containing a probe, and the archive plus the FM-index finds all of them (1.0000). Recovery of
+both alleles at 1,452 of 1,452 sites, with a cost in extra reads at homozygous control sites,
+is reported in [`claim3/t35_locus_retrieval_claim3.md`](claim3/t35_locus_retrieval_claim3.md).
+
+The reason a BWT archive does not offer locus retrieval is its data model, not the lack of an
+index. A BWT sorts suffixes and never computes where a read sits. Position is a free byproduct of
+overlap chaining in G_CAPSUL, so the FM-index here was a small addition. For BEETL this reasoning
+was checked against how the method works, and it was not tested by implementing it.
+
+No speed or index-size benchmark against BEETL-fastq or CIndex was run. This is the most useful
+missing experiment.
+
+## 7. Lossy variant-preserving compression
+
+| Tool | Approach | Relation to G_CAPSUL |
 |---|---|---|
-| compression | **lossy** (alters bases and quality scores) | **lossless**, verified by decode-and-diff |
-| relationship to calling | *preserves* signal for an external caller | *performs* the call itself, in-process |
-| output | a compressed file | archive + VCF + export/coverage/query |
-| structure | EBWT + positional clustering | pseudogenome + read placements + k-mer counts |
+| BFQzip (Guerrini, Louza and Rosone, arXiv:2304.08534) | Modifies bases and quality scores using the extended BWT so that an external caller still finds the variants | Poses a similar question, one structure for compression and variant evidence. It is lossy and prepares data for someone else's caller. G_CAPSUL is lossless and performs the calling itself. |
 
-"Preserves signal for someone else's caller" and "performs the calling
-itself, losslessly" are different claims answering the same underlying
-question. Since BFQzip is the one paper that poses this exact question in
-this exact shape, a reviewer who knows it and does not see it cited would
-reasonably assume it was missed — it is not; it is the manuscript's
-own centerpiece related-work comparison.
+BFQzip was not benchmarked here, and the two serve different goals.
 
-## Content-retrieval / exact-match comparators — Claim 3, T3.4
+## 8. Combined capabilities
 
-- **BEETL-fastq (2014), CIndex (2022), sFASTQ (2022)**: **confirmed** (via
-  literature survey, the development notes' "Novelty, corrected after a literature
-  survey 2026-09-16" section) to already do content retrieval from
-  compressed reads via BWT/FM-index, natively, no auxiliary index needed —
-  content retrieval itself is **not novel**. What is distinct: retrieval by
-  **position** rather than exact match, which none of the three can do,
-  because their data model (independent strings for BWT, k-mer adjacency
-  for de Bruijn graphs) has no coordinate system. This root-cause
-  explanation was checked against how BWT/BEETL actually operates,
-  not asserted from the technique's name.
-- **No speed or index-size benchmark against any of the three has been
-  run.** Stated as the most valuable missing experiment
-  (the development notes, `claim3/t34_exact_match_claim3.md`).
-- **Could BEETL add position retrieval with a small addition?** **Confirmed
-  structurally, by tracing what each compression method actually
-  computes**: this project's FM-index addition was cheap because placement
-  data already existed as a free byproduct of overlap chaining. BWT's
-  compression step (sorting) computes nothing analogous — position is not
-  hard to look up for a BWT, it is simply never computed. Adding it would
-  require a second, separate construction process, not a small index. See
-  `claim3/mechanism_insight_claim3.md`.
+Whether any tool offers all three capabilities from one representation was checked against the
+candidate architectures:
 
-## The PgRC2 "could they add locus retrieval with an evening of work" question — the deepest-checked comparison in the whole project
-
-**Confirmed by reading PgRC2's actual source** (PgRC2's decoder source):
-its decoder computes per-read position and strand during decompression, but
-exposes no query/extraction interface anywhere.
-
-**Not confirmed, explicitly flagged open**: whether PgRC2 tracks per-read
-mismatches, and whether its position data persists to disk or is transient.
-
-**The argument that a quick patch would not suffice** rests on two
-independent legs: (1) a freestanding, general argument that any compressor
-meeting three preconditions (shared reference, position+mismatch encoding,
-size-minimization) is pushed toward the same allele-splitting behavior —
-applied to PgRC2's own confirmed architecture as a **prediction, explicitly
-labeled as such, not a measurement** (nobody has built and run PgRC2 to
-check); (2) an independent argument needing no assumption about PgRC2 at
-all — this project already possessed position/strand/deviation data from
-day one of its own retrieval work, and building a *correct* query layer on
-top still took a multi-day effort and surfaced several silent bugs,
-demonstrating that possessing the raw data is not the hard part even for a
-team with full access to its own code. Full analysis:
-The PgRC2 extension analysis, synthesized in
-`claim3/mechanism_insight_claim3.md`.
-
-## "No tool combines all three" — verified as a checked code-audit claim, not an assumption
-
-Verified against the root-level project recap §2 (checked, not
-previously in `docs/`). The "one archive, three properties"
-claim was tested directly against every real candidate architecture, not
-merely asserted:
-
-| tool | compresses losslessly | calls variants reference-free | queries a locus reference-free | one representation |
+| Tool | Lossless compression | Reference-free calling | Locus retrieval | One representation |
 |---|---|---|---|---|
-| SPRING / PgRC / PgRC2 / Genozip / NanoSpring | yes | no | no | n/a |
-| DiscoSNP++ / Kmer2SNP | no (raw FASTQ in) | yes | no | n/a |
-| CRAM | yes | needs external reference | needs external reference | no |
-| BEETL-fastq | yes | **no** — hands off to external BWA + external samtools + an external reference | content match only, a different object (median 38% of what it returns does not even contain the query string) | **no** — three separate tools glued by a script |
-| population BWT (*Genome Research* 2017) | **no** — discards quality scores by design, stated in its own text | only at *pre-specified* sites, needing an external truth VCF or genotyping array to know what a variant even is | content (k-mer) only | **no** — needs a separate 4.75 TB RocksDB store plus external Cortex graphs plus an external reference for validation |
-| **G_CAPSUL** | yes, 57/57 verified | yes, from the archive alone | yes, from the archive alone | yes — one archive file |
+| SPRING, PgRC, PgRC2, Genozip, NanoSpring | yes | no | no | not applicable |
+| DiscoSNP++, Kmer2SNP | no (raw FASTQ input) | yes | no | not applicable |
+| CRAM | yes | needs an external reference | needs an external reference | no |
+| BEETL-fastq | yes | no, hands off to external alignment and an external reference | content match only | no |
+| Population BWT | no, quality scores are not kept | at pre-specified sites only | content (k-mer) only | no |
+| **G_CAPSUL** | yes | yes, from the archive alone | yes, from the archive alone | yes |
 
-**The "one representation" claim was independently code-audited, not
-inferred from the architecture diagram**: a direct source scan (of `src/encoder.cpp`, `include/caps_caller.h`,
-and `src/decoder.cpp` — the encoder, caller, and all of
-export/coverage/query) found **zero `system()`/`popen()`/`exec()`/network
-calls anywhere** in any of the three. The only `fork()` calls (3, in the
-encoder) each continue running the binary's own compiled code under a
-bounded thread budget — internal parallelism, not shelling out to an
-external tool. Zero external reference genome files are ever opened by the
-core pipeline. What is openly borrowed and does not weaken this claim:
-general-purpose entropy coders (LZMA, PPMd7, FSE/Huf0 — the same category
-every real competitor in this field uses, compiled in, not shelled out to)
-and vendored `fqzcomp` for quality-score compression specifically, which
-feeds Claim 1 only — confirmed zero calls into it from either the caller
-or the export/coverage/query code paths.
+Evidence for the last row: a source scan of the encoder (`src/encoder.cpp`), the caller
+(`include/caps_caller.h`) and the decoder (`src/decoder.cpp`) finds no calls to `system()`,
+`popen()` or the `exec` family. The encoder uses `fork()` only to run its own code for parallel
+candidate encoding. No reference genome file is opened by the core pipeline. The entropy coders
+(LZMA, PPMd7, FSE/Huf0) are compiled in, and the vendored `fqzcomp` code is used for quality
+scores only, never by the caller or by export, coverage and query. These claims about other tools
+come from their papers, so they carry the evidence label Documented.
 
-## A claim explicitly investigated and left unresolved, on purpose
+## 9. Statements that are not made
 
-Verified against the project recap §3. "India's first reference-free FASTQ
-compressor" was checked, not casually asserted, and the check did **not**
-resolve cleanly: FQC (Dutta, Haque, Bose, Reddy, Mande — TCS Innovation
-Labs, Pune, 2015, *J. Bioinformatics and Computational Biology*) is a real,
-published, India-built FASTQ compressor that one search-derived
-classification described as reference-free — but its full text was
-paywalled everywhere checked (PubMed, ResearchGate, Semantic Scholar,
-WorldScientific, no free PDF anywhere on Google Scholar's cluster for it),
-so **it was never actually read**, and a later search summary directly
-contradicted the "reference-free" classification (apparently contaminated
-by a description of an unrelated 2023 paper found in the same search).
-**Status: unresolved, and left that way rather than asserted
-either direction without reading the source.** What *is* checked and holds,
-because it is a narrower compound claim (lossless compression + reference-
-free variant calling + reference-free locus retrieval, together, as one
-mechanism) rather than a crowded single-property claim: no tool found
-anywhere combines all three. That is the defensible framing — stated
-"to the best of our knowledge," not as an absolute.
-
-## What is explicitly NOT claimed anywhere in this project
-
-- No speed or size comparison against BEETL/CIndex/sFASTQ.
-- No claim that DiscoSNP++'s multi-allelic limitation was verified from its
-  own source code (inferred from documented design + observed behavior
-  only).
-- No claim that PgRC2's pseudogenome actually exhibits allele-splitting on
-  real data (the argument is a structural prediction from its confirmed
-  architecture, not an empirical finding — PgRC2 has not been built and
-  run locally for this check).
+- No speed or size comparison against BEETL-fastq, CIndex or BFQzip.
+- No claim that DiscoSNP++'s multi-allelic behaviour was verified in its source.
+- No claim that PgRC2's pseudogenome splits alleles on real data. That is a prediction from its
+  design, not a measurement. Its decoder was read and computes each read's position and strand
+  during decompression, but exposes no query interface. Whether the position data persists or is
+  transient was not determined.
+- No claim that G_CAPSUL is the first reference-free FASTQ compressor. The claim made is
+  narrower: no tool found combines lossless compression, reference-free variant calling and
+  reference-free locus retrieval in one archive, to the best of the authors' knowledge.

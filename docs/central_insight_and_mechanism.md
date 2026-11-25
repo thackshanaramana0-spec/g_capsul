@@ -1,126 +1,79 @@
-# The central insight and mechanism
+# Design principle and mechanism
 
-> Summary of the argument that the three claims share, based on the Introduction and Conclusion of the manuscript.
+This document explains why one archive can serve compression, variant calling and locus retrieval.
+It states the design principle (ARCH), the mechanism that makes reconciliation necessary, and how
+each capability applies it. The per-claim documents give the measurements.
 
-## The insight, in the paper's own words (verified, not paraphrased from memory)
+## The design principle
 
-**Introduction** (line ~342): *"ADDRESSABLE asks whether that same
-organization can also provide a usable positional basis for operations
-that would otherwise require a new assembly, alignment, or coordinate-
-bearing representation."*
+A reference-free compressor has to work out how the reads fit together before it can store them
+compactly. Most compressors discard that knowledge once the archive is written. G_CAPSUL keeps it.
+The design principle is ARCH:
 
-**Conclusion** (line ~1303-1304): *"The broader implication is that a
-compression-derived representation can remain useful as a computational
-substrate rather than serving only as an intermediate for reconstruction...
-G_CAPSUL therefore provides a practical basis for a broader class of
-archive-native genomic analyses in which storage and computation reuse the
-same underlying organization rather than reconstructing it independently
-for each task."*
+| Step | What happens |
+|---|---|
+| **A**ssemble | Reads are chained and mapped into a pseudogenome, a single sequence built from the reads themselves. |
+| **R**etain | The placement, orientation and length of every read, and its differences from the pseudogenome, are stored in the archive. |
+| **C**ompress | The pseudogenome and the retained information are entropy-coded as separate streams. |
+| **H**arness | The retained structure is reused for analysis, so that downstream tasks do not rebuild it from the FASTQ. |
 
-**This is the paper's actual thesis, and it is bigger than genomics**: a
-compressor's inferred structure need not be a disposable intermediate. It
-can be the basis for the analysis that follows, without rebuilding a
-second representation per task.
+Because the coordinate system is produced while compressing, using it costs no extra storage.
+Measured on the benchmark, recording the contig boundaries needed for per-contig export adds 0 bytes
+to the archive (18,282,397 bytes with and without them, E. coli SRR2584863).
 
-## The specific mechanism that proves it, stated once, used three times
+## The mechanism: separated alleles
 
-**The mechanism** (verified against the manuscript's own Results section,
-line ~305-306): a size-minimizing, reference-free compressor is
-structurally pushed to place the two alleles of a heterozygous site on
-*different* pseudogenomic segments once their divergence passes some
-threshold — one location plus a growing mismatch list costs more bits than
-two small, separate placements. This is not an implementation quirk; it
-follows from the three preconditions any such compressor meets (builds a
-shared reference, encodes position+mismatches, minimizes total size — see
-`docs/claim3/mechanism_insight_claim3.md` Layer 2 for the full,
-freestanding argument).
+A size-minimizing compressor that builds a shared reference and codes each read as a position plus
+mismatches is pushed to separate the two alleles of a heterozygous site. Beyond some divergence it is
+cheaper to give each allele its own placement than to keep one placement with a growing list of
+mismatches. This follows from the design goal, not from a flaw in one implementation. The full
+argument is in [`claim3/mechanism_insight_claim3.md`](claim3/mechanism_insight_claim3.md).
 
-**The same mechanism, measured three separate times, three separate ways —
-this is the actual structure of the paper's evidence, not three
-coincidences:**
+The consequence is that reads are preserved exactly, but the fact that two groups of reads are
+alternative forms of one biological locus is no longer visible in the coordinates. Counting
+variant evidence or fetching the reads at a locus from the stored coordinates alone therefore
+misses part of it.
 
-1. **Claim 2 (calling)**: F1 0.431 → 0.888 in ablation when the split
-   alleles are reconciled before calling (manuscript Results, ~line 306).
-   T2.4 (multi-allelic) and T2.5 (tetraploid) are the same reconciliation
-   generalized to N alleles and to non-diploid ploidy respectively — not
-   two more separate wins, the same mechanism at higher order (see
-   `docs/claim2/mechanism_insight_claim2.md`).
-2. **Claim 3 (retrieval)**: a single pseudogenome coordinate reaches both
-   alleles of a het site only a small fraction of the time; bilateral
-   anchoring (T3.5) — reconciling both split addresses — recovers
-   1,451/1,452 (99.93%) by position alone, 100% with the FM-index. Same mechanism, applied
-   to "which reads cover this locus" instead of "what variant is here"
-   (see `docs/claim3/mechanism_insight_claim3.md`).
-3. **Claim 1 (compression)**: this is where the mechanism is *caused*, not
-   fixed. The same overlap-chaining process that produces allele-splitting
-   is what makes T1.1's compression ratio possible in the first place, and
-   the placement/deviation data it necessarily computes is what Claims 2
-   and 3 reuse for free (`CAPS_SPANS`/`contig_spans` measured at zero
-   archive-byte cost — see `docs/claim1/mechanism_insight_claim1.md`).
+G_CAPSUL reconciles the separated regions during analysis. Reconciliation changes nothing in the
+stored archive, so it adds no archive-size cost.
 
-**Additional refutation-based evidence for the same tension, not a fourth
-pillar**: a tempting shortcut (build a de Bruijn graph directly over the
-pseudogenome, to run DiscoSNP++'s bubble caller on it) was measured and
-refuted — 97.7% of anchors have out-degree 1, because greedy overlap
-chaining *linearizes the data on purpose*, which is exactly what makes the
-compression ratio good and exactly what destroys the branch structure a
-bubble caller needs. See
-`docs/claim2/architecture_vs_discosnp_claim2.md`. This is not
-counted as a fourth instance of the mechanism above — it is the same
-tension observed from the failure side, confirming by direct measurement
-rather than assumption that Claim 1's compression and graph-branch
-structure trade off against each other.
+## How each capability applies the mechanism
 
-## Why this makes the three claims one argument, not three separate results
+| Capability | What goes wrong without reconciliation | What reconciliation does | Evidence |
+|---|---|---|---|
+| Variant calling | Allele evidence is split across regions, so the caller sees few supporting reads at a het site. | Related regions are collapsed into a shared frame and reads are placed again against it. | Chromosome 20 ablation on HG002: F1 0.431 with neither step and 0.888 with both. Without the collapse, precision stays at 0.96 while recall falls to 0.28. |
+| Multi-allelic and polyploid calling | The same split, with more than two alleles. | The same reconciliation, generalised to more alleles and to higher ploidy. | 17 of 26 multi-allelic sites on chromosome 20 and tetraploid SNV F1 of 0.897. |
+| Locus retrieval | A single stored coordinate reaches only one allele's reads at most sites. | Probes are anchored upstream and downstream, and the two read sets are combined. | 1,451 of 1,452 sites by position, and 1,452 of 1,452 with the FM-index. |
 
-A reader could mistake COMPACT/FAITHFUL/ADDRESSABLE for three unrelated
-"we are also good at X" claims. The verified mechanism above is what
-prevents that reading: **Claim 1 causes the phenomenon that Claim 2 and
-Claim 3 each independently discover and independently fix, using
-structurally the same reconciliation idea, in two different domains
-(calling and retrieval).** That two separately-built systems (a variant
-caller and a query engine) converge on the same fix for the same
-underlying cause is itself evidence the mechanism is real and general, not
-tuned to make one benchmark look good.
+Claim 1 is where the separation arises. The same overlap chaining that gives the compression ratio
+is what places divergent alleles apart, and the placement and deviation data it computes is what
+Claims 2 and 3 reuse.
 
-## Why Claim 3's operations are not five bolted-on features — the architectural version of the same point
+## A related observation: why the caller does not use a de Bruijn graph
 
-As traced in the code (`docs/claim3/code_mapping_claim3.md`):
-T3.3 and T3.4 are literally the same function in `decoder.cpp`; T3.5
-is not a separate code path at all, only an orchestration layer calling
-T3.4's primitive twice. This is the structural signature of one retained
-data structure being reused in increasingly demanding ways, not five
-independently-engineered features — the code-level evidence for the same
-claim the Conclusion states in prose.
+Building a de Bruijn graph directly over the pseudogenome would let a bubble-based caller such as
+DiscoSNP++ run on it. This was measured and does not work. Greedy overlap chaining linearizes the
+data, so 97.7% of true-positive anchors have an out-degree of 1 and the branching structure a
+bubble caller needs is gone. The result is detailed in
+[`claim2/architecture_vs_discosnp_claim2.md`](claim2/architecture_vs_discosnp_claim2.md). It shows
+the same tension from the other side: the structure that compresses well is not the structure that
+exposes variants, which is why reconciliation is needed.
 
-## Claim 2 and Claim 3 apply the mechanism at different times
+## One archive, several operations
 
-Claim 2's reconciliation (`build_substrate`/`collapse_contigs`) happens
-*before* scoring, baked into the caller's substrate construction. Claim
-3's reconciliation (bilateral anchoring) happens *after* the archive is
-built, at query time, via two calls to an unmodified primitive. **This
-difference is itself worth stating in the paper**: it demonstrates the same
-underlying fix can be applied either at analysis-construction time or
-after the fact, on a finished archive — reinforcing the "substrate,
-reusable in more than one way" framing rather than implying the fix had to
-be anticipated and hard-coded once.
+The retrieval operations are not independent features. Range retrieval and exact-match retrieval
+share one primitive in `src/decoder.cpp`, and locus retrieval calls that primitive twice (upstream
+and downstream) and merges the results. See
+[`claim3/code_mapping_claim3.md`](claim3/code_mapping_claim3.md) for the function-level mapping.
 
-## One-sentence summary
+Reconciliation also happens at different times. For variant calling it is part of building the
+caller's substrate, before any call is scored. For locus retrieval it is applied at query time to
+a finished archive. The same correction therefore works either at analysis construction or after
+the fact.
 
-From the Claim 3 locked-results note (verified 2026-09-09, and still correct although the numbers in that note have been superseded):
+## What the mechanism does not claim
 
-*"Everyone else's archive stores what the reads SAY. Ours stores where
-they SIT. The compressor had to assemble in order to compress, so the
-coordinate system is a byproduct rather than an addition — which is why
-locus retrieval, per-base coverage and reference-free variant calling all
-come out of the same structure."*
-
-This is the argument of the paper in two sentences.
-
-## Where ARCH fits
-
-ARCH (Assemble, Retain, Compress, Harness) names the general pattern this file describes:
-assemble once, retain the structure, and reuse it for compression and for downstream
-computation. It does not name the allele-splitting mechanism, which is the evidence for the
-pattern and not the pattern itself. The paper uses ARCH for the general substrate-reuse claim and
-describes allele splitting and reconciliation as the mechanism that demonstrates it.
+- It does not claim that other compressors split alleles in the same way. That is a prediction
+  from the design goal, and it was not measured on other tools.
+- It does not claim to replace dedicated assemblers or callers across all conditions. The
+  limitations of each capability are in [`limitations_and_scope.md`](limitations_and_scope.md).
