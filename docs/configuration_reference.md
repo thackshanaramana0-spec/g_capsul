@@ -1,9 +1,16 @@
 # Configuration reference: environment variables and positional arguments
 
-This page lists every switch that the G_CAPSUL programs read, and says which ones a normal run needs.
-It was written from the source. Part B is generated from the source text itself (file, line and the
-expression that reads the variable), so it cannot drift from what the code does. Re-generate it if
-the code changes.
+This page documents the settings that change how G_CAPSUL runs. Most settings are environment
+variables that are read by the encoder (`best106`) and the decoder (`capsule_decode`), and a few are
+positional command-line arguments of the encoder. It says what each setting does, what its default
+is, and which ones a normal run needs.
+
+The page has two parts. Part A lists the settings that a normal run uses, grouped by program
+(compression, index building, query and variant calling). Part B lists every environment variable
+that the code reads, with the file and line where it is read. Part B includes experiment and
+debugging settings that are not part of the supported interface. The line numbers in Part B match
+the current source and move when the code changes, so look a name up with a text search in
+`src/` and `include/` when a line no longer matches.
 
 ## How switches work
 
@@ -99,7 +106,7 @@ The values in the README command (`3 16 16 22 16 16 1 24 64 1`) set argv[2] to a
 | `CAPS_MAXRAM_MB` | value | Memory ceiling of the k-mer counter. Default is 5000 MB, or two thirds of the available memory if that is lower. |
 | `CAPS_HAPLOID_COV` | value | Overrides the caller's haploid coverage estimate H, a positive integer. |
 
-## B. Complete inventory (generated)
+## B. Complete inventory
 
 Every name read by `getenv` in `src/` and `include/`. The last column is the source text of the
 first reading site. Switches that are not listed in Part A are experiments, ablations (the `NO_`
